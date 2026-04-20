@@ -65,4 +65,4 @@ Use `proxy-agent-manager.sh` to control the agent:
 
 ## Third-party licenses
 
-See [proxy.3rdparty](./proxy.3rdparty) for third-party dependency license information.
+See [LICENSE.html](./LICENSE.html) for third-party dependency license information.
