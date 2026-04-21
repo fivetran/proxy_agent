@@ -63,6 +63,6 @@ Use `proxy-agent-manager.sh` to control the agent:
 | `status`  | Show container name, image, and health status        |
 | `logs`    | Stream live container logs                           |
 
-## Third-party licenses
+## License
 
-See [LICENSE.md](./LICENSE.md) for third-party dependency license information.
+This project is licensed under the [Apache License 2.0](./LICENSE).
