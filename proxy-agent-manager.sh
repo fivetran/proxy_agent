@@ -2,9 +2,7 @@
 #
 #  Management script for Fivetran Proxy Agent (Docker)
 #
-#  Usage: ./proxy-agent.sh {start|stop|restart|upgrade|status|logs}
-#
-#  This is a stub for local testing. The full version will be in the public repo.
+#  Usage: ./proxy-agent-manager.sh {start|stop|restart|upgrade|status|logs}
 #
 set -euo pipefail
 
