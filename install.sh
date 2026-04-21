@@ -248,7 +248,7 @@ main() {
 
     # Download management script from public repo
     local tmp_script
-    tmp_script=$(mktemp "$install_dir/$AGENT_SCRIPT.tmp")
+    tmp_script=$(mktemp "${install_dir}/${AGENT_SCRIPT}.XXXXXX")
     if ! curl -fSsL --max-time 30 "$AGENT_SCRIPT_URL" -o "$tmp_script"; then
         rm -f "$tmp_script"
         die "Failed to download management script from $AGENT_SCRIPT_URL"
