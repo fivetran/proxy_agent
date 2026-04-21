@@ -4,6 +4,8 @@
 #
 #  Usage: ./proxy-agent.sh {start|stop|restart|upgrade|status|logs}
 #
+#  This is a stub for local testing. The full version will be in the public repo.
+#
 set -euo pipefail
 
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -42,6 +44,7 @@ if [ -z "$CURRENT_VERSION" ]; then
 fi
 
 LOGFILE="$BASE_DIR/logs/proxy-agent-manager.log"
+CONTAINER_LOG_DIR="/app/logs"
 
 # ── Functions ────────────────────────────────────────────────────────────────
 
@@ -112,7 +115,7 @@ start_agent() {
         --label fivetran=proxy-agent \
         --label proxy_agent_id="$AGENT_ID" \
         --env IS_DOCKER=true \
-        --env LOG_FOLDER_PATH=/app/logs \
+        --env LOG_FOLDER_PATH="$CONTAINER_LOG_DIR" \
         --env HEARTBEAT_PATH=/tmp/proxy-agent-heartbeat.txt \
         --env HEARTBEAT_EXPIRY_SECONDS=30 \
         --health-cmd '[ ! -f $HEARTBEAT_PATH ] || { . $HEARTBEAT_PATH && [ $(date +%s) -lt $HEARTBEAT_EXPIRE_AT ]; }' \
@@ -121,7 +124,7 @@ start_agent() {
         --health-retries 3 \
         --health-start-period 30s \
         -v "$BASE_DIR/config/config.json:/config/config.json:ro" \
-        -v "$BASE_DIR/logs:/app/logs" \
+        -v "$BASE_DIR/logs:$CONTAINER_LOG_DIR" \
         "${IMAGE}:${version}" \
         -i /config/config.json
 
