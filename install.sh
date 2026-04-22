@@ -11,6 +11,11 @@ set -euo pipefail
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
+extract_json_string() {
+    grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$2" \
+        | sed "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/"
+}
+
 DEFAULT_FIVETRAN_API_URL="https://api.fivetran.com"
 
 usage() {
@@ -217,6 +222,19 @@ main() {
         die "Config file not found or not readable: $config_path"
     fi
 
+    # WebSocket agents (identified by proxy_server_uri) need a fresh gRPC-compatible config.
+    # Construct TOKEN from existing credentials to fetch one via the configure endpoint.
+    if [ -n "${config_path:-}" ] && [ -z "${TOKEN:-}" ] && grep -q '"proxy_server_uri"' "$config_path"; then
+        local agent_id auth_token
+        agent_id=$(extract_json_string "agent_id" "$config_path")
+        auth_token=$(extract_json_string "auth_token" "$config_path")
+        [ -n "$agent_id" ] && [ -n "$auth_token" ] \
+            || die "Could not extract credentials from WebSocket config"
+        TOKEN=$(printf '%s:%s' "$agent_id" "$auth_token" | base64 | tr -d '\n')
+        config_path=""
+        echo "Detected WebSocket agent configuration. Fetching updated config from Fivetran..."
+    fi
+
     echo -e "Installing Fivetran Proxy Agent...\n"
 
     # Pre-flight checks
@@ -273,10 +291,9 @@ main() {
         # umask 177 ensures the file is created with 600 permissions (no read/write for group/other)
         (umask 177 && printf '%s' "$body" > "$install_dir/config/config.json")
     else
-        mv "$config_path" "$install_dir/config/config.json"
+        cp "$config_path" "$install_dir/config/config.json"
         chmod 600 "$install_dir/config/config.json"
-        echo "Your config file has been moved to $install_dir/config/config.json"
-        echo "Note: Keep the config file if you need to roll back to the previous installation"
+        echo "Config copied to $install_dir/config/config.json"
     fi
 
     # Resolve and pin version
@@ -291,8 +308,6 @@ main() {
     cd "$install_dir"
     if ! ./$AGENT_SCRIPT start; then
         echo "Installation complete, but agent failed to start."
-        echo "Please review the agent container logs for more detail."
-        # TODO: Print the contents of the latest log file
         echo "To try to start the agent again, run: ./$AGENT_SCRIPT start"
         exit 1
     fi
