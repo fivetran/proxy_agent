@@ -135,7 +135,7 @@ start_agent() {
             log "Error: ${CONTAINER_NAME} did not become healthy within ${timeout}s"
             docker logs "${CONTAINER_NAME}"
             stop_agent
-            exit 1
+            return 1
         fi
         sleep 1
         elapsed=$((elapsed + 1))
@@ -149,7 +149,7 @@ start_agent() {
     else
         log "Error: ${CONTAINER_NAME} entered status: $FINAL_STATUS"
         docker logs "${CONTAINER_NAME}"
-        exit 1
+        return 1
     fi
 }
 

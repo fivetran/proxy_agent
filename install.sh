@@ -273,9 +273,10 @@ main() {
         # umask 177 ensures the file is created with 600 permissions (no read/write for group/other)
         (umask 177 && printf '%s' "$body" > "$install_dir/config/config.json")
     else
-        echo "Moving config to $install_dir/config/config.json"
         mv "$config_path" "$install_dir/config/config.json"
         chmod 600 "$install_dir/config/config.json"
+        echo "Your config file has been moved to $install_dir/config/config.json"
+        echo "Note: Keep the config file if you need to roll back to the previous installation"
     fi
 
     # Resolve and pin version
