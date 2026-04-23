@@ -12,8 +12,8 @@ set -euo pipefail
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 extract_json_string() {
-    grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$2" \
-        | sed "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/"
+    grep -m1 -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$2" \
+        | sed "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/" || true
 }
 
 DEFAULT_FIVETRAN_API_URL="https://api.fivetran.com"
@@ -291,8 +291,7 @@ main() {
         # umask 177 ensures the file is created with 600 permissions (no read/write for group/other)
         (umask 177 && printf '%s' "$body" > "$install_dir/config/config.json")
     else
-        cp "$config_path" "$install_dir/config/config.json"
-        chmod 600 "$install_dir/config/config.json"
+        (umask 177 && cat "$config_path" > "$install_dir/config/config.json")
         echo "Config copied to $install_dir/config/config.json"
     fi
 
