@@ -91,6 +91,25 @@ check_docker_version() {
     fi
 }
 
+check_rootless_linger() {
+    local docker_root
+    docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null) || return
+
+    if [[ "$docker_root" != "$HOME"* ]]; then
+        return
+    fi
+
+    if ! command -v loginctl &> /dev/null; then
+        return
+    fi
+
+    local linger_status
+    linger_status=$(loginctl show-user "$USER" 2>/dev/null | grep -E "^Linger=" | cut -d= -f2)
+    if [ "$linger_status" != "yes" ]; then
+        WARNINGS+=("Rootless Docker detected but user linger is not enabled. Run 'sudo loginctl enable-linger $USER' to ensure the agent starts automatically on system boot.")
+    fi
+}
+
 check_resources() {
     local cpu_count
     local total_mem_kb
@@ -241,6 +260,7 @@ main() {
     echo -n "Checking prerequisites... "
     check_dependencies
     check_docker_version
+    check_rootless_linger
     check_resources
     check_disk_space "$install_dir"
 
