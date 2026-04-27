@@ -103,10 +103,13 @@ check_rootless_linger() {
         return
     fi
 
+    local user
+    user=${USER:-$(id -un)}
+
     local linger_status
-    linger_status=$(loginctl show-user "$USER" 2>/dev/null | grep -E "^Linger=" | cut -d= -f2)
+    linger_status=$(loginctl show-user "$user" -p Linger --value 2>/dev/null || true)
     if [ "$linger_status" != "yes" ]; then
-        WARNINGS+=("Rootless Docker detected but user linger is not enabled. Run 'sudo loginctl enable-linger $USER' to ensure the agent starts automatically on system boot.")
+        WARNINGS+=("Rootless Docker detected but user linger is not enabled. Run 'sudo loginctl enable-linger $user' to ensure the agent starts automatically on system boot.")
     fi
 }
 
