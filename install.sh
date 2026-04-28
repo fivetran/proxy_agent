@@ -91,6 +91,26 @@ check_docker_version() {
     fi
 }
 
+check_rootless_linger() {
+    if ! docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -qw "rootless"; then
+        return
+    fi
+
+    if ! command -v loginctl &> /dev/null; then
+        WARNINGS+=("Rootless Docker detected but loginctl is not available. The Proxy Agent officially supports systemd as the init system. Ensure the agent is configured to start on boot for your init system.")
+        return
+    fi
+
+    local user
+    user=${USER:-$(id -un)}
+
+    local linger_status
+    linger_status=$(loginctl show-user "$user" -p Linger --value 2>/dev/null || true)
+    if [ "$linger_status" != "yes" ]; then
+        WARNINGS+=("Rootless Docker detected but user linger is not enabled. Run 'sudo loginctl enable-linger $user' to ensure the agent starts automatically on system boot.")
+    fi
+}
+
 check_resources() {
     local cpu_count
     local total_mem_kb
@@ -241,6 +261,7 @@ main() {
     echo -n "Checking prerequisites... "
     check_dependencies
     check_docker_version
+    check_rootless_linger
     check_resources
     check_disk_space "$install_dir"
 
