@@ -92,14 +92,12 @@ check_docker_version() {
 }
 
 check_rootless_linger() {
-    local docker_root
-    docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null) || return
-
-    if [[ "$docker_root" != "$HOME"* ]]; then
+    if ! docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -qw "rootless"; then
         return
     fi
 
     if ! command -v loginctl &> /dev/null; then
+        WARNINGS+=("Rootless Docker detected but loginctl is not available. The Proxy Agent officially supports systemd as the init system. Ensure the agent is configured to start on boot for your init system.")
         return
     fi
 
