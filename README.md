@@ -12,7 +12,7 @@ For more information see the [Proxy Agent documentation](https://fivetran.com/do
 
 - x86_64 Linux host
 - Docker 20.10.17 or later (running, accessible to your user)
-- Minimum 2 CPUs, 2 GB RAM, 5 GB free disk space
+- Minimum 4 CPUs, 5 GB RAM, 2 GB free disk space
 
 ## Installation
 

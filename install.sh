@@ -44,9 +44,9 @@ fi
 
 DEFAULT_INSTALL_DIR="$HOME/fivetran-proxy-agent"
 MIN_DOCKER_VERSION="20.10.17"
-MIN_RECOMMENDED_CPU_COUNT=2
-MIN_RECOMMENDED_RAM_KB=2097152
-MIN_RECOMMENDED_DISK_SPACE_MB=5120
+MIN_RECOMMENDED_CPU_COUNT=4
+MIN_RECOMMENDED_RAM_KB=5242880
+MIN_RECOMMENDED_DISK_SPACE_MB=2048
 AGENT_SCRIPT="proxy-agent-manager.sh"
 AGENT_SCRIPT_URL="https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh"
 REGISTRY_TAGS_URL="https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list"
