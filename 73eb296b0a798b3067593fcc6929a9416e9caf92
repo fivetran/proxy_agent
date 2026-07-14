@@ -1,0 +1,23 @@
+proxy-agent-manager.ps1
+  0c55d7d5baff946e 197,206
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.3",
+  "base_commit_sha": "73eb296b0a798b3067593fcc6929a9416e9caf92",
+  "prompts": {
+    "0c55d7d5baff946e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "269810c9-769d-4234-956f-04adf11221e9",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "fivetran-pavlonikolenko <pavlo.nikolenko@fivetran.com>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 2,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}
