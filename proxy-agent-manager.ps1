@@ -59,7 +59,7 @@ function Write-Log {
     Write-Host $Message
     $null = New-Item -ItemType Directory -Force -Path (Split-Path $LOGFILE)
     $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
-    Add-Content -Path $LOGFILE -Value "$timestamp UTC - $Message"
+    Add-Content -Path $LOGFILE -Value "$timestamp UTC - $Message" -Encoding ascii
 }
 
 function Get-LatestVersion {
@@ -181,11 +181,11 @@ function Invoke-Upgrade {
     }
 
     Write-Log "Upgrading from $CURRENT_VERSION to $latestVersion..."
-    Set-Content -Path $VERSION_FILE -Value $latestVersion
+    Set-Content -Path $VERSION_FILE -Value $latestVersion -Encoding ascii
 
     if (-not (Start-ProxyAgent $latestVersion)) {
         Write-Log "Upgrade failed, rolling back to $CURRENT_VERSION..."
-        Set-Content -Path $VERSION_FILE -Value $CURRENT_VERSION
+        Set-Content -Path $VERSION_FILE -Value $CURRENT_VERSION -Encoding ascii
         Start-ProxyAgent $CURRENT_VERSION | Out-Null
     }
 }
