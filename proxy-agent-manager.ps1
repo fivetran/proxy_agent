@@ -135,7 +135,7 @@ function Start-ProxyAgent {
         '-i', '/config/config.json'
     )
 
-    & docker @dockerArgs
+    & docker @dockerArgs | Out-Host
     if ($LASTEXITCODE -ne 0) {
         Write-Log "Error: Failed to start container $CONTAINER_NAME"
         return $false
@@ -150,7 +150,7 @@ function Start-ProxyAgent {
         if ($health -ne 'starting') { break }
         if ($elapsed -ge $timeout) {
             Write-Log "Error: $CONTAINER_NAME did not become healthy within ${timeout}s"
-            docker logs $CONTAINER_NAME
+            docker logs $CONTAINER_NAME | Out-Host
             Stop-ProxyAgent
             return $false
         }
@@ -161,12 +161,12 @@ function Start-ProxyAgent {
     $finalStatus = (docker inspect -f '{{.State.Health.Status}}' $CONTAINER_NAME 2>&1).Trim()
 
     if ($finalStatus -eq 'healthy') {
-        docker ps -a --filter "name=$CONTAINER_NAME" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+        docker ps -a --filter "name=$CONTAINER_NAME" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' | Out-Host
         Write-Log "Success: $CONTAINER_NAME is healthy."
         return $true
     } else {
         Write-Log "Error: $CONTAINER_NAME entered status: $finalStatus"
-        docker logs $CONTAINER_NAME
+        docker logs $CONTAINER_NAME | Out-Host
         return $false
     }
 }
