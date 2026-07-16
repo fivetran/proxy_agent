@@ -1,0 +1,37 @@
+README.md
+  9ec510fd29a2ff71 26,59,62,123,125
+  9b3506e5984907c4 13,18-25,27,30,44-58,60-61,75,82-88,94-95,102-107,119-122,124,126-132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.3",
+  "base_commit_sha": "80a533269c16f58e0576d73dd361a1a532dba1f3",
+  "prompts": {
+    "9b3506e5984907c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b3164270-1eb3-4831-be98-983314044012",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "fivetran-pavlonikolenko <pavlo.nikolenko@fivetran.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 56,
+      "overriden_lines": 0
+    },
+    "9ec510fd29a2ff71": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70c7809-cacc-4103-9555-2aae8d6d71a1",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "fivetran-pavlonikolenko <pavlo.nikolenko@fivetran.com>",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 5,
+      "accepted_lines": 5,
+      "overriden_lines": 0
+    }
+  }
+}
