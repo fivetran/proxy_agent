@@ -10,11 +10,24 @@ For more information see the [Proxy Agent documentation](https://fivetran.com/do
 
 ## Requirements
 
+### Linux
 - x86_64 Linux host
 - Docker 20.10.17 or later (running, accessible to your user)
 - Minimum 4 CPUs, 5 GB RAM, 2 GB free disk space
 
+### Windows
+- Windows 10, Windows 11, or Windows Server (bare-metal or Hyper-V enabled)
+- Docker Desktop 20.10.17 or later with WSL2 backend
+- Minimum 4 CPUs, 5 GB RAM, 2 GB free disk space
+- PowerShell 5.1 or later (built into Windows)
+
+> **Note:** Docker Desktop requires an interactive user session to start. The agent container will not start automatically on boot until a user signs in and Docker Desktop launches.
+
+> **Note:** Docker Desktop requires nested virtualization, which is not available on all cloud VM types. Check that your instance supports it (AWS Nitro-based metal instances, GCP VMs with nested virtualization enabled, Azure Dv3/Ev3 and later). Standard general-purpose cloud VMs often do not expose it.
+
 ## Installation
+
+### Linux
 
 Run the following as a non-root user:
 
@@ -28,6 +41,27 @@ To install into a custom directory:
 TOKEN="YOUR_AGENT_TOKEN" RUNTIME=docker bash -c "$(curl -sL https://raw.githubusercontent.com/fivetran/proxy_agent/main/install.sh)" -- --install-dir /path/to/dir
 ```
 
+### Windows
+
+Open PowerShell (does not need to run as Administrator) and run:
+
+```powershell
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/fivetran/proxy_agent/main/install.ps1 -OutFile install.ps1 -UseBasicParsing
+$env:RUNTIME = 'docker'; $env:TOKEN = 'YOUR_AGENT_TOKEN'; & .\install.ps1
+```
+
+To install into a custom directory:
+
+```powershell
+$env:RUNTIME = 'docker'; $env:TOKEN = 'YOUR_AGENT_TOKEN'; & .\install.ps1 -InstallDir C:\path\to\dir
+```
+
+If your execution policy blocks unsigned scripts, unblock the downloaded file before running it:
+
+```powershell
+Unblock-File .\install.ps1
+```
+
 The installer will:
 - Check prerequisites
 - Create the installation directory
@@ -38,20 +72,39 @@ The installer will:
 Installation directory structure:
 
 ```
+# Linux
 $HOME/fivetran-proxy-agent/
 ├── proxy-agent-manager.sh   --> Management script
 ├── config/
 │   └── config.json          --> Agent configuration (permissions: 600)
 ├── logs/                    --> Agent and manager logs
 └── version                  --> Pinned agent version
+
+# Windows
+%USERPROFILE%\fivetran-proxy-agent\
+├── proxy-agent-manager.ps1  --> Management script
+├── config\
+│   └── config.json          --> Agent configuration (owner read/write only)
+├── logs\                    --> Agent and manager logs
+└── version                  --> Pinned agent version
 ```
 
 ## Managing the agent
+
+### Linux
 
 Use `proxy-agent-manager.sh` to control the agent:
 
 ```bash
 ./proxy-agent-manager.sh {start|stop|restart|upgrade|status|logs}
+```
+
+### Windows
+
+Use `proxy-agent-manager.ps1` to control the agent:
+
+```powershell
+& "$env:USERPROFILE\fivetran-proxy-agent\proxy-agent-manager.ps1" {start|stop|restart|upgrade|status|logs}
 ```
 
 | Command   | Description                                          |
@@ -62,6 +115,21 @@ Use `proxy-agent-manager.sh` to control the agent:
 | `upgrade` | Pull and start the latest version, with auto-rollback on failure |
 | `status`  | Show container name, image, and health status        |
 | `logs`    | Stream live container logs                           |
+
+## Troubleshooting
+
+### Windows
+
+**Execution policy error** — PowerShell may block the script with `File cannot be loaded because running scripts is disabled`. Because the script is unsigned, `RemoteSigned` policy is not sufficient. Unblock the downloaded file instead:
+```powershell
+Unblock-File .\install.ps1
+```
+
+**Docker Desktop not starting on boot** — Docker Desktop launches when you sign in, not at system boot. The agent container will not be available until a user signs in.
+
+**Docker daemon not accessible** — ensure Docker Desktop is running before running the installer or management script.
+
+**Volume mount issues** — Docker Desktop for Windows translates Windows paths in volume mounts automatically. If you see an empty config inside the container, ensure the install directory path does not contain special characters.
 
 ## License
 
