@@ -92,7 +92,7 @@ function Compare-SemVer {
 }
 
 function Stop-ProxyAgent {
-    docker inspect $CONTAINER_NAME 2>&1 | Out-Null
+    try { docker inspect $CONTAINER_NAME 2>&1 | Out-Null } catch {}
     if ($LASTEXITCODE -eq 0) {
         docker stop $CONTAINER_NAME | Out-Null
         docker rm $CONTAINER_NAME | Out-Null
@@ -146,7 +146,12 @@ function Start-ProxyAgent {
 
     $elapsed = 0
     while ($true) {
-        $health = (docker inspect -f '{{.State.Health.Status}}' $CONTAINER_NAME 2>&1).Trim()
+        try {
+            $health = (docker inspect -f '{{.State.Health.Status}}' $CONTAINER_NAME 2>&1).Trim()
+        } catch {
+            Write-Log "Error: Failed to inspect $CONTAINER_NAME"
+            return $false
+        }
         if ($health -ne 'starting') { break }
         if ($elapsed -ge $timeout) {
             Write-Log "Error: $CONTAINER_NAME did not become healthy within ${timeout}s"
@@ -158,7 +163,11 @@ function Start-ProxyAgent {
         $elapsed++
     }
 
-    $finalStatus = (docker inspect -f '{{.State.Health.Status}}' $CONTAINER_NAME 2>&1).Trim()
+    try {
+        $finalStatus = (docker inspect -f '{{.State.Health.Status}}' $CONTAINER_NAME 2>&1).Trim()
+    } catch {
+        $finalStatus = 'unknown'
+    }
 
     if ($finalStatus -eq 'healthy') {
         docker ps -a --filter "name=$CONTAINER_NAME" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' | Out-Host
