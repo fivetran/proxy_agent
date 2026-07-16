@@ -125,7 +125,7 @@ function Show-WarningsAndErrors {
 
 function Get-LatestVersion {
     try {
-        $tagsJson = Invoke-RestMethod -Uri $REGISTRY_TAGS_URL -Method Get
+        $tagsJson = Invoke-RestMethod -Uri $REGISTRY_TAGS_URL -Method Get -TimeoutSec 30
     } catch {
         Write-Host "ERROR: Unable to query image registry for latest version: $_" -ForegroundColor Red
         exit 1
@@ -165,7 +165,12 @@ if ($ConfigPath -and -not (Test-Path $ConfigPath -PathType Leaf)) {
 if ($ConfigPath -and -not $env:TOKEN) {
     $rawConfig = Get-Content $ConfigPath -Raw
     if ($rawConfig -match '"proxy_server_uri"') {
-        $parsed    = $rawConfig | ConvertFrom-Json
+        try {
+            $parsed = $rawConfig | ConvertFrom-Json
+        } catch {
+            Write-Host "ERROR: Could not parse config file as JSON: $ConfigPath" -ForegroundColor Red
+            exit 1
+        }
         $agentId   = $parsed.agent_id
         $authToken = $parsed.auth_token
         if (-not $agentId -or -not $authToken) {
@@ -216,7 +221,7 @@ $null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'logs')
 Write-Host "Downloading management script..."
 $tmpScript = Join-Path $InstallDir "$AGENT_SCRIPT.tmp"
 try {
-    Invoke-WebRequest -Uri $AGENT_SCRIPT_URL -OutFile $tmpScript -UseBasicParsing
+    Invoke-WebRequest -Uri $AGENT_SCRIPT_URL -OutFile $tmpScript -UseBasicParsing -TimeoutSec 30
 } catch {
     Remove-Item -Path $tmpScript -Force -ErrorAction SilentlyContinue
     Write-Host "ERROR: Failed to download management script from ${AGENT_SCRIPT_URL}: $_" -ForegroundColor Red
@@ -247,7 +252,8 @@ if ($ConfigPath) {
     try {
         $configData = Invoke-RestMethod -Uri "$apiUrl/proxy-agent/configure" `
             -Method POST `
-            -Headers @{ Authorization = "Basic $($env:TOKEN)"; Accept = 'application/json' }
+            -Headers @{ Authorization = "Basic $($env:TOKEN)"; Accept = 'application/json' } `
+            -TimeoutSec 30
     } catch {
         $statusCode = $_.Exception.Response.StatusCode.value__
         if ($statusCode) {
