@@ -47,6 +47,7 @@ Open PowerShell (does not need to run as Administrator) and run:
 
 ```powershell
 Invoke-WebRequest -Uri https://raw.githubusercontent.com/fivetran/proxy_agent/main/install.ps1 -OutFile install.ps1 -UseBasicParsing
+Unblock-File .\install.ps1
 $env:RUNTIME = 'docker'; $env:TOKEN = 'YOUR_AGENT_TOKEN'; & .\install.ps1
 ```
 
@@ -54,12 +55,6 @@ To install into a custom directory:
 
 ```powershell
 $env:RUNTIME = 'docker'; $env:TOKEN = 'YOUR_AGENT_TOKEN'; & .\install.ps1 -InstallDir C:\path\to\dir
-```
-
-If your execution policy blocks unsigned scripts, unblock the downloaded file before running it:
-
-```powershell
-Unblock-File .\install.ps1
 ```
 
 The installer will:
@@ -120,8 +115,9 @@ Use `proxy-agent-manager.ps1` to control the agent:
 
 ### Windows
 
-**Execution policy error** — PowerShell may block the script with `File cannot be loaded because running scripts is disabled`. Because the script is unsigned, `RemoteSigned` policy is not sufficient. Unblock the downloaded file instead:
+**Execution policy error** — If PowerShell blocks the script with `File cannot be loaded because running scripts is disabled`, ensure your execution policy allows local scripts and then unblock the downloaded file:
 ```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 Unblock-File .\install.ps1
 ```
 
