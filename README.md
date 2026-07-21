@@ -115,7 +115,7 @@ Use `proxy-agent-manager.ps1` to control the agent:
 
 ### Windows
 
-**Execution policy error** — If PowerShell blocks the script with `File cannot be loaded because running scripts is disabled`, ensure your execution policy allows local scripts and then unblock the downloaded file:
+**Execution policy error** — If PowerShell blocks the script with `cannot be loaded because the script is not digitally signed` (RemoteSigned policy) or `running scripts is disabled` (Restricted policy), run:
 ```powershell
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 Unblock-File .\install.ps1
