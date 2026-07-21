@@ -1,0 +1,23 @@
+README.md
+  a7fa74aecee195aa 118
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.3",
+  "base_commit_sha": "a756469a4af46618f840957c98fada22a7fe8fce",
+  "prompts": {
+    "a7fa74aecee195aa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d24bdde2-41f7-4c58-b8b0-fa4a338c6dac",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "fivetran-pavlonikolenko <pavlo.nikolenko@fivetran.com>",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 4,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}
