@@ -91,8 +91,11 @@ function Test-Resources {
 
 function Test-DiskSpace {
     param([string]$Path)
-    $parentDir = Split-Path $Path -Parent
-    if (-not (Test-Path $parentDir)) { return }
+    $parentDir = Split-Path -LiteralPath $Path -Parent
+    if (-not (Test-Path -LiteralPath $parentDir)) {
+        $script:Warnings.Add("Unable to determine available disk space: parent directory $parentDir does not exist")
+        return
+    }
 
     try {
         $qualifier   = Split-Path -Qualifier $parentDir
@@ -160,7 +163,7 @@ if (-not $ConfigPath -and -not $env:TOKEN) { Show-Usage }
 $configFileContent = $null
 if ($ConfigPath) {
     try {
-        $configFileContent = Get-Content $ConfigPath -Raw
+        $configFileContent = Get-Content -LiteralPath $ConfigPath -Raw
     } catch {
         Write-Host "ERROR: Config file not found or not readable: $ConfigPath" -ForegroundColor Red
         exit 1
@@ -208,23 +211,23 @@ try {
     }
 
     # Directory setup
-    if (Test-Path $InstallDir -PathType Container) {
+    if (Test-Path -LiteralPath $InstallDir -PathType Container) {
         Write-Host "$InstallDir already exists, will re-use it."
     } else {
-        $null = New-Item -ItemType Directory -Force -Path $InstallDir
+        $null = New-Item -ItemType Directory -Force -LiteralPath $InstallDir
     }
 
     $testFile = Join-Path $InstallDir ".write-test-$PID"
     try {
-        $null = New-Item -ItemType File -Path $testFile -Force
-        Remove-Item $testFile -Force
+        $null = New-Item -ItemType File -LiteralPath $testFile -Force
+        Remove-Item -LiteralPath $testFile -Force
     } catch {
         Write-Host "ERROR: Insufficient permissions to write to $InstallDir" -ForegroundColor Red
         exit 1
     }
 
-    $null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'config')
-    $null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'logs')
+    $null = New-Item -ItemType Directory -Force -LiteralPath (Join-Path $InstallDir 'config')
+    $null = New-Item -ItemType Directory -Force -LiteralPath (Join-Path $InstallDir 'logs')
 
     # Download management script from public repo (temp file → move for atomicity)
     Write-Host "Downloading management script..."
@@ -233,31 +236,32 @@ try {
     try {
         Invoke-WebRequest -Uri $AGENT_SCRIPT_URL -OutFile $tmpScript -UseBasicParsing -TimeoutSec 30
     } catch {
-        Remove-Item -Path $tmpScript -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpScript -Force -ErrorAction SilentlyContinue
         Write-Host "ERROR: Failed to download management script from ${AGENT_SCRIPT_URL}: $_" -ForegroundColor Red
         exit 1
     }
-    Move-Item -Path $tmpScript -Destination $agentScript -Force
-    Unblock-File -Path $agentScript
+    Move-Item -LiteralPath $tmpScript -Destination $agentScript -Force
+    Unblock-File -LiteralPath $agentScript
 
     # Bootstrap or copy config
     $configDest  = Join-Path $InstallDir 'config\config.json'
     $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 
-    # Create with restricted ACL before writing credentials (no world-readable window)
+    # Create empty file first, then restrict ACL, then write credentials.
+    # The file is empty (no credentials) during the brief window between creation and ACL restriction.
     try {
-        $null = New-Item -ItemType File -Path $configDest -Force
+        $null = New-Item -ItemType File -LiteralPath $configDest -Force
     } catch [System.UnauthorizedAccessException] {
         Write-Host "ERROR: Cannot create $configDest — if reinstalling, run as the original installing user or delete the existing file manually." -ForegroundColor Red
         exit 1
     }
-    $configAcl = Get-Acl $configDest
+    $configAcl = Get-Acl -LiteralPath $configDest
     $configAcl.SetAccessRuleProtection($true, $false)
     $configAcl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
         $currentUser, 'Read,Write', 'Allow')))
     $configAcl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
         'NT AUTHORITY\SYSTEM', 'Read', 'Allow')))
-    Set-Acl -Path $configDest -AclObject $configAcl
+    Set-Acl -LiteralPath $configDest -AclObject $configAcl
 
     if ($ConfigPath) {
         [System.IO.File]::WriteAllText($configDest, $configFileContent, [System.Text.UTF8Encoding]::new($false))
@@ -285,13 +289,19 @@ try {
             Write-Host "ERROR: Configure endpoint returned HTTP $($response.StatusCode)" -ForegroundColor Red
             exit 1
         }
+        try {
+            $null = $response.Content | ConvertFrom-Json
+        } catch {
+            Write-Host "ERROR: Configure endpoint returned an invalid JSON response" -ForegroundColor Red
+            exit 1
+        }
         [System.IO.File]::WriteAllText($configDest, $response.Content, [System.Text.UTF8Encoding]::new($false))
     }
 
     # Resolve and pin version
     Write-Host "Resolving latest proxy agent version..."
     $version = Get-LatestVersion
-    Set-Content -Path (Join-Path $InstallDir 'version') -Value $version -Encoding ascii
+    Set-Content -LiteralPath (Join-Path $InstallDir 'version') -Value $version -Encoding ascii
     Write-Host "Using version $version"
 
     # Clear credential from environment before spawning child process
