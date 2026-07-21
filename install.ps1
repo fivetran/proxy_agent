@@ -91,7 +91,7 @@ function Test-Resources {
 
 function Test-DiskSpace {
     param([string]$Path)
-    $parentDir = Split-Path -LiteralPath $Path -Parent
+    $parentDir = Split-Path -LiteralPath $Path
     if (-not (Test-Path -LiteralPath $parentDir)) {
         $script:Warnings.Add("Unable to determine available disk space: parent directory $parentDir does not exist")
         return
@@ -214,20 +214,20 @@ try {
     if (Test-Path -LiteralPath $InstallDir -PathType Container) {
         Write-Host "$InstallDir already exists, will re-use it."
     } else {
-        $null = New-Item -ItemType Directory -Force -LiteralPath $InstallDir
+        $null = New-Item -ItemType Directory -Force -Path $InstallDir
     }
 
     $testFile = Join-Path $InstallDir ".write-test-$PID"
     try {
-        $null = New-Item -ItemType File -LiteralPath $testFile -Force
+        $null = New-Item -ItemType File -Path $testFile -Force
         Remove-Item -LiteralPath $testFile -Force
     } catch {
         Write-Host "ERROR: Insufficient permissions to write to $InstallDir" -ForegroundColor Red
         exit 1
     }
 
-    $null = New-Item -ItemType Directory -Force -LiteralPath (Join-Path $InstallDir 'config')
-    $null = New-Item -ItemType Directory -Force -LiteralPath (Join-Path $InstallDir 'logs')
+    $null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'config')
+    $null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'logs')
 
     # Download management script from public repo (temp file → move for atomicity)
     Write-Host "Downloading management script..."
@@ -250,18 +250,18 @@ try {
     # Create empty file first, then restrict ACL, then write credentials.
     # The file is empty (no credentials) during the brief window between creation and ACL restriction.
     try {
-        $null = New-Item -ItemType File -LiteralPath $configDest -Force
+        $null = New-Item -ItemType File -Path $configDest -Force
     } catch [System.UnauthorizedAccessException] {
-        Write-Host "ERROR: Cannot create $configDest — if reinstalling, run as the original installing user or delete the existing file manually." -ForegroundColor Red
+        Write-Host "ERROR: Cannot create $configDest - if reinstalling, run as the original installing user or delete the existing file manually." -ForegroundColor Red
         exit 1
     }
-    $configAcl = Get-Acl -LiteralPath $configDest
+    $configAcl = [System.Security.AccessControl.FileSecurity]::new()
     $configAcl.SetAccessRuleProtection($true, $false)
     $configAcl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
         $currentUser, 'Read,Write', 'Allow')))
     $configAcl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
         'NT AUTHORITY\SYSTEM', 'Read', 'Allow')))
-    Set-Acl -LiteralPath $configDest -AclObject $configAcl
+    [System.IO.File]::SetAccessControl($configDest, $configAcl)
 
     if ($ConfigPath) {
         [System.IO.File]::WriteAllText($configDest, $configFileContent, [System.Text.UTF8Encoding]::new($false))
@@ -278,7 +278,9 @@ try {
                 -UseBasicParsing
         } catch {
             $statusCode = $_.Exception.Response.StatusCode.value__
-            if ($statusCode) {
+            if ($statusCode -eq 401) {
+                Write-Host "ERROR: Authentication failed (HTTP 401). Ensure your TOKEN is valid." -ForegroundColor Red
+            } elseif ($statusCode) {
                 Write-Host "ERROR: Configure endpoint returned HTTP $statusCode" -ForegroundColor Red
             } else {
                 Write-Host "ERROR: Failed to connect to configure endpoint: $_" -ForegroundColor Red
