@@ -156,132 +156,157 @@ if (-not $InstallDir) { $InstallDir = $DEFAULT_INSTALL_DIR }
 
 if (-not $ConfigPath -and -not $env:TOKEN) { Show-Usage }
 
-if ($ConfigPath -and -not (Test-Path $ConfigPath -PathType Leaf)) {
-    Write-Host "ERROR: Config file not found or not readable: $ConfigPath" -ForegroundColor Red
-    exit 1
-}
-
-# Detect WebSocket agent config and migrate to TOKEN flow
-if ($ConfigPath -and -not $env:TOKEN) {
-    $rawConfig = Get-Content $ConfigPath -Raw
-    if ($rawConfig -match '"proxy_server_uri"') {
-        try {
-            $parsed = $rawConfig | ConvertFrom-Json
-        } catch {
-            Write-Host "ERROR: Could not parse config file as JSON: $ConfigPath" -ForegroundColor Red
-            exit 1
-        }
-        $agentId   = $parsed.agent_id
-        $authToken = $parsed.auth_token
-        if (-not $agentId -or -not $authToken) {
-            Write-Host "ERROR: Could not extract credentials from WebSocket config" -ForegroundColor Red
-            exit 1
-        }
-        $env:TOKEN  = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${agentId}:${authToken}"))
-        $ConfigPath = ''
-        Write-Host "Detected WebSocket agent configuration. Fetching updated config from Fivetran..."
-    }
-}
-
-Write-Host "Installing Fivetran Proxy Agent...`n"
-
-# Pre-flight checks
-Write-Host -NoNewline "Checking prerequisites... "
-Test-DockerVersion
-Test-Resources
-Test-DiskSpace $InstallDir
-
-if ($script:Warnings.Count -eq 0 -and $script:Errors.Count -eq 0) {
-    Write-Host "OK`n"
-} else {
-    Write-Host ""
-    Show-WarningsAndErrors
-}
-
-# Directory setup
-if (Test-Path $InstallDir) {
-    Write-Host "$InstallDir already exists, will re-use it."
-} else {
-    $null = New-Item -ItemType Directory -Force -Path $InstallDir
-}
-
-$testFile = Join-Path $InstallDir ".write-test-$PID"
-try {
-    $null = New-Item -ItemType File -Path $testFile -Force
-    Remove-Item $testFile -Force
-} catch {
-    Write-Host "ERROR: Insufficient permissions to write to $InstallDir" -ForegroundColor Red
-    exit 1
-}
-
-$null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'config')
-$null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'logs')
-
-# Download management script from public repo (temp file → move for atomicity)
-Write-Host "Downloading management script..."
-$tmpScript = Join-Path $InstallDir "$AGENT_SCRIPT.tmp"
-try {
-    Invoke-WebRequest -Uri $AGENT_SCRIPT_URL -OutFile $tmpScript -UseBasicParsing -TimeoutSec 30
-} catch {
-    Remove-Item -Path $tmpScript -Force -ErrorAction SilentlyContinue
-    Write-Host "ERROR: Failed to download management script from ${AGENT_SCRIPT_URL}: $_" -ForegroundColor Red
-    exit 1
-}
-Move-Item -Path $tmpScript -Destination (Join-Path $InstallDir $AGENT_SCRIPT) -Force
-
-# Bootstrap or copy config
-$configDest  = Join-Path $InstallDir 'config\config.json'
-$currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-
-# Create with restricted ACL before writing credentials (no world-readable window)
-$null = New-Item -ItemType File -Path $configDest -Force
-$configAcl = Get-Acl $configDest
-$configAcl.SetAccessRuleProtection($true, $false)
-$configAcl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
-    $currentUser, 'ReadAndExecute,Write', 'Allow')))
-$configAcl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
-    'NT AUTHORITY\SYSTEM', 'Read', 'Allow')))
-Set-Acl -Path $configDest -AclObject $configAcl
-
+# Read config file once; also validates existence and readability
+$configFileContent = $null
 if ($ConfigPath) {
-    [System.IO.File]::WriteAllText($configDest, (Get-Content $ConfigPath -Raw), [System.Text.UTF8Encoding]::new($false))
-    Write-Host "Config copied to $configDest"
-} else {
-    $apiUrl = if ($env:FIVETRAN_API_URL) { $env:FIVETRAN_API_URL } else { $DEFAULT_FIVETRAN_API_URL }
-    Write-Host "Fetching agent config from $apiUrl..."
     try {
-        $configData = Invoke-RestMethod -Uri "$apiUrl/proxy-agent/configure" `
-            -Method POST `
-            -Headers @{ Authorization = "Basic $($env:TOKEN)"; Accept = 'application/json' } `
-            -TimeoutSec 30
+        $configFileContent = Get-Content $ConfigPath -Raw
     } catch {
-        $statusCode = $_.Exception.Response.StatusCode.value__
-        if ($statusCode) {
-            Write-Host "ERROR: Configure endpoint returned HTTP $statusCode" -ForegroundColor Red
-        } else {
-            Write-Host "ERROR: Failed to connect to configure endpoint: $_" -ForegroundColor Red
-        }
+        Write-Host "ERROR: Config file not found or not readable: $ConfigPath" -ForegroundColor Red
         exit 1
     }
-    [System.IO.File]::WriteAllText($configDest, ($configData | ConvertTo-Json -Depth 10 -Compress), [System.Text.UTF8Encoding]::new($false))
 }
 
-# Resolve and pin version
-Write-Host "Resolving latest proxy agent version..."
-$version = Get-LatestVersion
-Set-Content -Path (Join-Path $InstallDir 'version') -Value $version -Encoding ascii
-Write-Host "Using version $version"
+try {
+    # Detect WebSocket agent config and migrate to TOKEN flow.
+    # Store derived credential in a local variable; $env:TOKEN is set only just before the
+    # configure API call so that pre-flight docker commands do not inherit it.
+    $derivedToken = $null
+    if ($configFileContent -and -not $env:TOKEN) {
+        if ($configFileContent -match '"proxy_server_uri"') {
+            try {
+                $parsed = $configFileContent | ConvertFrom-Json
+            } catch {
+                Write-Host "ERROR: Could not parse config file as JSON: $ConfigPath" -ForegroundColor Red
+                exit 1
+            }
+            $agentId   = $parsed.agent_id
+            $authToken = $parsed.auth_token
+            if (-not $agentId -or -not $authToken) {
+                Write-Host "ERROR: Could not extract credentials from WebSocket config" -ForegroundColor Red
+                exit 1
+            }
+            $derivedToken = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${agentId}:${authToken}"))
+            $ConfigPath   = ''
+            Write-Host "Detected WebSocket agent configuration. Fetching updated config from Fivetran..."
+        }
+    }
 
-# Clear credential from environment before spawning child process
-Remove-Item Env:\TOKEN -ErrorAction SilentlyContinue
+    Write-Host "Installing Fivetran Proxy Agent...`n"
 
-# Start agent
-& (Join-Path $InstallDir $AGENT_SCRIPT) start
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Installation complete, but agent failed to start."
-    Write-Host "To try to start the agent again, run: & '$(Join-Path $InstallDir $AGENT_SCRIPT)' start"
-    exit 1
+    # Pre-flight checks
+    Write-Host -NoNewline "Checking prerequisites... "
+    Test-DockerVersion
+    Test-Resources
+    Test-DiskSpace $InstallDir
+
+    if ($script:Warnings.Count -eq 0 -and $script:Errors.Count -eq 0) {
+        Write-Host "OK`n"
+    } else {
+        Write-Host ""
+        Show-WarningsAndErrors
+    }
+
+    # Directory setup
+    if (Test-Path $InstallDir -PathType Container) {
+        Write-Host "$InstallDir already exists, will re-use it."
+    } else {
+        $null = New-Item -ItemType Directory -Force -Path $InstallDir
+    }
+
+    $testFile = Join-Path $InstallDir ".write-test-$PID"
+    try {
+        $null = New-Item -ItemType File -Path $testFile -Force
+        Remove-Item $testFile -Force
+    } catch {
+        Write-Host "ERROR: Insufficient permissions to write to $InstallDir" -ForegroundColor Red
+        exit 1
+    }
+
+    $null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'config')
+    $null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'logs')
+
+    # Download management script from public repo (temp file → move for atomicity)
+    Write-Host "Downloading management script..."
+    $agentScript = Join-Path $InstallDir $AGENT_SCRIPT
+    $tmpScript   = Join-Path $InstallDir "$AGENT_SCRIPT.$PID.tmp"
+    try {
+        Invoke-WebRequest -Uri $AGENT_SCRIPT_URL -OutFile $tmpScript -UseBasicParsing -TimeoutSec 30
+    } catch {
+        Remove-Item -Path $tmpScript -Force -ErrorAction SilentlyContinue
+        Write-Host "ERROR: Failed to download management script from ${AGENT_SCRIPT_URL}: $_" -ForegroundColor Red
+        exit 1
+    }
+    Move-Item -Path $tmpScript -Destination $agentScript -Force
+    Unblock-File -Path $agentScript
+
+    # Bootstrap or copy config
+    $configDest  = Join-Path $InstallDir 'config\config.json'
+    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+    # Create with restricted ACL before writing credentials (no world-readable window)
+    try {
+        $null = New-Item -ItemType File -Path $configDest -Force
+    } catch [System.UnauthorizedAccessException] {
+        Write-Host "ERROR: Cannot create $configDest — if reinstalling, run as the original installing user or delete the existing file manually." -ForegroundColor Red
+        exit 1
+    }
+    $configAcl = Get-Acl $configDest
+    $configAcl.SetAccessRuleProtection($true, $false)
+    $configAcl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+        $currentUser, 'Read,Write', 'Allow')))
+    $configAcl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+        'NT AUTHORITY\SYSTEM', 'Read', 'Allow')))
+    Set-Acl -Path $configDest -AclObject $configAcl
+
+    if ($ConfigPath) {
+        [System.IO.File]::WriteAllText($configDest, $configFileContent, [System.Text.UTF8Encoding]::new($false))
+        Write-Host "Config copied to $configDest"
+    } else {
+        $apiUrl = if ($env:FIVETRAN_API_URL) { $env:FIVETRAN_API_URL } else { $DEFAULT_FIVETRAN_API_URL }
+        Write-Host "Fetching agent config from $apiUrl..."
+        if ($derivedToken) { $env:TOKEN = $derivedToken }
+        try {
+            $response = Invoke-WebRequest -Uri "$apiUrl/proxy-agent/configure" `
+                -Method POST `
+                -Headers @{ Authorization = "Basic $($env:TOKEN)"; Accept = 'application/json' } `
+                -TimeoutSec 30 `
+                -UseBasicParsing
+        } catch {
+            $statusCode = $_.Exception.Response.StatusCode.value__
+            if ($statusCode) {
+                Write-Host "ERROR: Configure endpoint returned HTTP $statusCode" -ForegroundColor Red
+            } else {
+                Write-Host "ERROR: Failed to connect to configure endpoint: $_" -ForegroundColor Red
+            }
+            exit 1
+        }
+        if ($response.StatusCode -ne 200) {
+            Write-Host "ERROR: Configure endpoint returned HTTP $($response.StatusCode)" -ForegroundColor Red
+            exit 1
+        }
+        [System.IO.File]::WriteAllText($configDest, $response.Content, [System.Text.UTF8Encoding]::new($false))
+    }
+
+    # Resolve and pin version
+    Write-Host "Resolving latest proxy agent version..."
+    $version = Get-LatestVersion
+    Set-Content -Path (Join-Path $InstallDir 'version') -Value $version -Encoding ascii
+    Write-Host "Using version $version"
+
+    # Clear credential from environment before spawning child process
+    Remove-Item Env:\TOKEN -ErrorAction SilentlyContinue
+
+    # Start agent
+    & $agentScript start
+    if (-not $?) {
+        Write-Host "Installation complete, but agent failed to start."
+        Write-Host "To try to start the agent again, run: & '$agentScript' start"
+        exit 1
+    }
+
+    Write-Host "`nInstallation complete."
+    Write-Host "Install directory: $InstallDir"
+} finally {
+    Remove-Item Env:\TOKEN -ErrorAction SilentlyContinue
 }
-
-Write-Host "`nInstallation complete."
-Write-Host "Install directory: $InstallDir"
