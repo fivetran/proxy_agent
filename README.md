@@ -115,10 +115,9 @@ Use `proxy-agent-manager.ps1` to control the agent:
 
 ### Windows
 
-**Execution policy error** — If PowerShell blocks the script with `cannot be loaded because the script is not digitally signed` (RemoteSigned policy) or `running scripts is disabled` (Restricted policy), run:
+**Execution policy error** — If PowerShell blocks the script with `running scripts is disabled`, your execution policy is set to Restricted. Allow local scripts and retry:
 ```powershell
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-Unblock-File .\install.ps1
 ```
 
 **Docker Desktop not starting on boot** — Docker Desktop launches when you sign in, not at system boot. The agent container will not be available until a user signs in.
