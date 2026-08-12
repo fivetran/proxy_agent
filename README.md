@@ -16,8 +16,8 @@ For more information see the [Proxy Agent documentation](https://fivetran.com/do
 - Minimum 4 CPUs, 5 GB RAM, 2 GB free disk space
 
 ### Windows
-- Windows 10, Windows 11, or Windows Server (bare-metal or Hyper-V enabled)
-- Docker Desktop 20.10.17 or later with WSL2 backend
+- Windows 10 or Windows 11 (64-bit)
+- Docker Desktop (current supported version) with WSL2 backend
 - Minimum 4 CPUs, 5 GB RAM, 2 GB free disk space
 - PowerShell 5.1 or later (built into Windows)
 
