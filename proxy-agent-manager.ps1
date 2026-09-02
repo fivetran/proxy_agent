@@ -62,6 +62,19 @@ function Write-Log {
     Add-Content -Path $LOGFILE -Value "$timestamp UTC - $Message" -Encoding ascii
 }
 
+$MEMORY_ALLOCATION_PERCENT = 75
+
+function Get-ContainerMemoryLimit {
+    try {
+        $cs         = Get-CimInstance Win32_ComputerSystem
+        $totalMemMB = [math]::Round($cs.TotalPhysicalMemory / 1MB)
+        $limitMB    = [math]::Floor($totalMemMB * $MEMORY_ALLOCATION_PERCENT / 100)
+        return "${limitMB}m"
+    } catch {
+        return '1g'
+    }
+}
+
 function Get-LatestVersion {
     $registryHost   = $IMAGE.Split('/')[0]
     $repositoryPath = $IMAGE.Substring($registryHost.Length + 1)
@@ -113,11 +126,12 @@ function Start-ProxyAgent {
     $logsMount   = (Join-Path $BASE_DIR 'logs') -replace '\\', '/'
 
     # Build argument list to avoid PowerShell variable expansion inside the health-cmd bash expression
+    $memoryLimit = Get-ContainerMemoryLimit
     $dockerArgs = @(
         'run', '-d',
         '--name', $CONTAINER_NAME,
         '--restart', 'unless-stopped',
-        '--memory=1g',
+        "--memory=$memoryLimit",
         '--label', 'fivetran=proxy-agent',
         '--label', "proxy_agent_id=$AGENT_ID",
         '--env', 'IS_DOCKER=true',
