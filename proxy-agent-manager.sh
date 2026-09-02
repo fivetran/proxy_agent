@@ -52,6 +52,22 @@ log() {
     echo "$(date -u +'%Y-%m-%d %H:%M:%S') UTC - $1" >> "$LOGFILE"
 }
 
+MEMORY_ALLOCATION_PERCENT=75
+
+get_container_memory_limit() {
+    local total_mem_kb
+    if [ -f /proc/meminfo ]; then
+        total_mem_kb=$(grep "MemTotal" /proc/meminfo | awk '{print $2}')
+    fi
+    if [ -z "${total_mem_kb:-}" ] || [ "$total_mem_kb" -le 0 ]; then
+        echo "1g"
+        return
+    fi
+    local total_mem_mb=$((total_mem_kb / 1024))
+    local limit_mb=$((total_mem_mb * MEMORY_ALLOCATION_PERCENT / 100))
+    echo "${limit_mb}m"
+}
+
 get_latest_version() {
     local registry_host="${IMAGE%%/*}"
     local repository_path="${IMAGE#*/}"
@@ -106,10 +122,13 @@ start_agent() {
 
     mkdir -p "$BASE_DIR/logs"
 
+    local memory_limit
+    memory_limit=$(get_container_memory_limit)
+
     docker run -d \
         --name "${CONTAINER_NAME}" \
         --restart unless-stopped \
-        --memory=1g \
+        --memory="$memory_limit" \
         --label fivetran=proxy-agent \
         --label proxy_agent_id="$AGENT_ID" \
         --env IS_DOCKER=true \

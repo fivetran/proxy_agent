@@ -45,7 +45,7 @@ fi
 DEFAULT_INSTALL_DIR="$HOME/fivetran-proxy-agent"
 MIN_DOCKER_VERSION="20.10.17"
 MIN_RECOMMENDED_CPU_COUNT=4
-MIN_RECOMMENDED_RAM_KB=5242880
+MIN_RECOMMENDED_RAM_MB=6827  # so that 75% (proxy-agent-manager's container memory allocation) clears 5GB
 MIN_RECOMMENDED_DISK_SPACE_MB=2048
 AGENT_SCRIPT="proxy-agent-manager.sh"
 AGENT_SCRIPT_URL="https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh"
@@ -138,8 +138,8 @@ check_resources() {
     local total_mem_mb
     if [ "$total_mem_kb" -gt 0 ]; then
         total_mem_mb=$((total_mem_kb / 1024))
-        if [ "$total_mem_kb" -lt "$MIN_RECOMMENDED_RAM_KB" ]; then
-            WARNINGS+=("RAM (${total_mem_mb}MB) is below the recommended minimum of $((MIN_RECOMMENDED_RAM_KB / 1024))MB")
+        if [ "$total_mem_mb" -lt "$MIN_RECOMMENDED_RAM_MB" ]; then
+            WARNINGS+=("RAM (${total_mem_mb}MB) is below the recommended minimum of ${MIN_RECOMMENDED_RAM_MB}MB")
         fi
     fi
 }
