@@ -6,12 +6,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$BASE_DIR       = $PSScriptRoot
-$IMAGE          = 'us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent'
-$CONFIG_FILE    = Join-Path $BASE_DIR 'config\config.json'
-$VERSION_FILE   = Join-Path $BASE_DIR 'version'
-$LOGFILE        = Join-Path $BASE_DIR 'logs\proxy-agent-manager.log'
-$CONTAINER_LOG_DIR = '/app/logs'
+$BASE_DIR           = $PSScriptRoot
+$IMAGE              = 'us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent'
+$CONFIG_FILE        = Join-Path $BASE_DIR 'config\config.json'
+$VERSION_FILE       = Join-Path $BASE_DIR 'version'
+$LOGFILE            = Join-Path $BASE_DIR 'logs\proxy-agent-manager.log'
+$CONTAINER_LOG_DIR  = '/app/logs'
+$MEMORY_CONFIG_FILE = Join-Path $BASE_DIR 'memory-config.ps1'
+
+if (Test-Path -LiteralPath $MEMORY_CONFIG_FILE) {
+    . $MEMORY_CONFIG_FILE
+}
+if (-not $MEMORY_ALLOCATION_MB) { $MEMORY_ALLOCATION_MB = 5120 }
 
 # ── Startup validation ───────────────────────────────────────────────────────
 
@@ -60,19 +66,6 @@ function Write-Log {
     $null = New-Item -ItemType Directory -Force -Path (Split-Path $LOGFILE)
     $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
     Add-Content -Path $LOGFILE -Value "$timestamp UTC - $Message" -Encoding ascii
-}
-
-$MEMORY_ALLOCATION_PERCENT = 75
-
-function Get-ContainerMemoryLimit {
-    try {
-        $cs         = Get-CimInstance Win32_ComputerSystem
-        $totalMemMB = [math]::Round($cs.TotalPhysicalMemory / 1MB)
-        $limitMB    = [math]::Floor($totalMemMB * $MEMORY_ALLOCATION_PERCENT / 100)
-        return "${limitMB}m"
-    } catch {
-        return '1g'
-    }
 }
 
 function Get-LatestVersion {
@@ -126,12 +119,11 @@ function Start-ProxyAgent {
     $logsMount   = (Join-Path $BASE_DIR 'logs') -replace '\\', '/'
 
     # Build argument list to avoid PowerShell variable expansion inside the health-cmd bash expression
-    $memoryLimit = Get-ContainerMemoryLimit
     $dockerArgs = @(
         'run', '-d',
         '--name', $CONTAINER_NAME,
         '--restart', 'unless-stopped',
-        "--memory=$memoryLimit",
+        "--memory=${MEMORY_ALLOCATION_MB}m",
         '--label', 'fivetran=proxy-agent',
         '--label', "proxy_agent_id=$AGENT_ID",
         '--env', 'IS_DOCKER=true',

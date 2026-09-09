@@ -11,6 +11,7 @@ BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 IMAGE="us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent"
 CONFIG_FILE="$BASE_DIR/config/config.json"
 VERSION_FILE="$BASE_DIR/version"
+MEMORY_CONFIG_FILE="$BASE_DIR/memory-config.sh"
 
 get_agent_id() {
     grep -o '"agent_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null \
@@ -52,21 +53,11 @@ log() {
     echo "$(date -u +'%Y-%m-%d %H:%M:%S') UTC - $1" >> "$LOGFILE"
 }
 
-MEMORY_ALLOCATION_PERCENT=75
-
-get_container_memory_limit() {
-    local total_mem_kb
-    if [ -f /proc/meminfo ]; then
-        total_mem_kb=$(grep "MemTotal" /proc/meminfo | awk '{print $2}')
-    fi
-    if [ -z "${total_mem_kb:-}" ] || [ "$total_mem_kb" -le 0 ]; then
-        echo "1g"
-        return
-    fi
-    local total_mem_mb=$((total_mem_kb / 1024))
-    local limit_mb=$((total_mem_mb * MEMORY_ALLOCATION_PERCENT / 100))
-    echo "${limit_mb}m"
-}
+if [ -f "$MEMORY_CONFIG_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$MEMORY_CONFIG_FILE"
+fi
+MEMORY_ALLOCATION_MB="${MEMORY_ALLOCATION_MB:-5120}"
 
 get_latest_version() {
     local registry_host="${IMAGE%%/*}"
@@ -122,13 +113,10 @@ start_agent() {
 
     mkdir -p "$BASE_DIR/logs"
 
-    local memory_limit
-    memory_limit=$(get_container_memory_limit)
-
     docker run -d \
         --name "${CONTAINER_NAME}" \
         --restart unless-stopped \
-        --memory="$memory_limit" \
+        --memory="${MEMORY_ALLOCATION_MB}m" \
         --label fivetran=proxy-agent \
         --label proxy_agent_id="$AGENT_ID" \
         --env IS_DOCKER=true \

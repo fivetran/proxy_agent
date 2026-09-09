@@ -16,15 +16,18 @@ $ProgressPreference    = 'SilentlyContinue'
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-$DEFAULT_INSTALL_DIR           = Join-Path $env:USERPROFILE 'fivetran-proxy-agent'
-$MIN_DOCKER_VERSION            = '20.10.17'
-$MIN_RECOMMENDED_CPU_COUNT     = 4
-$MIN_RECOMMENDED_RAM_MB        = 6827  # so that 75% (proxy-agent-manager's container memory allocation) clears 5GB
-$MIN_RECOMMENDED_DISK_SPACE_MB = 2048
-$AGENT_SCRIPT                  = 'proxy-agent-manager.ps1'
-$AGENT_SCRIPT_URL              = 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1'
-$REGISTRY_TAGS_URL             = 'https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list'
-$DEFAULT_FIVETRAN_API_URL      = 'https://api.fivetran.com'
+$DEFAULT_INSTALL_DIR                    = Join-Path $env:USERPROFILE 'fivetran-proxy-agent'
+$MIN_DOCKER_VERSION                     = '20.10.17'
+$MIN_RECOMMENDED_CPU_COUNT              = 4
+$DEFAULT_CONTAINER_MEMORY_MB            = 5120  # default memory (5GB) allocated to the proxy agent container
+$MIN_RECOMMENDED_CONTAINER_MEMORY_MB    = 5120  # proxy agent container should get at least 5GB
+$HOST_RESERVED_MEMORY_MB                = 2048  # leave at least this much RAM for the host on Windows
+$MIN_RECOMMENDED_DISK_SPACE_MB          = 2048
+$AGENT_SCRIPT                           = 'proxy-agent-manager.ps1'
+$AGENT_SCRIPT_URL                       = 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1'
+$REGISTRY_TAGS_URL                      = 'https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list'
+$DEFAULT_FIVETRAN_API_URL               = 'https://api.fivetran.com'
+$MEMORY_CONFIG_FILE                     = 'memory-config.ps1'
 
 $script:Warnings = [System.Collections.Generic.List[string]]::new()
 $script:Errors   = [System.Collections.Generic.List[string]]::new()
@@ -72,17 +75,41 @@ function Test-DockerVersion {
     }
 }
 
+function Read-MemoryMB {
+    $mb = $env:MEMORY_ALLOCATION_MB
+    if (-not $mb) {
+        if (-not [Console]::IsInputRedirected) {
+            $response = Read-Host "How much memory (in MB) should the proxy agent container use? [$DEFAULT_CONTAINER_MEMORY_MB]"
+            $mb = if ($response) { $response } else { $DEFAULT_CONTAINER_MEMORY_MB }
+        } else {
+            $mb = $DEFAULT_CONTAINER_MEMORY_MB
+        }
+    }
+    if ($mb -notmatch '^\d+$' -or [int]$mb -lt 1) {
+        Write-Host "ERROR: Invalid memory amount: $mb (must be a positive integer, in MB)" -ForegroundColor Red
+        exit 1
+    }
+    return [int]$mb
+}
+
 function Test-Resources {
+    param([int]$MemoryMB)
+
     $cpuCount = [Environment]::ProcessorCount
     if ($cpuCount -gt 0 -and $cpuCount -lt $MIN_RECOMMENDED_CPU_COUNT) {
         $script:Warnings.Add("CPU count ($cpuCount) is below the recommended minimum of $MIN_RECOMMENDED_CPU_COUNT")
     }
 
+    if ($MemoryMB -lt $MIN_RECOMMENDED_CONTAINER_MEMORY_MB) {
+        $script:Warnings.Add("Configured container memory (${MemoryMB}MB) is below the recommended minimum of ${MIN_RECOMMENDED_CONTAINER_MEMORY_MB}MB")
+    }
+
     try {
         $cs         = Get-CimInstance Win32_ComputerSystem
         $totalRamMB = [math]::Round($cs.TotalPhysicalMemory / 1MB)
-        if ($totalRamMB -lt $MIN_RECOMMENDED_RAM_MB) {
-            $script:Warnings.Add("RAM (${totalRamMB}MB) is below the recommended minimum of ${MIN_RECOMMENDED_RAM_MB}MB")
+        $maxRecommendedMB = $totalRamMB - $HOST_RESERVED_MEMORY_MB
+        if ($MemoryMB -gt $maxRecommendedMB) {
+            $script:Warnings.Add("Configured container memory (${MemoryMB}MB) leaves less than ${HOST_RESERVED_MEMORY_MB}MB for the host (total RAM: ${totalRamMB}MB)")
         }
     } catch {
         $script:Warnings.Add("Unable to determine available memory")
@@ -197,10 +224,12 @@ try {
 
     Write-Host "Installing Fivetran Proxy Agent...`n"
 
+    $memoryMB = Read-MemoryMB
+
     # Pre-flight checks
     Write-Host -NoNewline "Checking prerequisites... "
     Test-DockerVersion
-    Test-Resources
+    Test-Resources $memoryMB
     Test-DiskSpace $InstallDir
 
     if ($script:Warnings.Count -eq 0 -and $script:Errors.Count -eq 0) {
@@ -228,6 +257,9 @@ try {
 
     $null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'config')
     $null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'logs')
+
+    # Persist chosen container memory for proxy-agent-manager.ps1 to read
+    Set-Content -LiteralPath (Join-Path $InstallDir $MEMORY_CONFIG_FILE) -Value "`$MEMORY_ALLOCATION_MB = $memoryMB" -Encoding ascii
 
     # Download management script from public repo (temp file → move for atomicity)
     Write-Host "Downloading management script..."
