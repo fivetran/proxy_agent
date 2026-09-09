@@ -1,0 +1,29 @@
+install.ps1
+  30f5c0195ad9f6bf 22-30,78-94,96-97,103-106,110-112,227-228,232,261-263
+proxy-agent-manager.ps1
+  30f5c0195ad9f6bf 15-20,126
+install.sh
+  30f5c0195ad9f6bf 48-50,55,117-133,135-136,160-163,167-169,287-289,295,318-320
+proxy-agent-manager.sh
+  30f5c0195ad9f6bf 14,56-60,119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "c2c7a068aa7d940e4a7355ddd2a1432d991d00d5",
+  "prompts": {
+    "30f5c0195ad9f6bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4451f3ba-527c-4f42-8805-3af7d5dfbbed",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Paul Harper <paul.harper@fivetran.com>",
+      "messages": [],
+      "total_additions": 154,
+      "total_deletions": 109,
+      "accepted_lines": 92,
+      "overriden_lines": 0
+    }
+  }
+}
