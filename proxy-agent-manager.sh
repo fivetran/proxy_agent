@@ -11,7 +11,7 @@ BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 IMAGE="us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent"
 CONFIG_FILE="$BASE_DIR/config/config.json"
 VERSION_FILE="$BASE_DIR/version"
-MEMORY_CONFIG_FILE="$BASE_DIR/memory-config.sh"
+SETTINGS_FILE="$BASE_DIR/settings.sh"
 
 get_agent_id() {
     grep -o '"agent_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null \
@@ -53,9 +53,9 @@ log() {
     echo "$(date -u +'%Y-%m-%d %H:%M:%S') UTC - $1" >> "$LOGFILE"
 }
 
-if [ -f "$MEMORY_CONFIG_FILE" ]; then
+if [ -f "$SETTINGS_FILE" ]; then
     # shellcheck disable=SC1090
-    source "$MEMORY_CONFIG_FILE"
+    source "$SETTINGS_FILE"
 fi
 MEMORY_ALLOCATION_MB="${MEMORY_ALLOCATION_MB:-5120}"
 

@@ -27,7 +27,7 @@ $AGENT_SCRIPT                           = 'proxy-agent-manager.ps1'
 $AGENT_SCRIPT_URL                       = 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1'
 $REGISTRY_TAGS_URL                      = 'https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list'
 $DEFAULT_FIVETRAN_API_URL               = 'https://api.fivetran.com'
-$MEMORY_CONFIG_FILE                     = 'memory-config.ps1'
+$SETTINGS_FILE                           = 'settings.ps1'
 
 $script:Warnings = [System.Collections.Generic.List[string]]::new()
 $script:Errors   = [System.Collections.Generic.List[string]]::new()
@@ -259,7 +259,7 @@ try {
     $null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'logs')
 
     # Persist chosen container memory for proxy-agent-manager.ps1 to read
-    Set-Content -LiteralPath (Join-Path $InstallDir $MEMORY_CONFIG_FILE) -Value "`$MEMORY_ALLOCATION_MB = $memoryMB" -Encoding ascii
+    Set-Content -LiteralPath (Join-Path $InstallDir $SETTINGS_FILE) -Value "`$MEMORY_ALLOCATION_MB = $memoryMB" -Encoding ascii
 
     # Download management script from public repo (temp file → move for atomicity)
     Write-Host "Downloading management script..."

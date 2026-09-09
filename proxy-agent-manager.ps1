@@ -12,10 +12,10 @@ $CONFIG_FILE        = Join-Path $BASE_DIR 'config\config.json'
 $VERSION_FILE       = Join-Path $BASE_DIR 'version'
 $LOGFILE            = Join-Path $BASE_DIR 'logs\proxy-agent-manager.log'
 $CONTAINER_LOG_DIR  = '/app/logs'
-$MEMORY_CONFIG_FILE = Join-Path $BASE_DIR 'memory-config.ps1'
+$SETTINGS_FILE = Join-Path $BASE_DIR 'settings.ps1'
 
-if (Test-Path -LiteralPath $MEMORY_CONFIG_FILE) {
-    . $MEMORY_CONFIG_FILE
+if (Test-Path -LiteralPath $SETTINGS_FILE) {
+    . $SETTINGS_FILE
 }
 if (-not $MEMORY_ALLOCATION_MB) { $MEMORY_ALLOCATION_MB = 5120 }
 

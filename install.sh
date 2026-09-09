@@ -52,7 +52,7 @@ MIN_RECOMMENDED_DISK_SPACE_MB=2048
 AGENT_SCRIPT="proxy-agent-manager.sh"
 AGENT_SCRIPT_URL="https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh"
 REGISTRY_TAGS_URL="https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list"
-MEMORY_CONFIG_FILE="memory-config.sh"
+SETTINGS_FILE="settings.sh"
 
 WARNINGS=()
 ERRORS=()
@@ -316,7 +316,7 @@ main() {
     mkdir -p "$install_dir/config" "$install_dir/logs"
 
     # Persist chosen container memory for proxy-agent-manager.sh to read
-    echo "MEMORY_ALLOCATION_MB=${memory_mb}" > "$install_dir/$MEMORY_CONFIG_FILE"
+    echo "MEMORY_ALLOCATION_MB=${memory_mb}" > "$install_dir/$SETTINGS_FILE"
 
     # Download management script from public repo
     local tmp_script
