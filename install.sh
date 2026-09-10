@@ -45,11 +45,14 @@ fi
 DEFAULT_INSTALL_DIR="$HOME/fivetran-proxy-agent"
 MIN_DOCKER_VERSION="20.10.17"
 MIN_RECOMMENDED_CPU_COUNT=4
-MIN_RECOMMENDED_RAM_KB=5242880
+DEFAULT_CONTAINER_MEMORY_MB=5120  # default memory (5GB) allocated to the proxy agent container
+MIN_RECOMMENDED_CONTAINER_MEMORY_MB=5120  # proxy agent container should get at least 5GB
+HOST_RESERVED_MEMORY_MB=1024  # leave at least this much RAM for the host on Linux
 MIN_RECOMMENDED_DISK_SPACE_MB=2048
 AGENT_SCRIPT="proxy-agent-manager.sh"
 AGENT_SCRIPT_URL="https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh"
 REGISTRY_TAGS_URL="https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list"
+SETTINGS_FILE="settings.sh"
 
 WARNINGS=()
 ERRORS=()
@@ -111,7 +114,26 @@ check_rootless_linger() {
     fi
 }
 
+prompt_memory_mb() {
+    local mb="${MEMORY_ALLOCATION_MB:-}"
+    if [ -z "$mb" ]; then
+        if [ -t 0 ]; then
+            local input
+            read -r -p "How much memory (in MB) should the proxy agent container use? [$DEFAULT_CONTAINER_MEMORY_MB]: " input
+            mb="${input:-$DEFAULT_CONTAINER_MEMORY_MB}"
+        else
+            mb="$DEFAULT_CONTAINER_MEMORY_MB"
+        fi
+    fi
+    if ! [[ "$mb" =~ ^[0-9]+$ ]] || [ "$mb" -lt 1 ]; then
+        die "Invalid memory amount: $mb (must be a positive integer, in MB)"
+    fi
+    echo "$mb"
+}
+
 check_resources() {
+    local memory_mb="$1"
+
     local cpu_count
     local total_mem_kb
 
@@ -135,11 +157,16 @@ check_resources() {
         WARNINGS+=("CPU count ($cpu_count) is below the recommended minimum of $MIN_RECOMMENDED_CPU_COUNT")
     fi
 
+    if [ "$memory_mb" -lt "$MIN_RECOMMENDED_CONTAINER_MEMORY_MB" ]; then
+        WARNINGS+=("Configured container memory (${memory_mb}MB) is below the recommended minimum of ${MIN_RECOMMENDED_CONTAINER_MEMORY_MB}MB")
+    fi
+
     local total_mem_mb
     if [ "$total_mem_kb" -gt 0 ]; then
         total_mem_mb=$((total_mem_kb / 1024))
-        if [ "$total_mem_kb" -lt "$MIN_RECOMMENDED_RAM_KB" ]; then
-            WARNINGS+=("RAM (${total_mem_mb}MB) is below the recommended minimum of $((MIN_RECOMMENDED_RAM_KB / 1024))MB")
+        local max_recommended_mb=$((total_mem_mb - HOST_RESERVED_MEMORY_MB))
+        if [ "$memory_mb" -gt "$max_recommended_mb" ]; then
+            WARNINGS+=("Configured container memory (${memory_mb}MB) leaves less than ${HOST_RESERVED_MEMORY_MB}MB for the host (total RAM: ${total_mem_mb}MB)")
         fi
     fi
 }
@@ -257,12 +284,15 @@ main() {
 
     echo -e "Installing Fivetran Proxy Agent...\n"
 
+    local memory_mb
+    memory_mb=$(prompt_memory_mb)
+
     # Pre-flight checks
     echo -n "Checking prerequisites... "
     check_dependencies
     check_docker_version
     check_rootless_linger
-    check_resources
+    check_resources "$memory_mb"
     check_disk_space "$install_dir"
 
     if [ ${#WARNINGS[@]} -eq 0 ] && [ ${#ERRORS[@]} -eq 0 ]; then
@@ -284,6 +314,9 @@ main() {
     fi
 
     mkdir -p "$install_dir/config" "$install_dir/logs"
+
+    # Persist chosen container memory for proxy-agent-manager.sh to read
+    echo "MEMORY_ALLOCATION_MB=${memory_mb}" > "$install_dir/$SETTINGS_FILE"
 
     # Download management script from public repo
     local tmp_script

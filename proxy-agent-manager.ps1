@@ -6,12 +6,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$BASE_DIR       = $PSScriptRoot
-$IMAGE          = 'us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent'
-$CONFIG_FILE    = Join-Path $BASE_DIR 'config\config.json'
-$VERSION_FILE   = Join-Path $BASE_DIR 'version'
-$LOGFILE        = Join-Path $BASE_DIR 'logs\proxy-agent-manager.log'
-$CONTAINER_LOG_DIR = '/app/logs'
+$BASE_DIR           = $PSScriptRoot
+$IMAGE              = 'us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent'
+$CONFIG_FILE        = Join-Path $BASE_DIR 'config\config.json'
+$VERSION_FILE       = Join-Path $BASE_DIR 'version'
+$LOGFILE            = Join-Path $BASE_DIR 'logs\proxy-agent-manager.log'
+$CONTAINER_LOG_DIR  = '/app/logs'
+$SETTINGS_FILE = Join-Path $BASE_DIR 'settings.ps1'
+
+if (Test-Path -LiteralPath $SETTINGS_FILE) {
+    . $SETTINGS_FILE
+}
+if (-not $MEMORY_ALLOCATION_MB) { $MEMORY_ALLOCATION_MB = 5120 }
 
 # ── Startup validation ───────────────────────────────────────────────────────
 
@@ -117,7 +123,7 @@ function Start-ProxyAgent {
         'run', '-d',
         '--name', $CONTAINER_NAME,
         '--restart', 'unless-stopped',
-        '--memory=1g',
+        "--memory=${MEMORY_ALLOCATION_MB}m",
         '--label', 'fivetran=proxy-agent',
         '--label', "proxy_agent_id=$AGENT_ID",
         '--env', 'IS_DOCKER=true',

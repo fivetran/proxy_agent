@@ -11,6 +11,7 @@ BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 IMAGE="us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent"
 CONFIG_FILE="$BASE_DIR/config/config.json"
 VERSION_FILE="$BASE_DIR/version"
+SETTINGS_FILE="$BASE_DIR/settings.sh"
 
 get_agent_id() {
     grep -o '"agent_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null \
@@ -51,6 +52,12 @@ log() {
     mkdir -p "$(dirname "$LOGFILE")"
     echo "$(date -u +'%Y-%m-%d %H:%M:%S') UTC - $1" >> "$LOGFILE"
 }
+
+if [ -f "$SETTINGS_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$SETTINGS_FILE"
+fi
+MEMORY_ALLOCATION_MB="${MEMORY_ALLOCATION_MB:-5120}"
 
 get_latest_version() {
     local registry_host="${IMAGE%%/*}"
@@ -109,7 +116,7 @@ start_agent() {
     docker run -d \
         --name "${CONTAINER_NAME}" \
         --restart unless-stopped \
-        --memory=1g \
+        --memory="${MEMORY_ALLOCATION_MB}m" \
         --label fivetran=proxy-agent \
         --label proxy_agent_id="$AGENT_ID" \
         --env IS_DOCKER=true \
