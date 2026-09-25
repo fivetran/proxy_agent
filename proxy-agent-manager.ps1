@@ -219,11 +219,14 @@ function Start-ProxyAgent {
 
     $null = New-Item -ItemType Directory -Force -Path (Join-Path $BASE_DIR 'logs')
 
-    # Docker Desktop for Windows requires forward-slash paths in volume mounts
-    $configMount = (Join-Path $BASE_DIR 'config\config.json') -replace '\\', '/'
+    $containerOsType = Get-ContainerOsType
+
+    # Docker Desktop for Windows requires forward-slash paths in volume mounts.
+    $configFileMount = (Join-Path $BASE_DIR 'config\config.json') -replace '\\', '/'
+    $configDirectoryMount = (Join-Path $BASE_DIR 'config') -replace '\\', '/'
     $logsMount   = (Join-Path $BASE_DIR 'logs') -replace '\\', '/'
 
-    # Build argument list to avoid PowerShell variable expansion inside the health-cmd bash expression
+    # Build argument list to avoid PowerShell variable expansion inside the health check.
     $dockerArgs = @(
         'run', '-d',
         '--name', $CONTAINER_NAME,
@@ -232,19 +235,40 @@ function Start-ProxyAgent {
         '--label', 'fivetran=proxy-agent',
         '--label', "proxy_agent_id=$AGENT_ID",
         '--env', 'IS_DOCKER=true',
-        '--env', "LOG_FOLDER_PATH=$CONTAINER_LOG_DIR",
-        '--env', 'HEARTBEAT_PATH=/tmp/proxy-agent-heartbeat.txt',
         '--env', 'HEARTBEAT_EXPIRY_SECONDS=30',
-        '--health-cmd', '[ ! -f $HEARTBEAT_PATH ] || { . $HEARTBEAT_PATH && [ $(date +%s) -lt $HEARTBEAT_EXPIRE_AT ]; }',
         '--health-interval', '10s',
         '--health-timeout', '3s',
         '--health-retries', '3',
-        '--health-start-period', '30s',
-        '-v', "${configMount}:/config/config.json:ro",
-        '-v', "${logsMount}:${CONTAINER_LOG_DIR}",
-        "${IMAGE}:${Version}",
-        '-i', '/config/config.json'
+        '--health-start-period', '30s'
     )
+
+    if ($containerOsType -eq 'windows') {
+        $containerConfigPath = 'C:/config/config.json'
+        $containerLogDir = 'C:/app/logs'
+        $containerHeartbeatPath = 'C:/app/logs/proxy-agent-heartbeat.txt'
+        $windowsHealthCheck = 'powershell -NoProfile -Command "$path = $env:HEARTBEAT_PATH; if (-not (Test-Path -LiteralPath $path)) { exit 0 }; $line = Get-Content -LiteralPath $path -ErrorAction Stop | Select-Object -First 1; if ($line -match ''^HEARTBEAT_EXPIRE_AT=(\d+)$'' -and [int64]$Matches[1] -gt [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) { exit 0 } else { exit 1 }"'
+        $dockerArgs += @(
+            '--env', "LOG_FOLDER_PATH=$containerLogDir",
+            '--env', "HEARTBEAT_PATH=$containerHeartbeatPath",
+            '--health-cmd', $windowsHealthCheck,
+            '-v', "${configDirectoryMount}:C:/config:ro",
+            '-v', "${logsMount}:$containerLogDir",
+            "${IMAGE}:${Version}",
+            '-i', $containerConfigPath
+        )
+    } else {
+        $containerConfigPath = '/config/config.json'
+        $containerLogDir = $CONTAINER_LOG_DIR
+        $dockerArgs += @(
+            '--env', "LOG_FOLDER_PATH=$containerLogDir",
+            '--env', 'HEARTBEAT_PATH=/tmp/proxy-agent-heartbeat.txt',
+            '--health-cmd', '[ ! -f $HEARTBEAT_PATH ] || { . $HEARTBEAT_PATH && [ $(date +%s) -lt $HEARTBEAT_EXPIRE_AT ]; }',
+            '-v', "${configFileMount}:/config/config.json:ro",
+            '-v', "${logsMount}:$containerLogDir",
+            "${IMAGE}:${Version}",
+            '-i', $containerConfigPath
+        )
+    }
 
     & docker @dockerArgs | Out-Host
     if ($LASTEXITCODE -ne 0) {
