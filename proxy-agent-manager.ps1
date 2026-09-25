@@ -68,6 +68,20 @@ function Write-Log {
     Add-Content -Path $LOGFILE -Value "$timestamp UTC - $Message" -Encoding ascii
 }
 
+function Get-ContainerOsType {
+    $osTypeOutput = docker info --format '{{.OSType}}' 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to determine whether Docker is running Linux or Windows containers."
+    }
+
+    $osType = ([string]$osTypeOutput).Trim()
+    if ($osType -notin @('linux', 'windows')) {
+        throw "Docker reported an unsupported container operating system: '$osType'."
+    }
+
+    return $osType
+}
+
 function Get-WindowsLtscVersion {
     try {
         $operatingSystem = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
@@ -84,6 +98,22 @@ function Get-WindowsLtscVersion {
     throw "Unsupported Windows host '$($operatingSystem.Caption)'."
 }
 
+function Get-ImageTagType {
+    param([Parameter(Mandatory)][string]$Tag)
+
+    if ($Tag -match '^\d+\.\d+\.\d+-windows-(?:ltsc2019|ltsc2022|ltsc2025)$') {
+        return 'windows'
+    }
+    if ($Tag -match '^\d+\.\d+\.\d+-ubuntu-26\.04$') {
+        return 'linux'
+    }
+    if ($Tag -match '^\d+\.\d+\.\d+$') {
+        return 'legacy-linux'
+    }
+
+    throw "Invalid proxy-agent image tag '$Tag'."
+}
+
 function Get-ImageTagVariant {
     param([Parameter(Mandatory)][string]$Tag)
 
@@ -97,18 +127,30 @@ function Get-ImageTagVariant {
 function Resolve-ImageTag {
     param([Parameter(Mandatory)][string]$Tag)
 
+    $containerOsType = Get-ContainerOsType
+    $tagType = Get-ImageTagType -Tag $Tag
+
     if ($Tag -match '^\d+\.\d+\.\d+$') {
-        return "$Tag-windows-$(Get-WindowsLtscVersion)"
+        if ($containerOsType -eq 'windows') {
+            return "$Tag-windows-$(Get-WindowsLtscVersion)"
+        }
+        return $Tag
     }
 
-    Get-ImageTagVariant -Tag $Tag | Out-Null
+    if ($tagType -eq 'windows' -and $containerOsType -ne 'windows') {
+        throw "Windows proxy-agent image tags require Docker to run Windows containers."
+    }
+    if ($tagType -eq 'linux' -and $containerOsType -ne 'linux') {
+        throw "Linux proxy-agent image tags require Docker to run Linux containers."
+    }
+
     return $Tag
 }
 
 function Get-ReleaseVersion {
     param([Parameter(Mandatory)][string]$Tag)
 
-    if ($Tag -match '^(?<version>\d+\.\d+\.\d+)(?:-windows-(?:ltsc2019|ltsc2022|ltsc2025))?$') {
+    if ($Tag -match '^(?<version>\d+\.\d+\.\d+)(?:(?:-ubuntu-26\.04)|(?:-windows-(?:ltsc2019|ltsc2022|ltsc2025)))?$') {
         return $Matches.version
     }
 
@@ -116,7 +158,10 @@ function Get-ReleaseVersion {
 }
 
 function Get-LatestVersion {
-    param([Parameter(Mandatory)][string]$WindowsVersion)
+    param(
+        [Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType,
+        [string]$WindowsVersion
+    )
 
     $registryHost   = $IMAGE.Split('/')[0]
     $repositoryPath = $IMAGE.Substring($registryHost.Length + 1)
@@ -129,11 +174,20 @@ function Get-LatestVersion {
         exit 1
     }
 
-    $tagPattern = '^\d+\.\d+\.\d+-windows-' + [regex]::Escape($WindowsVersion) + '$'
-    $releasePattern = '-windows-' + [regex]::Escape($WindowsVersion) + '$'
+    if ($ContainerOsType -eq 'windows') {
+        $tagPattern = '^\d+\.\d+\.\d+-windows-' + [regex]::Escape($WindowsVersion) + '$'
+        $releasePattern = '-windows-' + [regex]::Escape($WindowsVersion) + '$'
+    } else {
+        $tagPattern = '^\d+\.\d+\.\d+-ubuntu-26\.04$'
+        $releasePattern = '-ubuntu-26\.04$'
+    }
     $versions = @($tagsJson.tags | Where-Object { $_ -match $tagPattern })
     if (-not $versions) {
-        Write-Host "ERROR: No published Windows image tags found for $WindowsVersion" -ForegroundColor Red
+        if ($ContainerOsType -eq 'windows') {
+            Write-Host "ERROR: No published Windows image tags found for $WindowsVersion" -ForegroundColor Red
+        } else {
+            Write-Host "ERROR: No published Ubuntu 26.04 image tags found" -ForegroundColor Red
+        }
         exit 1
     }
 
@@ -239,8 +293,17 @@ function Start-ProxyAgent {
 
 function Invoke-Upgrade {
     Write-Host "Checking for latest version..."
-    $windowsVersion = Get-ImageTagVariant -Tag $CURRENT_VERSION
-    $latestVersion = Get-LatestVersion -WindowsVersion $windowsVersion
+    $containerOsType = Get-ContainerOsType
+    if ($containerOsType -eq 'windows') {
+        $windowsVersion = Get-ImageTagVariant -Tag $CURRENT_VERSION
+        $latestVersion = Get-LatestVersion -ContainerOsType windows -WindowsVersion $windowsVersion
+    } else {
+        $tagType = Get-ImageTagType -Tag $CURRENT_VERSION
+        if ($tagType -eq 'windows') {
+            throw "Windows proxy-agent image tags require Docker to run Windows containers."
+        }
+        $latestVersion = Get-LatestVersion -ContainerOsType linux
+    }
 
     if ((Compare-SemVer $latestVersion $CURRENT_VERSION) -eq 0) {
         Write-Host "Already running the latest version ($CURRENT_VERSION)."
@@ -257,8 +320,8 @@ function Invoke-Upgrade {
     }
 }
 
-# Migrate an older numeric version file to the explicit Windows image tag while
-# keeping the selected host variant stable for future upgrades.
+# Resolve legacy numeric tags according to the Docker container mode. Keep
+# numeric Linux tags unchanged for backward compatibility.
 $resolvedCurrentVersion = Resolve-ImageTag -Tag $CURRENT_VERSION
 if ($resolvedCurrentVersion -ne $CURRENT_VERSION) {
     $CURRENT_VERSION = $resolvedCurrentVersion

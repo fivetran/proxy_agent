@@ -44,7 +44,7 @@ Usage:
 
 Options:
   -InstallDir <dir>       Installation directory (default: %USERPROFILE%\fivetran-proxy-agent)
-  -WindowsVersion <value> Windows LTSC image variant; detected from the host when omitted
+  -WindowsVersion <value> Windows LTSC image variant for Windows containers; detected from the host when omitted
 '@
     exit 1
 }
@@ -76,6 +76,22 @@ function Test-DockerVersion {
     if ($LASTEXITCODE -ne 0) {
         $script:Errors.Add("Docker is installed but the Docker daemon is not accessible. Ensure that Docker Desktop is running and that your user has permission to access it.")
     }
+}
+
+function Get-ContainerOsType {
+    $osTypeOutput = docker info --format '{{.OSType}}' 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        $script:Errors.Add("Unable to determine whether Docker is running Linux or Windows containers")
+        return $null
+    }
+
+    $osType = ([string]$osTypeOutput).Trim()
+    if ($osType -notin @('linux', 'windows')) {
+        $script:Errors.Add("Docker reported an unsupported container operating system: '$osType'")
+        return $null
+    }
+
+    return $osType
 }
 
 function Read-MemoryMB {
@@ -201,6 +217,25 @@ function Get-LatestVersion {
     return ($versions | Sort-Object { [version]($_ -replace $releasePattern, '') } | Select-Object -Last 1)
 }
 
+function Get-LatestLinuxVersion {
+    try {
+        $tagsJson = Invoke-RestMethod -Uri $REGISTRY_TAGS_URL -Method Get -TimeoutSec 30
+    } catch {
+        Write-Host "ERROR: Unable to query image registry for latest Linux version: $_" -ForegroundColor Red
+        exit 1
+    }
+
+    $tagPattern = '^\d+\.\d+\.\d+-ubuntu-26\.04$'
+    $releasePattern = '-ubuntu-26\.04$'
+    $versions = @($tagsJson.tags | Where-Object { $_ -match $tagPattern })
+    if (-not $versions) {
+        Write-Host "ERROR: No published Ubuntu 26.04 image tags found" -ForegroundColor Red
+        exit 1
+    }
+
+    return ($versions | Sort-Object { [version]($_ -replace $releasePattern, '') } | Select-Object -Last 1)
+}
+
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 if ($env:RUNTIME -ne 'docker') {
@@ -214,7 +249,6 @@ if ($currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administ
 }
 
 if (-not $InstallDir) { $InstallDir = $DEFAULT_INSTALL_DIR }
-$windowsImageVariant = Get-WindowsLtscVersion -Override $WindowsVersion
 
 if (-not $ConfigPath -and -not $env:TOKEN) { Show-Usage }
 
@@ -261,6 +295,13 @@ try {
     # Pre-flight checks
     Write-Host -NoNewline "Checking prerequisites... "
     Test-DockerVersion
+    $containerOsType = $null
+    if ($script:Errors.Count -eq 0) {
+        $containerOsType = Get-ContainerOsType
+    }
+    if ($WindowsVersion -and $containerOsType -ne 'windows') {
+        $script:Errors.Add("-WindowsVersion can only be used when Docker is running Windows containers")
+    }
     Test-Resources $memoryMB
     Test-DiskSpace $InstallDir
 
@@ -364,10 +405,15 @@ try {
         [System.IO.File]::WriteAllText($configDest, $response.Content, [System.Text.UTF8Encoding]::new($false))
     }
 
-    # Resolve and pin the Windows variant and image tag
-    Write-Host "Using Windows image variant $windowsImageVariant"
     Write-Host "Resolving latest proxy agent version..."
-    $version = Get-LatestVersion -WindowsVersion $windowsImageVariant
+    if ($containerOsType -eq 'windows') {
+        $windowsImageVariant = Get-WindowsLtscVersion -Override $WindowsVersion
+        Write-Host "Using Windows image variant $windowsImageVariant"
+        $version = Get-LatestVersion -WindowsVersion $windowsImageVariant
+    } else {
+        Write-Host "Using Linux container image"
+        $version = Get-LatestLinuxVersion
+    }
     Set-Content -LiteralPath (Join-Path $InstallDir 'version') -Value $version -Encoding ascii
     Write-Host "Using version $version"
 
