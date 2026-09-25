@@ -8,7 +8,9 @@
 param(
     [Parameter(Position = 0)]
     [string]$ConfigPath,
-    [string]$InstallDir
+    [string]$InstallDir,
+    [ValidateSet('ltsc2019', 'ltsc2022', 'ltsc2025')]
+    [string]$WindowsVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,11 +39,12 @@ $script:Errors   = [System.Collections.Generic.List[string]]::new()
 function Show-Usage {
     Write-Host @'
 Usage:
-  $env:RUNTIME='docker'; .\install.ps1 [<config.json>] [-InstallDir <dir>]
-  $env:TOKEN='<token>'; $env:RUNTIME='docker'; .\install.ps1 [-InstallDir <dir>]
+  $env:RUNTIME='docker'; .\install.ps1 [<config.json>] [-InstallDir <dir>] [-WindowsVersion <ltsc2019|ltsc2022|ltsc2025>]
+  $env:TOKEN='<token>'; $env:RUNTIME='docker'; .\install.ps1 [-InstallDir <dir>] [-WindowsVersion <ltsc2019|ltsc2022|ltsc2025>]
 
 Options:
-  -InstallDir <dir>   Installation directory (default: %USERPROFILE%\fivetran-proxy-agent)
+  -InstallDir <dir>       Installation directory (default: %USERPROFILE%\fivetran-proxy-agent)
+  -WindowsVersion <value> Windows LTSC image variant; detected from the host when omitted
 '@
     exit 1
 }
@@ -153,7 +156,33 @@ function Show-WarningsAndErrors {
 
 # ── Version resolution ───────────────────────────────────────────────────────
 
+function Get-WindowsLtscVersion {
+    param([string]$Override)
+
+    if ($Override) {
+        return $Override
+    }
+
+    try {
+        $operatingSystem = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+    } catch {
+        Write-Host "ERROR: Unable to detect the Windows Server version: $_" -ForegroundColor Red
+        exit 1
+    }
+
+    switch -Regex ($operatingSystem.Caption) {
+        '2019' { return 'ltsc2019' }
+        '2022' { return 'ltsc2022' }
+        '2025' { return 'ltsc2025' }
+    }
+
+    Write-Host "ERROR: Unsupported Windows host '$($operatingSystem.Caption)'. Use -WindowsVersion to select ltsc2019, ltsc2022, or ltsc2025 when the host is known to support that image." -ForegroundColor Red
+    exit 1
+}
+
 function Get-LatestVersion {
+    param([Parameter(Mandatory)][string]$WindowsVersion)
+
     try {
         $tagsJson = Invoke-RestMethod -Uri $REGISTRY_TAGS_URL -Method Get -TimeoutSec 30
     } catch {
@@ -161,13 +190,15 @@ function Get-LatestVersion {
         exit 1
     }
 
-    $versions = $tagsJson.tags | Where-Object { $_ -match '^\d+\.\d+\.\d+$' }
+    $tagPattern = '^\d+\.\d+\.\d+-windows-' + [regex]::Escape($WindowsVersion) + '$'
+    $releasePattern = '-windows-' + [regex]::Escape($WindowsVersion) + '$'
+    $versions = @($tagsJson.tags | Where-Object { $_ -match $tagPattern })
     if (-not $versions) {
-        Write-Host "ERROR: No valid version tags found in registry" -ForegroundColor Red
+        Write-Host "ERROR: No published Windows image tags found for $WindowsVersion" -ForegroundColor Red
         exit 1
     }
 
-    return ($versions | Sort-Object { [version]$_ } | Select-Object -Last 1)
+    return ($versions | Sort-Object { [version]($_ -replace $releasePattern, '') } | Select-Object -Last 1)
 }
 
 # ── Entry point ──────────────────────────────────────────────────────────────
@@ -183,6 +214,7 @@ if ($currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administ
 }
 
 if (-not $InstallDir) { $InstallDir = $DEFAULT_INSTALL_DIR }
+$windowsImageVariant = Get-WindowsLtscVersion -Override $WindowsVersion
 
 if (-not $ConfigPath -and -not $env:TOKEN) { Show-Usage }
 
@@ -332,9 +364,10 @@ try {
         [System.IO.File]::WriteAllText($configDest, $response.Content, [System.Text.UTF8Encoding]::new($false))
     }
 
-    # Resolve and pin version
+    # Resolve and pin the Windows variant and image tag
+    Write-Host "Using Windows image variant $windowsImageVariant"
     Write-Host "Resolving latest proxy agent version..."
-    $version = Get-LatestVersion
+    $version = Get-LatestVersion -WindowsVersion $windowsImageVariant
     Set-Content -LiteralPath (Join-Path $InstallDir 'version') -Value $version -Encoding ascii
     Write-Host "Using version $version"
 

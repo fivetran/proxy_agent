@@ -68,7 +68,56 @@ function Write-Log {
     Add-Content -Path $LOGFILE -Value "$timestamp UTC - $Message" -Encoding ascii
 }
 
+function Get-WindowsLtscVersion {
+    try {
+        $operatingSystem = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+    } catch {
+        throw "Unable to detect the Windows Server version: $_"
+    }
+
+    switch -Regex ($operatingSystem.Caption) {
+        '2019' { return 'ltsc2019' }
+        '2022' { return 'ltsc2022' }
+        '2025' { return 'ltsc2025' }
+    }
+
+    throw "Unsupported Windows host '$($operatingSystem.Caption)'."
+}
+
+function Get-ImageTagVariant {
+    param([Parameter(Mandatory)][string]$Tag)
+
+    if ($Tag -match '^\d+\.\d+\.\d+-windows-(?<variant>ltsc2019|ltsc2022|ltsc2025)$') {
+        return $Matches.variant
+    }
+
+    throw "Invalid Windows proxy-agent image tag '$Tag'. Expected <version>-windows-ltsc2019, <version>-windows-ltsc2022, or <version>-windows-ltsc2025."
+}
+
+function Resolve-ImageTag {
+    param([Parameter(Mandatory)][string]$Tag)
+
+    if ($Tag -match '^\d+\.\d+\.\d+$') {
+        return "$Tag-windows-$(Get-WindowsLtscVersion)"
+    }
+
+    Get-ImageTagVariant -Tag $Tag | Out-Null
+    return $Tag
+}
+
+function Get-ReleaseVersion {
+    param([Parameter(Mandatory)][string]$Tag)
+
+    if ($Tag -match '^(?<version>\d+\.\d+\.\d+)(?:-windows-(?:ltsc2019|ltsc2022|ltsc2025))?$') {
+        return $Matches.version
+    }
+
+    throw "Invalid proxy-agent image tag '$Tag'."
+}
+
 function Get-LatestVersion {
+    param([Parameter(Mandatory)][string]$WindowsVersion)
+
     $registryHost   = $IMAGE.Split('/')[0]
     $repositoryPath = $IMAGE.Substring($registryHost.Length + 1)
     $registryUrl    = "https://$registryHost/v2/$repositoryPath/tags/list"
@@ -80,20 +129,22 @@ function Get-LatestVersion {
         exit 1
     }
 
-    $versions = $tagsJson.tags | Where-Object { $_ -match '^\d+\.\d+\.\d+$' }
+    $tagPattern = '^\d+\.\d+\.\d+-windows-' + [regex]::Escape($WindowsVersion) + '$'
+    $releasePattern = '-windows-' + [regex]::Escape($WindowsVersion) + '$'
+    $versions = @($tagsJson.tags | Where-Object { $_ -match $tagPattern })
     if (-not $versions) {
-        Write-Host "ERROR: No valid version tags found in registry" -ForegroundColor Red
+        Write-Host "ERROR: No published Windows image tags found for $WindowsVersion" -ForegroundColor Red
         exit 1
     }
 
-    $latest = $versions | Sort-Object { [version]$_ } | Select-Object -Last 1
+    $latest = $versions | Sort-Object { [version]($_ -replace $releasePattern, '') } | Select-Object -Last 1
     return $latest
 }
 
 function Compare-SemVer {
     param([string]$A, [string]$B)
-    $aVer = [version]$A
-    $bVer = [version]$B
+    $aVer = [version](Get-ReleaseVersion -Tag $A)
+    $bVer = [version](Get-ReleaseVersion -Tag $B)
     return $aVer.CompareTo($bVer)
 }
 
@@ -188,7 +239,8 @@ function Start-ProxyAgent {
 
 function Invoke-Upgrade {
     Write-Host "Checking for latest version..."
-    $latestVersion = Get-LatestVersion
+    $windowsVersion = Get-ImageTagVariant -Tag $CURRENT_VERSION
+    $latestVersion = Get-LatestVersion -WindowsVersion $windowsVersion
 
     if ((Compare-SemVer $latestVersion $CURRENT_VERSION) -eq 0) {
         Write-Host "Already running the latest version ($CURRENT_VERSION)."
@@ -203,6 +255,14 @@ function Invoke-Upgrade {
         Set-Content -Path $VERSION_FILE -Value $CURRENT_VERSION -Encoding ascii
         Start-ProxyAgent $CURRENT_VERSION | Out-Null
     }
+}
+
+# Migrate an older numeric version file to the explicit Windows image tag while
+# keeping the selected host variant stable for future upgrades.
+$resolvedCurrentVersion = Resolve-ImageTag -Tag $CURRENT_VERSION
+if ($resolvedCurrentVersion -ne $CURRENT_VERSION) {
+    $CURRENT_VERSION = $resolvedCurrentVersion
+    Set-Content -Path $VERSION_FILE -Value $CURRENT_VERSION -Encoding ascii
 }
 
 # ── Commands ─────────────────────────────────────────────────────────────────

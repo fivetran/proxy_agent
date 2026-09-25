@@ -16,14 +16,12 @@ For more information see the [Proxy Agent documentation](https://fivetran.com/do
 - Minimum 4 CPUs, 5 GB RAM, 2 GB free disk space
 
 ### Windows
-- Windows 10 or Windows 11 (64-bit)
-- Docker Desktop (current supported version) with WSL2 backend
+- Windows Server 2019, Windows Server 2022, or Windows Server 2025 (64-bit)
+- Docker configured to run Windows containers
 - Minimum 4 CPUs, 5 GB RAM, 2 GB free disk space
 - PowerShell 5.1 or later (built into Windows)
 
-> **Note:** Docker Desktop requires an interactive user session to start. The agent container will not start automatically on boot until a user signs in and Docker Desktop launches.
-
-> **Note:** Docker Desktop requires nested virtualization, which is not available on all cloud VM types. Check that your instance supports it (AWS Nitro-based metal instances, GCP VMs with nested virtualization enabled, Azure Dv3/Ev3 and later). Standard general-purpose cloud VMs often do not expose it.
+> **Note:** The Docker daemon must be running in Windows-container mode. Hyper-V isolation may require nested virtualization; verify that requirement for the selected host and isolation mode.
 
 ## Installation
 
@@ -57,6 +55,10 @@ To install into a custom directory:
 $env:RUNTIME = 'docker'; $env:TOKEN = 'YOUR_AGENT_TOKEN'; & .\install.ps1 -InstallDir C:\path\to\dir
 ```
 
+The installer detects the Windows Server LTSC version and selects the matching image tag. To override detection for a host known to support a specific Windows image, pass `-WindowsVersion ltsc2019`, `-WindowsVersion ltsc2022`, or `-WindowsVersion ltsc2025`.
+
+Linux releases continue to use `proxy-agent:<version>` for backward compatibility and are also published as `proxy-agent:<version>-ubuntu-26.04`. Both tags reference the same Linux multi-architecture image. Windows releases use the explicit `proxy-agent:<version>-windows-ltsc2019`, `proxy-agent:<version>-windows-ltsc2022`, or `proxy-agent:<version>-windows-ltsc2025` tags.
+
 The installer will:
 - Check prerequisites
 - Create the installation directory
@@ -81,7 +83,7 @@ $HOME/fivetran-proxy-agent/
 ├── config\
 │   └── config.json          --> Agent configuration (owner read/write only)
 ├── logs\                    --> Agent and manager logs
-└── version                  --> Pinned agent version
+└── version                  --> Pinned agent image tag
 ```
 
 ## Managing the agent
