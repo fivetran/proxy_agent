@@ -16,13 +16,15 @@ For more information see the [Proxy Agent documentation](https://fivetran.com/do
 - Minimum 4 CPUs, 5 GB RAM, 2 GB free disk space
 
 ### Windows
-- Windows 10 or Windows 11 (64-bit) with Docker Desktop and the WSL2 backend for Linux containers, or Windows Server 2019, Windows Server 2022, or Windows Server 2025 (64-bit) for Windows containers
+- Windows 10 or Windows 11 (64-bit) with Docker Desktop (current supported version) and the WSL2 backend for Linux containers, or Windows Server 2019, Windows Server 2022, or Windows Server 2025 (64-bit) for Windows containers
 - Minimum 4 CPUs, 5 GB RAM, 2 GB free disk space
 - PowerShell 5.1 or later (built into Windows)
 
 > **Note:** Docker Desktop requires an interactive user session to start. The agent container will not start automatically on boot until a user signs in and Docker Desktop launches.
 
 > **Note:** Windows Server installations must use Windows-container mode. Hyper-V isolation may require nested virtualization; verify that requirement for the selected host and isolation mode.
+
+> **Note:** Running Docker Desktop inside a VM, including a cloud VM, requires nested virtualization for its local Linux VM backend. Verify that the VM size and hypervisor support and enable nested virtualization before installation. See [Docker's VM/VDI guidance](https://docs.docker.com/desktop/setup/vm-vdi/) for supported environments and requirements.
 
 ## Installation
 

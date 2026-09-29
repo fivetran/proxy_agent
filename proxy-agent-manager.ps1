@@ -89,13 +89,17 @@ function Get-WindowsLtscVersion {
         throw "Unable to detect the Windows Server version: $_"
     }
 
-    switch -Regex ($operatingSystem.Caption) {
-        '2019' { return 'ltsc2019' }
-        '2022' { return 'ltsc2022' }
-        '2025' { return 'ltsc2025' }
+    if ($operatingSystem.ProductType -notin @(2, 3)) {
+        throw "Windows Server is required for Windows containers; detected '$($operatingSystem.Caption)'."
     }
 
-    throw "Unsupported Windows host '$($operatingSystem.Caption)'."
+    switch ([int]$operatingSystem.BuildNumber) {
+        17763 { return 'ltsc2019' }
+        20348 { return 'ltsc2022' }
+        26100 { return 'ltsc2025' }
+    }
+
+    throw "Unsupported Windows Server build '$($operatingSystem.BuildNumber)' ('$($operatingSystem.Caption)')."
 }
 
 function Get-ImageTagType {
@@ -125,22 +129,24 @@ function Get-ImageTagVariant {
 }
 
 function Resolve-ImageTag {
-    param([Parameter(Mandatory)][string]$Tag)
+    param(
+        [Parameter(Mandatory)][string]$Tag,
+        [Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType
+    )
 
-    $containerOsType = Get-ContainerOsType
     $tagType = Get-ImageTagType -Tag $Tag
 
     if ($Tag -match '^\d+\.\d+\.\d+$') {
-        if ($containerOsType -eq 'windows') {
+        if ($ContainerOsType -eq 'windows') {
             return "$Tag-windows-$(Get-WindowsLtscVersion)"
         }
         return $Tag
     }
 
-    if ($tagType -eq 'windows' -and $containerOsType -ne 'windows') {
+    if ($tagType -eq 'windows' -and $ContainerOsType -ne 'windows') {
         throw "Windows proxy-agent image tags require Docker to run Windows containers."
     }
-    if ($tagType -eq 'linux' -and $containerOsType -ne 'linux') {
+    if ($tagType -eq 'linux' -and $ContainerOsType -ne 'linux') {
         throw "Linux proxy-agent image tags require Docker to run Linux containers."
     }
 
@@ -212,14 +218,15 @@ function Stop-ProxyAgent {
 }
 
 function Start-ProxyAgent {
-    param([string]$Version)
+    param(
+        [Parameter(Mandatory)][string]$Version,
+        [Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType
+    )
     Write-Log "Starting $CONTAINER_NAME (version: $Version)..."
 
     Stop-ProxyAgent
 
     $null = New-Item -ItemType Directory -Force -Path (Join-Path $BASE_DIR 'logs')
-
-    $containerOsType = Get-ContainerOsType
 
     # Docker Desktop for Windows requires forward-slash paths in volume mounts.
     $configFileMount = (Join-Path $BASE_DIR 'config\config.json') -replace '\\', '/'
@@ -242,11 +249,18 @@ function Start-ProxyAgent {
         '--health-start-period', '30s'
     )
 
-    if ($containerOsType -eq 'windows') {
+    if ($ContainerOsType -eq 'windows') {
         $containerConfigPath = 'C:/config/config.json'
         $containerLogDir = 'C:/app/logs'
         $containerHeartbeatPath = 'C:/app/logs/proxy-agent-heartbeat.txt'
-        $windowsHealthCheck = 'powershell -NoProfile -Command "$path = $env:HEARTBEAT_PATH; if (-not (Test-Path -LiteralPath $path)) { exit 0 }; $line = Get-Content -LiteralPath $path -ErrorAction Stop | Select-Object -First 1; if ($line -match ''^HEARTBEAT_EXPIRE_AT=(\d+)$'' -and [int64]$Matches[1] -gt [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) { exit 0 } else { exit 1 }"'
+        $windowsHealthCheckScript = @(
+            '$path = $env:HEARTBEAT_PATH'
+            'if (-not (Test-Path -LiteralPath $path)) { exit 0 }'
+            '$line = Get-Content -LiteralPath $path -ErrorAction Stop | Select-Object -First 1'
+            'if ($line -match ''^HEARTBEAT_EXPIRE_AT=(\d+)$'' -and [int64]$Matches[1] -gt [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) { exit 0 } else { exit 1 }'
+        ) -join '; '
+        $windowsHealthCheckEncoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($windowsHealthCheckScript))
+        $windowsHealthCheck = "powershell.exe -NoProfile -EncodedCommand $windowsHealthCheckEncoded"
         $dockerArgs += @(
             '--env', "LOG_FOLDER_PATH=$containerLogDir",
             '--env', "HEARTBEAT_PATH=$containerHeartbeatPath",
@@ -315,48 +329,64 @@ function Start-ProxyAgent {
     }
 }
 
+function Start-CurrentProxyAgent {
+    $containerOsType = Get-ContainerOsType
+    $resolvedVersion = Resolve-ImageTag -Tag $CURRENT_VERSION -ContainerOsType $containerOsType
+
+    if (-not (Start-ProxyAgent -Version $resolvedVersion -ContainerOsType $containerOsType)) {
+        return $false
+    }
+
+    if ($resolvedVersion -ne $CURRENT_VERSION) {
+        Set-Content -Path $VERSION_FILE -Value $resolvedVersion -Encoding ascii
+    }
+
+    return $true
+}
+
 function Invoke-Upgrade {
     Write-Host "Checking for latest version..."
     $containerOsType = Get-ContainerOsType
+    $currentVersion = Resolve-ImageTag -Tag $CURRENT_VERSION -ContainerOsType $containerOsType
     if ($containerOsType -eq 'windows') {
-        $windowsVersion = Get-ImageTagVariant -Tag $CURRENT_VERSION
+        $windowsVersion = Get-ImageTagVariant -Tag $currentVersion
         $latestVersion = Get-LatestVersion -ContainerOsType windows -WindowsVersion $windowsVersion
     } else {
-        $tagType = Get-ImageTagType -Tag $CURRENT_VERSION
+        $tagType = Get-ImageTagType -Tag $currentVersion
         if ($tagType -eq 'windows') {
             throw "Windows proxy-agent image tags require Docker to run Windows containers."
         }
         $latestVersion = Get-LatestVersion -ContainerOsType linux
     }
 
-    if ((Compare-SemVer $latestVersion $CURRENT_VERSION) -eq 0) {
-        Write-Host "Already running the latest version ($CURRENT_VERSION)."
+    if ((Compare-SemVer $latestVersion $currentVersion) -eq 0) {
+        if ($currentVersion -ne $CURRENT_VERSION) {
+            Write-Log "Switching image tag from $CURRENT_VERSION to $currentVersion..."
+            if (-not (Start-ProxyAgent -Version $currentVersion -ContainerOsType $containerOsType)) {
+                exit 1
+            }
+            Set-Content -Path $VERSION_FILE -Value $currentVersion -Encoding ascii
+        }
+
+        Write-Host "Already running the latest version ($currentVersion)."
         exit 0
     }
 
-    Write-Log "Upgrading from $CURRENT_VERSION to $latestVersion..."
+    Write-Log "Upgrading from $currentVersion to $latestVersion..."
     Set-Content -Path $VERSION_FILE -Value $latestVersion -Encoding ascii
 
-    if (-not (Start-ProxyAgent $latestVersion)) {
-        Write-Log "Upgrade failed, rolling back to $CURRENT_VERSION..."
-        Set-Content -Path $VERSION_FILE -Value $CURRENT_VERSION -Encoding ascii
-        Start-ProxyAgent $CURRENT_VERSION | Out-Null
+    if (-not (Start-ProxyAgent -Version $latestVersion -ContainerOsType $containerOsType)) {
+        Write-Log "Upgrade failed, rolling back to $currentVersion..."
+        Set-Content -Path $VERSION_FILE -Value $currentVersion -Encoding ascii
+        Start-ProxyAgent -Version $currentVersion -ContainerOsType $containerOsType | Out-Null
     }
-}
-
-# Resolve legacy numeric tags according to the Docker container mode. Keep
-# numeric Linux tags unchanged for backward compatibility.
-$resolvedCurrentVersion = Resolve-ImageTag -Tag $CURRENT_VERSION
-if ($resolvedCurrentVersion -ne $CURRENT_VERSION) {
-    $CURRENT_VERSION = $resolvedCurrentVersion
-    Set-Content -Path $VERSION_FILE -Value $CURRENT_VERSION -Encoding ascii
 }
 
 # ── Commands ─────────────────────────────────────────────────────────────────
 
 switch ($Command) {
     'start' {
-        if (-not (Start-ProxyAgent $CURRENT_VERSION)) { exit 1 }
+        if (-not (Start-CurrentProxyAgent)) { exit 1 }
     }
     'stop' {
         Write-Log "Stopping $CONTAINER_NAME..."
@@ -364,8 +394,7 @@ switch ($Command) {
     }
     'restart' {
         Write-Log "Restarting $CONTAINER_NAME..."
-        Stop-ProxyAgent
-        if (-not (Start-ProxyAgent $CURRENT_VERSION)) { exit 1 }
+        if (-not (Start-CurrentProxyAgent)) { exit 1 }
     }
     'upgrade' {
         Invoke-Upgrade

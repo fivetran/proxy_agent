@@ -186,13 +186,18 @@ function Get-WindowsLtscVersion {
         exit 1
     }
 
-    switch -Regex ($operatingSystem.Caption) {
-        '2019' { return 'ltsc2019' }
-        '2022' { return 'ltsc2022' }
-        '2025' { return 'ltsc2025' }
+    if ($operatingSystem.ProductType -notin @(2, 3)) {
+        Write-Host "ERROR: Windows Server is required for Windows containers; detected '$($operatingSystem.Caption)'." -ForegroundColor Red
+        exit 1
     }
 
-    Write-Host "ERROR: Unsupported Windows host '$($operatingSystem.Caption)'. Use -WindowsVersion to select ltsc2019, ltsc2022, or ltsc2025 when the host is known to support that image." -ForegroundColor Red
+    switch ([int]$operatingSystem.BuildNumber) {
+        17763 { return 'ltsc2019' }
+        20348 { return 'ltsc2022' }
+        26100 { return 'ltsc2025' }
+    }
+
+    Write-Host "ERROR: Unsupported Windows Server build '$($operatingSystem.BuildNumber)' ('$($operatingSystem.Caption)'). Use -WindowsVersion to select an image only when the host is known to support it." -ForegroundColor Red
     exit 1
 }
 
