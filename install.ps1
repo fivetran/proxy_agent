@@ -8,7 +8,9 @@
 param(
     [Parameter(Position = 0)]
     [string]$ConfigPath,
-    [string]$InstallDir
+    [string]$InstallDir,
+    [ValidateSet('ltsc2019', 'ltsc2022', 'ltsc2025')]
+    [string]$WindowsVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,11 +39,12 @@ $script:Errors   = [System.Collections.Generic.List[string]]::new()
 function Show-Usage {
     Write-Host @'
 Usage:
-  $env:RUNTIME='docker'; .\install.ps1 [<config.json>] [-InstallDir <dir>]
-  $env:TOKEN='<token>'; $env:RUNTIME='docker'; .\install.ps1 [-InstallDir <dir>]
+  $env:RUNTIME='docker'; .\install.ps1 [<config.json>] [-InstallDir <dir>] [-WindowsVersion <ltsc2019|ltsc2022|ltsc2025>]
+  $env:TOKEN='<token>'; $env:RUNTIME='docker'; .\install.ps1 [-InstallDir <dir>] [-WindowsVersion <ltsc2019|ltsc2022|ltsc2025>]
 
 Options:
-  -InstallDir <dir>   Installation directory (default: %USERPROFILE%\fivetran-proxy-agent)
+  -InstallDir <dir>       Installation directory (default: %USERPROFILE%\fivetran-proxy-agent)
+  -WindowsVersion <value> Windows LTSC image variant for Windows containers; detected from the host when omitted
 '@
     exit 1
 }
@@ -73,6 +76,22 @@ function Test-DockerVersion {
     if ($LASTEXITCODE -ne 0) {
         $script:Errors.Add("Docker is installed but the Docker daemon is not accessible. Ensure that Docker Desktop is running and that your user has permission to access it.")
     }
+}
+
+function Get-ContainerOsType {
+    $osTypeOutput = docker info --format '{{.OSType}}' 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        $script:Errors.Add("Unable to determine whether Docker is running Linux or Windows containers")
+        return $null
+    }
+
+    $osType = ([string]$osTypeOutput).Trim()
+    if ($osType -notin @('linux', 'windows')) {
+        $script:Errors.Add("Docker reported an unsupported container operating system: '$osType'")
+        return $null
+    }
+
+    return $osType
 }
 
 function Read-MemoryMB {
@@ -153,7 +172,38 @@ function Show-WarningsAndErrors {
 
 # ── Version resolution ───────────────────────────────────────────────────────
 
+function Get-WindowsLtscVersion {
+    param([string]$Override)
+
+    if ($Override) {
+        return $Override
+    }
+
+    try {
+        $operatingSystem = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+    } catch {
+        Write-Host "ERROR: Unable to detect the Windows Server version: $_" -ForegroundColor Red
+        exit 1
+    }
+
+    if ($operatingSystem.ProductType -notin @(2, 3)) {
+        Write-Host "ERROR: Windows Server is required for Windows containers; detected '$($operatingSystem.Caption)'." -ForegroundColor Red
+        exit 1
+    }
+
+    switch ([int]$operatingSystem.BuildNumber) {
+        17763 { return 'ltsc2019' }
+        20348 { return 'ltsc2022' }
+        26100 { return 'ltsc2025' }
+    }
+
+    Write-Host "ERROR: Unsupported Windows Server build '$($operatingSystem.BuildNumber)' ('$($operatingSystem.Caption)'). Use -WindowsVersion to select an image only when the host is known to support it." -ForegroundColor Red
+    exit 1
+}
+
 function Get-LatestVersion {
+    param([Parameter(Mandatory)][string]$WindowsVersion)
+
     try {
         $tagsJson = Invoke-RestMethod -Uri $REGISTRY_TAGS_URL -Method Get -TimeoutSec 30
     } catch {
@@ -161,13 +211,34 @@ function Get-LatestVersion {
         exit 1
     }
 
-    $versions = $tagsJson.tags | Where-Object { $_ -match '^\d+\.\d+\.\d+$' }
+    $tagPattern = '^\d+\.\d+\.\d+-windows-' + [regex]::Escape($WindowsVersion) + '$'
+    $releasePattern = '-windows-' + [regex]::Escape($WindowsVersion) + '$'
+    $versions = @($tagsJson.tags | Where-Object { $_ -match $tagPattern })
     if (-not $versions) {
-        Write-Host "ERROR: No valid version tags found in registry" -ForegroundColor Red
+        Write-Host "ERROR: No published Windows image tags found for $WindowsVersion" -ForegroundColor Red
         exit 1
     }
 
-    return ($versions | Sort-Object { [version]$_ } | Select-Object -Last 1)
+    return ($versions | Sort-Object { [version]($_ -replace $releasePattern, '') } | Select-Object -Last 1)
+}
+
+function Get-LatestLinuxVersion {
+    try {
+        $tagsJson = Invoke-RestMethod -Uri $REGISTRY_TAGS_URL -Method Get -TimeoutSec 30
+    } catch {
+        Write-Host "ERROR: Unable to query image registry for latest Linux version: $_" -ForegroundColor Red
+        exit 1
+    }
+
+    $tagPattern = '^\d+\.\d+\.\d+-ubuntu-26\.04$'
+    $releasePattern = '-ubuntu-26\.04$'
+    $versions = @($tagsJson.tags | Where-Object { $_ -match $tagPattern })
+    if (-not $versions) {
+        Write-Host "ERROR: No published Ubuntu 26.04 image tags found" -ForegroundColor Red
+        exit 1
+    }
+
+    return ($versions | Sort-Object { [version]($_ -replace $releasePattern, '') } | Select-Object -Last 1)
 }
 
 # ── Entry point ──────────────────────────────────────────────────────────────
@@ -229,6 +300,13 @@ try {
     # Pre-flight checks
     Write-Host -NoNewline "Checking prerequisites... "
     Test-DockerVersion
+    $containerOsType = $null
+    if ($script:Errors.Count -eq 0) {
+        $containerOsType = Get-ContainerOsType
+    }
+    if ($WindowsVersion -and $containerOsType -ne 'windows') {
+        $script:Errors.Add("-WindowsVersion can only be used when Docker is running Windows containers")
+    }
     Test-Resources $memoryMB
     Test-DiskSpace $InstallDir
 
@@ -332,9 +410,15 @@ try {
         [System.IO.File]::WriteAllText($configDest, $response.Content, [System.Text.UTF8Encoding]::new($false))
     }
 
-    # Resolve and pin version
     Write-Host "Resolving latest proxy agent version..."
-    $version = Get-LatestVersion
+    if ($containerOsType -eq 'windows') {
+        $windowsImageVariant = Get-WindowsLtscVersion -Override $WindowsVersion
+        Write-Host "Using Windows image variant $windowsImageVariant"
+        $version = Get-LatestVersion -WindowsVersion $windowsImageVariant
+    } else {
+        Write-Host "Using Linux container image"
+        $version = Get-LatestLinuxVersion
+    }
     Set-Content -LiteralPath (Join-Path $InstallDir 'version') -Value $version -Encoding ascii
     Write-Host "Using version $version"
 
