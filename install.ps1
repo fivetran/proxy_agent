@@ -371,6 +371,8 @@ try {
         $currentUser, 'Read,Write', 'Allow')))
     $configAcl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
         'NT AUTHORITY\SYSTEM', 'Read', 'Allow')))
+    $configAcl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+        (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')), 'Read', 'Allow')))
     [System.IO.File]::SetAccessControl($configDest, $configAcl)
 
     if ($ConfigPath) {

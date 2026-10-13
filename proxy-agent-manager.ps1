@@ -244,7 +244,6 @@ function Start-ProxyAgent {
         '--env', 'IS_DOCKER=true',
         '--env', 'HEARTBEAT_EXPIRY_SECONDS=30',
         '--health-interval', '10s',
-        '--health-timeout', '3s',
         '--health-retries', '3',
         '--health-start-period', '30s'
     )
@@ -265,6 +264,7 @@ function Start-ProxyAgent {
             '--env', "LOG_FOLDER_PATH=$containerLogDir",
             '--env', "HEARTBEAT_PATH=$containerHeartbeatPath",
             '--health-cmd', $windowsHealthCheck,
+            '--health-timeout', '15s',
             '-v', "${configDirectoryMount}:C:/config:ro",
             '-v', "${logsMount}:$containerLogDir",
             "${IMAGE}:${Version}",
@@ -277,6 +277,7 @@ function Start-ProxyAgent {
             '--env', "LOG_FOLDER_PATH=$containerLogDir",
             '--env', 'HEARTBEAT_PATH=/tmp/proxy-agent-heartbeat.txt',
             '--health-cmd', '[ ! -f $HEARTBEAT_PATH ] || { . $HEARTBEAT_PATH && [ $(date +%s) -lt $HEARTBEAT_EXPIRE_AT ]; }',
+            '--health-timeout', '3s',
             '-v', "${configFileMount}:/config/config.json:ro",
             '-v', "${logsMount}:$containerLogDir",
             "${IMAGE}:${Version}",
