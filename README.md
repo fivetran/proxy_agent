@@ -17,12 +17,15 @@ For more information see the [Proxy Agent documentation](https://fivetran.com/do
 
 ### Windows
 - Windows 10 or Windows 11 (64-bit) with Docker Desktop (current supported version) and the WSL2 backend for Linux containers, or Windows Server 2019, Windows Server 2022, or Windows Server 2025 (64-bit) for Windows containers
+- Windows Server: Docker CE 29.8.2 (recommended) with the Containers feature enabled and Docker in Windows-container mode
 - Minimum 4 CPUs, 5 GB RAM, 2 GB free disk space
 - PowerShell 5.1 or later (built into Windows)
 
-> **Note:** Docker Desktop requires an interactive user session to start. The agent container will not start automatically on boot until a user signs in and Docker Desktop launches.
+> **Note:** On Windows 10 and Windows 11, Docker Desktop requires an interactive user session to start. The agent container will not start automatically on boot until a user signs in and Docker Desktop launches.
 
 > **Note:** Windows Server installations must use Windows-container mode. Hyper-V isolation may require nested virtualization; verify that requirement for the selected host and isolation mode.
+
+> **Note:** On Windows Server, `localhost` inside the agent container refers to the container itself, and the host's private IP address may not be reachable from the container. To connect to a database running on the same host, use the container's gateway IP address (the host's `vEthernet (nat)` adapter address).
 
 > **Note:** Running Docker Desktop inside a VM, including a cloud VM, requires nested virtualization for its local Linux VM backend. Verify that the VM size and hypervisor support and enable nested virtualization before installation. See [Docker's VM/VDI guidance](https://docs.docker.com/desktop/setup/vm-vdi/) for supported environments and requirements.
 
@@ -86,7 +89,7 @@ $HOME/fivetran-proxy-agent/
 %USERPROFILE%\fivetran-proxy-agent\
 ├── proxy-agent-manager.ps1  --> Management script
 ├── config\
-│   └── config.json          --> Agent configuration (owner read/write only)
+│   └── config.json          --> Agent configuration (owner read/write; SYSTEM and Administrators read)
 ├── logs\                    --> Agent and manager logs
 └── version                  --> Pinned agent image tag
 ```

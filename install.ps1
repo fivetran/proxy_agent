@@ -317,6 +317,11 @@ try {
         Show-WarningsAndErrors
     }
 
+    $windowsImageVariant = $null
+    if ($containerOsType -eq 'windows') {
+        $windowsImageVariant = Get-WindowsLtscVersion -Override $WindowsVersion
+    }
+
     # Directory setup
     if (Test-Path -LiteralPath $InstallDir -PathType Container) {
         Write-Host "$InstallDir already exists, will re-use it."
@@ -414,7 +419,6 @@ try {
 
     Write-Host "Resolving latest proxy agent version..."
     if ($containerOsType -eq 'windows') {
-        $windowsImageVariant = Get-WindowsLtscVersion -Override $WindowsVersion
         Write-Host "Using Windows image variant $windowsImageVariant"
         $version = Get-LatestVersion -WindowsVersion $windowsImageVariant
     } else {
