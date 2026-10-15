@@ -69,11 +69,22 @@ get_latest_version() {
         return 1
     }
     echo "$tags_json" \
-        | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' \
+        | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+-ubuntu-26\.04"' \
         | tr -d '"' \
         | sort -V \
         | tail -1 \
         || true
+}
+
+get_release_version() {
+    local tag="$1"
+    if [[ "$tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-ubuntu-26\.04)?$ ]]; then
+        echo "${BASH_REMATCH[1]}"
+        return 0
+    fi
+
+    echo "ERROR: Invalid Linux proxy-agent image tag '$tag'. Expected <version> or <version>-ubuntu-26.04." >&2
+    return 1
 }
 
 upgrade_agent() {
@@ -84,7 +95,10 @@ upgrade_agent() {
         echo "ERROR: Unable to determine latest version" >&2
         exit 1
     fi
-    if [ "$latest_version" = "$CURRENT_VERSION" ]; then
+    local current_release latest_release
+    current_release=$(get_release_version "$CURRENT_VERSION") || exit 1
+    latest_release=$(get_release_version "$latest_version") || exit 1
+    if [ "$latest_release" = "$current_release" ]; then
         echo "Already running the latest version ($CURRENT_VERSION)."
         exit 0
     fi

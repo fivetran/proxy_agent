@@ -226,12 +226,12 @@ get_latest_version() {
 
     local version
     version=$(echo "$tags_json" \
-        | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' \
+        | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+-ubuntu-26\.04"' \
         | tr -d '"' \
         | sort -V \
         | tail -1 \
         || true)
-    [ -n "$version" ] || die "Unable to determine latest proxy agent version"
+    [ -n "$version" ] || die "Unable to determine latest Ubuntu 26.04 proxy agent version"
     echo "$version"
 }
 
