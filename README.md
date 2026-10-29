@@ -18,7 +18,7 @@ For more information see the [Proxy Agent documentation](https://fivetran.com/do
 ### Windows
 - Windows 10 or Windows 11 (64-bit) with Docker Desktop (current supported version) and the WSL2 backend for Linux containers, or Windows Server 2019, Windows Server 2022, or Windows Server 2025 (64-bit) for Windows containers
 - Windows Server: Docker CE 29.8.2 (recommended) with the Containers feature enabled and Docker in Windows-container mode
-- Minimum 4 CPUs, 5 GB RAM, 2 GB free disk space (12 GB free disk space on Windows Server with Windows containers)
+- Minimum 4 CPUs, 5 GB RAM, 2 GB free disk space (8 GB RAM and 12 GB free disk space on Windows Server with Windows containers)
 - PowerShell 5.1 or later (built into Windows)
 
 > **Note:** On Windows 10 and Windows 11, Docker Desktop requires an interactive user session to start. The agent container will not start automatically on boot until a user signs in and Docker Desktop launches.
