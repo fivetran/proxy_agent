@@ -25,6 +25,7 @@ $DEFAULT_CONTAINER_MEMORY_MB            = 5120  # default memory (5GB) allocated
 $MIN_RECOMMENDED_CONTAINER_MEMORY_MB    = 5120  # proxy agent container should get at least 5GB
 $HOST_RESERVED_MEMORY_MB                = 3072  # leave at least this much RAM for the host on Windows
 $MIN_RECOMMENDED_DISK_SPACE_MB          = 2048
+$MIN_RECOMMENDED_WINDOWS_DISK_SPACE_MB  = 12288  # Windows Server Core based images need more space to pull and upgrade
 $AGENT_SCRIPT                           = 'proxy-agent-manager.ps1'
 $AGENT_SCRIPT_URL                       = 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1'
 $REGISTRY_TAGS_URL                      = 'https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list'
@@ -136,7 +137,7 @@ function Test-Resources {
 }
 
 function Test-DiskSpace {
-    param([string]$Path)
+    param([string]$Path, [int]$MinimumMB)
     $parentDir = Split-Path -LiteralPath $Path
     if (-not (Test-Path -LiteralPath $parentDir)) {
         $script:Warnings.Add("Unable to determine available disk space: parent directory $parentDir does not exist")
@@ -147,8 +148,8 @@ function Test-DiskSpace {
         $qualifier   = Split-Path -Qualifier $parentDir
         $drive       = Get-PSDrive ($qualifier.TrimEnd(':'))
         $freeSpaceMB = [math]::Round($drive.Free / 1MB)
-        if ($freeSpaceMB -lt $MIN_RECOMMENDED_DISK_SPACE_MB) {
-            $script:Warnings.Add("Available disk space (${freeSpaceMB}MB) is below the recommended minimum of ${MIN_RECOMMENDED_DISK_SPACE_MB}MB")
+        if ($freeSpaceMB -lt $MinimumMB) {
+            $script:Warnings.Add("Available disk space (${freeSpaceMB}MB) is below the recommended minimum of ${MinimumMB}MB")
         }
     } catch {
         $script:Warnings.Add("Unable to determine available disk space for $parentDir")
@@ -308,7 +309,8 @@ try {
         $script:Errors.Add("-WindowsVersion can only be used when Docker is running Windows containers")
     }
     Test-Resources $memoryMB
-    Test-DiskSpace $InstallDir
+    $minimumDiskSpaceMB = if ($containerOsType -eq 'windows') { $MIN_RECOMMENDED_WINDOWS_DISK_SPACE_MB } else { $MIN_RECOMMENDED_DISK_SPACE_MB }
+    Test-DiskSpace $InstallDir $minimumDiskSpaceMB
 
     if ($script:Warnings.Count -eq 0 -and $script:Errors.Count -eq 0) {
         Write-Host "OK`n"
