@@ -140,21 +140,23 @@ function Test-Resources {
 
 function Test-DiskSpace {
     param([string]$Path, [int]$MinimumMB)
-    $parentDir = Split-Path -LiteralPath $Path
-    if (-not (Test-Path -LiteralPath $parentDir)) {
-        $script:Warnings.Add("Unable to determine available disk space: parent directory $parentDir does not exist")
+    # Measure the path itself when it exists (for example, Docker's data root, which can be a drive root such as D:\).
+    # Fall back to the parent directory for an install directory that hasn't been created yet.
+    $targetDir = if (Test-Path -LiteralPath $Path) { $Path } else { Split-Path -LiteralPath $Path }
+    if (-not $targetDir -or -not (Test-Path -LiteralPath $targetDir)) {
+        $script:Warnings.Add("Unable to determine available disk space: directory $targetDir does not exist")
         return
     }
 
     try {
-        $qualifier   = Split-Path -Qualifier $parentDir
+        $qualifier   = Split-Path -Qualifier $targetDir
         $drive       = Get-PSDrive ($qualifier.TrimEnd(':'))
         $freeSpaceMB = [math]::Round($drive.Free / 1MB)
         if ($freeSpaceMB -lt $MinimumMB) {
             $script:Warnings.Add("Available disk space on drive $qualifier (${freeSpaceMB}MB) is below the recommended minimum of ${MinimumMB}MB")
         }
     } catch {
-        $script:Warnings.Add("Unable to determine available disk space for $parentDir")
+        $script:Warnings.Add("Unable to determine available disk space for $targetDir")
     }
 }
 
