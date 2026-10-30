@@ -1,59 +1,29 @@
 #!/usr/bin/env bats
 #
 #  Unit tests for proxy-agent-manager.sh. The script is run as a black box with
-#  stub `docker` and `curl` commands on PATH, so no Docker daemon is needed.
+#  the stub `docker` and `curl` commands from ./stubs on PATH, so no Docker
+#  daemon or network access is needed. The versions below are fixtures and do
+#  not depend on what is published in the real registry.
 #
 
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
-IMAGE="us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent"
+# The repository the manager hardcodes; only used to build expected image
+# strings, the docker stub never pulls anything.
+IMAGE_REPO="us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent"
 
 setup() {
     AGENT_DIR="$(mktemp -d)"
-    STUB_BIN="$AGENT_DIR/bin"
-    mkdir -p "$STUB_BIN" "$AGENT_DIR/config"
+    mkdir -p "$AGENT_DIR/config"
     cp "$REPO_ROOT/proxy-agent-manager.sh" "$AGENT_DIR/"
     echo '{"agent_id": "abc123"}' > "$AGENT_DIR/config/config.json"
     echo "1.2.9-ubuntu-26.04" > "$AGENT_DIR/version"
 
-    # State shared with the stubs. DOCKER_LAST_IMAGE exists while a container
-    # "runs" and holds the image it was started from.
+    # State shared with the stubs in ./stubs; see the comments there.
     export DOCKER_LOG="$AGENT_DIR/docker.log"
     export DOCKER_LAST_IMAGE="$AGENT_DIR/docker.image"
     export DOCKER_UNHEALTHY_TAG=""
     export STUB_TAGS='["1.2.9-ubuntu-26.04","1.2.10-ubuntu-26.04","1.2.11","1.2.10-windows-ltsc2022"]'
-
-    cat > "$STUB_BIN/docker" <<'EOF'
-#!/usr/bin/env bash
-echo "$*" >> "$DOCKER_LOG"
-case "$1" in
-    run)
-        for arg in "$@"; do
-            case "$arg" in *proxy-agent:*) echo "$arg" > "$DOCKER_LAST_IMAGE" ;; esac
-        done
-        ;;
-    inspect)
-        [ -f "$DOCKER_LAST_IMAGE" ] || exit 1
-        if [ "$2" = "-f" ]; then
-            case "$(cat "$DOCKER_LAST_IMAGE")" in
-                *"${DOCKER_UNHEALTHY_TAG:-__none__}"*) echo unhealthy ;;
-                *) echo healthy ;;
-            esac
-        fi
-        ;;
-    stop|rm)
-        rm -f "$DOCKER_LAST_IMAGE"
-        ;;
-    ps)
-        echo "NAMES IMAGE STATUS"
-        ;;
-esac
-EOF
-    cat > "$STUB_BIN/curl" <<'EOF'
-#!/usr/bin/env bash
-echo "{\"tags\": $STUB_TAGS}"
-EOF
-    chmod +x "$STUB_BIN/docker" "$STUB_BIN/curl"
-    export PATH="$STUB_BIN:$PATH"
+    export PATH="$REPO_ROOT/tests/bash/stubs:$PATH"
 }
 
 teardown() {
@@ -71,7 +41,7 @@ last_image() {
 @test "start runs the pinned Ubuntu image with the default memory limit" {
     run manager start
     [ "$status" -eq 0 ]
-    [ "$(last_image)" = "$IMAGE:1.2.9-ubuntu-26.04" ]
+    [ "$(last_image)" = "$IMAGE_REPO:1.2.9-ubuntu-26.04" ]
     grep -q -- "--memory=5120m" "$DOCKER_LOG"
 }
 
@@ -107,7 +77,7 @@ last_image() {
 @test "upgrade picks the newest Ubuntu tag and ignores bare and Windows tags" {
     run manager upgrade
     [ "$status" -eq 0 ]
-    [ "$(last_image)" = "$IMAGE:1.2.10-ubuntu-26.04" ]
+    [ "$(last_image)" = "$IMAGE_REPO:1.2.10-ubuntu-26.04" ]
     [[ "$(cat "$AGENT_DIR/version")" == 1.2.10* ]]
 }
 
@@ -124,7 +94,7 @@ last_image() {
     run manager upgrade
     [ "$status" -eq 0 ]
     [[ "$output" == *"rolling back"* ]]
-    [ "$(last_image)" = "$IMAGE:1.2.9-ubuntu-26.04" ]
+    [ "$(last_image)" = "$IMAGE_REPO:1.2.9-ubuntu-26.04" ]
     [[ "$(cat "$AGENT_DIR/version")" == 1.2.9* ]]
 }
 

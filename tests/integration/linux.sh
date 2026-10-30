@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 #
 #  Integration test for install.sh and proxy-agent-manager.sh on a real Docker
-#  daemon. Uses a stub agent image and a local stand-in for the registry and
-#  the script download, so it needs no Fivetran credentials or network access.
+#  daemon. Uses a stub agent image built here (tests/stub) and a local stand-in
+#  for the registry and the script download, so it needs no Fivetran
+#  credentials and never contacts the real registry; the versions below are
+#  fixtures. The only network access is pulling the stub's alpine base image.
 #
 #  Usage: tests/integration/linux.sh
 #

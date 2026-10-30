@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#
+#  Stub curl for tests/bash/manager.bats. The manager only uses curl for the
+#  registry tag listing, so this answers every call with the tags in
+#  $STUB_TAGS (a JSON array) and never touches the network.
+#
+echo "{\"tags\": $STUB_TAGS}"
