@@ -29,8 +29,10 @@ $MIN_RECOMMENDED_DISK_SPACE_MB          = 2048
 # for a new base image on upgrade. Sized from the 1.2.9 images (fivetran/engineering#330090); revisit when the image changes.
 $MIN_RECOMMENDED_WINDOWS_DISK_SPACE_MB  = 12288
 $AGENT_SCRIPT                           = 'proxy-agent-manager.ps1'
-$AGENT_SCRIPT_URL                       = 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1'
-$REGISTRY_TAGS_URL                      = 'https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list'
+# PROXY_AGENT_SCRIPT_URL and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
+# test suite can install the checked-out management script against a stub registry.
+$AGENT_SCRIPT_URL                       = if ($env:PROXY_AGENT_SCRIPT_URL) { $env:PROXY_AGENT_SCRIPT_URL } else { 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1' }
+$REGISTRY_TAGS_URL                      = if ($env:PROXY_AGENT_REGISTRY_TAGS_URL) { $env:PROXY_AGENT_REGISTRY_TAGS_URL } else { 'https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list' }
 $DEFAULT_FIVETRAN_API_URL               = 'https://api.fivetran.com'
 $SETTINGS_FILE                           = 'settings.ps1'
 

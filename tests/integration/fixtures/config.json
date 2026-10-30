@@ -1,0 +1,5 @@
+{
+  "agent_id": "test-agent",
+  "orchestrator_host": "orchestrator.invalid",
+  "orchestrator_port": 443
+}

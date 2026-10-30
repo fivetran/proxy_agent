@@ -1,0 +1,7 @@
+# Stub proxy agent image for the integration tests. It only writes the heartbeat
+# file the management script's health check reads, so the tests never need
+# Fivetran credentials or network access.
+FROM alpine:3.20
+COPY heartbeat.sh /heartbeat.sh
+RUN chmod +x /heartbeat.sh
+ENTRYPOINT ["/heartbeat.sh"]

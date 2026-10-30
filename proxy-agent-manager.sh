@@ -8,7 +8,9 @@ set -euo pipefail
 
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-IMAGE="us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent"
+# PROXY_AGENT_IMAGE and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
+# test suite can run against a stub image and registry.
+IMAGE="${PROXY_AGENT_IMAGE:-us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent}"
 CONFIG_FILE="$BASE_DIR/config/config.json"
 VERSION_FILE="$BASE_DIR/version"
 SETTINGS_FILE="$BASE_DIR/settings.sh"
@@ -62,7 +64,7 @@ MEMORY_ALLOCATION_MB="${MEMORY_ALLOCATION_MB:-5120}"
 get_latest_version() {
     local registry_host="${IMAGE%%/*}"
     local repository_path="${IMAGE#*/}"
-    local registry_url="https://${registry_host}/v2/${repository_path}/tags/list"
+    local registry_url="${PROXY_AGENT_REGISTRY_TAGS_URL:-https://${registry_host}/v2/${repository_path}/tags/list}"
     local tags_json
     tags_json=$(curl -s -f "$registry_url") || {
         echo "ERROR: Unable to query image registry for latest version" >&2

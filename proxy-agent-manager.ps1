@@ -7,7 +7,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $BASE_DIR           = $PSScriptRoot
-$IMAGE              = 'us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent'
+# PROXY_AGENT_IMAGE and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
+# test suite can run against a stub image and registry.
+$IMAGE              = if ($env:PROXY_AGENT_IMAGE) { $env:PROXY_AGENT_IMAGE } else { 'us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent' }
 $CONFIG_FILE        = Join-Path $BASE_DIR 'config\config.json'
 $VERSION_FILE       = Join-Path $BASE_DIR 'version'
 $LOGFILE            = Join-Path $BASE_DIR 'logs\proxy-agent-manager.log'
@@ -171,7 +173,7 @@ function Get-LatestVersion {
 
     $registryHost   = $IMAGE.Split('/')[0]
     $repositoryPath = $IMAGE.Substring($registryHost.Length + 1)
-    $registryUrl    = "https://$registryHost/v2/$repositoryPath/tags/list"
+    $registryUrl    = if ($env:PROXY_AGENT_REGISTRY_TAGS_URL) { $env:PROXY_AGENT_REGISTRY_TAGS_URL } else { "https://$registryHost/v2/$repositoryPath/tags/list" }
 
     try {
         $tagsJson = Invoke-RestMethod -Uri $registryUrl -Method Get
