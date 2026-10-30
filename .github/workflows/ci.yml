@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its previous run, which otherwise keeps
+# two Windows runners busy for up to 45 minutes. Runs on main are never
+# cancelled so every merged commit gets a full result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck --severity=warning install.sh proxy-agent-manager.sh tests/integration/linux.sh tests/stub/heartbeat.sh tests/bash/stubs/docker tests/bash/stubs/curl
+
+  psscriptanalyzer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
+            Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          }
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
+          $results | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+          if ($results) { exit 1 }
+
+  bats:
+    name: Unit tests (bash)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y bats
+      - run: bats tests/bash
+
+  pester:
+    name: Unit tests (PowerShell 5.1, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Pester
+        # Windows PowerShell 5.1 is what customers run the scripts with, so the
+        # tests run there rather than under pwsh. Pester is pinned to 5.x since
+        # the tests use its syntax.
+        shell: powershell
+        run: |
+          $pester = Get-Module -ListAvailable Pester | Where-Object { $_.Version -ge '5.0' -and $_.Version -lt '6.0' }
+          if (-not $pester) {
+            Install-Module Pester -MinimumVersion 5.0 -MaximumVersion 5.99.99 -Force -SkipPublisherCheck -Scope CurrentUser
+          }
+          Import-Module Pester -MinimumVersion 5.0 -MaximumVersion 5.99.99
+          Invoke-Pester -Path tests/pwsh -CI
+
+  integration-linux:
+    name: Integration (Linux containers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: tests/integration/linux.sh
+
+  integration-windows:
+    name: Integration (Windows containers, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for the Docker daemon
+        # The Docker service is not always running when a Windows job starts.
+        shell: powershell
+        run: |
+          # The default 'Stop' preference would turn docker's stderr into a
+          # terminating error on the first failed attempt.
+          $ErrorActionPreference = 'Continue'
+          $service = Get-Service docker -ErrorAction SilentlyContinue
+          if ($service -and $service.Status -ne 'Running') { Start-Service docker }
+          foreach ($attempt in 1..30) {
+            docker info *> $null
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Start-Sleep -Seconds 2
+          }
+          docker info
+          exit 1
+      - name: Run integration test
+        shell: powershell
+        run: tests/integration/windows.ps1

@@ -136,6 +136,34 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 **Volume mount issues** — Docker Desktop for Windows translates Windows paths in volume mounts automatically. If you see an empty config inside the container, ensure the install directory path does not contain special characters.
 
+## Development
+
+CI (`.github/workflows/ci.yml`) runs on every pull request:
+
+- `shellcheck` on the shell scripts and PSScriptAnalyzer (settings in `PSScriptAnalyzerSettings.psd1`) on the PowerShell scripts.
+- Unit tests for the management scripts: `tests/bash/manager.bats` (bats) and `tests/pwsh/Manager.Tests.ps1` (Pester 5 under Windows PowerShell 5.1). Both run the script with stubbed `docker` and registry calls, so they need no Docker daemon.
+- Integration tests that run the installer and management script against a real Docker daemon: `tests/integration/linux.sh` on Ubuntu, and `tests/integration/windows.ps1` on Windows Server 2022 and 2025 with Windows containers. They use a stub agent image (`tests/stub/`) that only writes the heartbeat file, and a local stand-in for the registry, the script download and the configure endpoint (`tests/integration/registry_server.py`), so they need no Fivetran credentials. They cover installing from a config file, from a `TOKEN`, and from a legacy WebSocket config, then rollback, upgrade, restart and stop.
+
+To run them locally you need Docker for the integration tests, `python3` (`python` on Windows) for the registry stand-in, [bats-core](https://github.com/bats-core/bats-core) for the bash tests and [Pester 5](https://pester.dev) for the PowerShell tests. The stub images pull `alpine` and `servercore` base images, so the integration tests need network access for that.
+
+```bash
+bats tests/bash
+tests/integration/linux.sh            # needs Docker
+```
+
+```powershell
+Invoke-Pester -Path tests/pwsh
+tests\integration\windows.ps1          # needs Docker in Windows-containers mode
+```
+
+The scripts read these environment variables so the tests can point them at the stub image and local server. They are not meant for production use:
+
+| Variable | Read by | Replaces |
+|----------|---------|----------|
+| `PROXY_AGENT_IMAGE` | management scripts | the agent image repository |
+| `PROXY_AGENT_REGISTRY_TAGS_URL` | installers and management scripts | the registry tag listing URL |
+| `PROXY_AGENT_SCRIPT_URL` | installers | the management script download URL |
+
 ## License
 
 This project is licensed under the [Apache License 2.0](./LICENSE).
