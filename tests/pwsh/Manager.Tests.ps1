@@ -13,6 +13,8 @@ The stubs keep their state in $global:ProxyAgentStub. PowerShell scopes
 dynamically, so inside a stub called from the manager script $script: refers to
 the manager's scope, not this file's; only a global is visible to both.
 #>
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidGlobalVars', '', Justification = 'Stub state must be global; see the description above.')]
+param()
 
 BeforeAll {
     $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -47,8 +49,19 @@ BeforeAll {
         return (& $Manager $Command *>&1 | Out-String)
     }
 
+    # Returns the argument list of the first recorded docker call for the
+    # given subcommand, or $null. A foreach loop is used because piping the
+    # recorded calls through Where-Object would flatten them into strings.
+    function Get-DockerCall {
+        param([string]$Subcommand)
+        foreach ($call in $global:ProxyAgentStub.DockerCalls) {
+            if ($call[0] -eq $Subcommand) { return ,$call }
+        }
+        return $null
+    }
+
     function Get-DockerRunArgs {
-        return ($global:ProxyAgentStub.DockerCalls | Where-Object { $_[0] -eq 'run' })[0]
+        return Get-DockerCall 'run'
     }
 
     # Stand-in for the docker CLI. Records every call and keeps one container's
@@ -191,7 +204,7 @@ Describe 'proxy-agent-manager.ps1' {
             $null = Invoke-Manager $manager stop
             $LASTEXITCODE | Should -Be 0
             $global:ProxyAgentStub.LastImage | Should -BeNullOrEmpty
-            ($global:ProxyAgentStub.DockerCalls | Where-Object { $_[0] -eq 'rm' })[0] | Should -Contain 'proxy-agent-abc123'
+            Get-DockerCall 'rm' | Should -Contain 'proxy-agent-abc123'
         }
     }
 
