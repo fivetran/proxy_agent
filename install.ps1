@@ -219,7 +219,7 @@ function Get-LatestVersion {
         exit 1
     }
 
-    return ($versions | Sort-Object { [version]($_ -replace $releasePattern, '') } | Select-Object -Last 1)
+    return ($versions | ForEach-Object { $_ -replace $releasePattern, '' } | Sort-Object { [version]$_ } | Select-Object -Last 1)
 }
 
 function Get-LatestLinuxVersion {
@@ -238,7 +238,7 @@ function Get-LatestLinuxVersion {
         exit 1
     }
 
-    return ($versions | Sort-Object { [version]($_ -replace $releasePattern, '') } | Select-Object -Last 1)
+    return ($versions | ForEach-Object { $_ -replace $releasePattern, '' } | Sort-Object { [version]$_ } | Select-Object -Last 1)
 }
 
 # ── Entry point ──────────────────────────────────────────────────────────────
@@ -341,8 +341,13 @@ try {
     $null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'config')
     $null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'logs')
 
-    # Persist chosen container memory for proxy-agent-manager.ps1 to read
-    Set-Content -LiteralPath (Join-Path $InstallDir $SETTINGS_FILE) -Value "`$MEMORY_ALLOCATION_MB = $memoryMB" -Encoding ascii
+    # Persist settings for proxy-agent-manager.ps1 to read: the container memory
+    # and, when given, the Windows image variant override.
+    $settings = @("`$MEMORY_ALLOCATION_MB = $memoryMB")
+    if ($WindowsVersion) {
+        $settings += "`$WINDOWS_VERSION = '$WindowsVersion'"
+    }
+    Set-Content -LiteralPath (Join-Path $InstallDir $SETTINGS_FILE) -Value $settings -Encoding ascii
 
     # Download management script from public repo (temp file → move for atomicity)
     Write-Host "Downloading management script..."
