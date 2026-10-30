@@ -229,7 +229,7 @@ get_latest_version() {
     local version
     version=$(echo "$tags_json" \
         | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+-ubuntu-26\.04"' \
-        | tr -d '"' \
+        | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' \
         | sort -V \
         | tail -1 \
         || true)
