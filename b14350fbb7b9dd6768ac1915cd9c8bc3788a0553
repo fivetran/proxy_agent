@@ -1,0 +1,29 @@
+tests/bash/stubs/curl
+  9b9d1fbb9abcb60e 3-4,6
+tests/integration/windows.ps1
+  9b9d1fbb9abcb60e 155-156
+tests/bash/manager.bats
+  9b9d1fbb9abcb60e 25-26,86
+.github/workflows/ci.yml
+  9b9d1fbb9abcb60e 74-86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "b14350fbb7b9dd6768ac1915cd9c8bc3788a0553",
+  "prompts": {
+    "9b9d1fbb9abcb60e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "248b8c38-c176-4a0d-9679-0cd10da7b072",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Paul Harper <paul.harper@fivetran.com>",
+      "messages": [],
+      "total_additions": 21,
+      "total_deletions": 6,
+      "accepted_lines": 21,
+      "overriden_lines": 0
+    }
+  }
+}
