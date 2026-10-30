@@ -1,0 +1,27 @@
+README.md
+  b9550b6eaf3aae30 70-83
+install.ps1
+  b9550b6eaf3aae30 48-51,56-92,294-295
+proxy-agent-manager.ps1
+  b9550b6eaf3aae30 71-108,439
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "0688e71a19d36908f9ceb7aaa22488f04e854137",
+  "prompts": {
+    "b9550b6eaf3aae30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bb5b2079-a3e8-478c-816e-c29e09f475d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Paul Harper <paul.harper@fivetran.com>",
+      "messages": [],
+      "total_additions": 108,
+      "total_deletions": 10,
+      "accepted_lines": 98,
+      "overriden_lines": 0
+    }
+  }
+}
