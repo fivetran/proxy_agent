@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 #
 #  Installer for Fivetran Proxy Agent on Windows using Docker
 #

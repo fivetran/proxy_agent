@@ -87,7 +87,7 @@ try {
         '--port', $Port, '--root', $RepoRoot, '--tags', $tags
     )
     $ready = $false
-    foreach ($_ in 1..40) {
+    foreach ($attempt in 1..40) {
         try {
             $null = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/proxy-agent-manager.ps1" -UseBasicParsing -TimeoutSec 2
             $ready = $true
@@ -145,8 +145,8 @@ try {
 
     Write-Host '== stop'
     $null = Invoke-Manager stop
-    docker inspect $Container 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) { Fail 'container still exists after stop' }
+    $remaining = docker ps -a --filter "name=$Container" --format '{{.Names}}'
+    if ($remaining) { Fail "container still exists after stop: $remaining" }
 
     Write-Host 'PASS'
 } finally {

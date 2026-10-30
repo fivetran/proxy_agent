@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 param(
     [Parameter(Position = 0)]
     [string]$Command

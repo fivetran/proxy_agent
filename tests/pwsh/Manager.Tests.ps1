@@ -5,8 +5,10 @@ Unit tests for proxy-agent-manager.ps1.
 
 .DESCRIPTION
 The script is run as a black box with docker, Invoke-RestMethod and
-Get-CimInstance mocked, so no Docker daemon is needed. Mocks defined here are
-visible to the invoked script because it runs in a child scope.
+Get-CimInstance replaced by functions, so no Docker daemon is needed. Functions
+defined in BeforeAll shadow the real commands for the invoked script because it
+runs in a child scope. Plain functions are used instead of Pester mocks so the
+stubs can read $args and share $script: state with the tests.
 #>
 
 BeforeAll {
@@ -45,45 +47,52 @@ BeforeAll {
     function Get-DockerRunArgs {
         return ($script:DockerCalls | Where-Object { $_[0] -eq 'run' })[0]
     }
+
+    # Stand-in for the docker CLI. Records every call and keeps one container's
+    # worth of state: LastImage is $null while no container "runs" and
+    # otherwise holds the image it was started from.
+    function docker {
+        $script:DockerCalls += ,@($args)
+        $global:LASTEXITCODE = 0
+        switch ($args[0]) {
+            'info' { return $script:OsType }
+            'run' {
+                $script:LastImage = $args | Where-Object { $_ -like "*proxy-agent:*" } | Select-Object -First 1
+                return 'container-id'
+            }
+            'inspect' {
+                if (-not $script:LastImage) {
+                    $global:LASTEXITCODE = 1
+                    return
+                }
+                if ($args[1] -eq '-f') {
+                    if ($script:UnhealthyTag -and $script:LastImage -like "*$($script:UnhealthyTag)*") { return 'unhealthy' }
+                    return 'healthy'
+                }
+            }
+            { $_ -in 'stop', 'rm' } { $script:LastImage = $null }
+            'ps' { return 'NAMES IMAGE STATUS' }
+        }
+    }
+
+    # Stand-in for the registry tag listing.
+    function Invoke-RestMethod {
+        return [pscustomobject]@{ tags = $script:Tags }
+    }
+
+    # Stand-in for the host OS lookup, reporting Windows Server 2022.
+    function Get-CimInstance {
+        return [pscustomobject]@{ ProductType = 3; BuildNumber = 20348; Caption = 'Windows Server 2022' }
+    }
 }
 
 Describe 'proxy-agent-manager.ps1' {
     BeforeEach {
-        # Mock state. LastImage is $null while no container "runs" and
-        # otherwise holds the image the container was started from.
         $script:OsType = 'linux'
         $script:LastImage = $null
         $script:UnhealthyTag = $null
         $script:DockerCalls = @()
         $script:Tags = @('1.2.9-ubuntu-26.04', '1.2.10-ubuntu-26.04', '1.2.11', '1.2.10-windows-ltsc2022', '1.2.10-windows-ltsc2025')
-
-        Mock docker {
-            $script:DockerCalls += ,@($args)
-            $global:LASTEXITCODE = 0
-            switch ($args[0]) {
-                'info' { return $script:OsType }
-                'run' {
-                    $script:LastImage = $args | Where-Object { $_ -like "*proxy-agent:*" } | Select-Object -First 1
-                    return 'container-id'
-                }
-                'inspect' {
-                    if (-not $script:LastImage) {
-                        $global:LASTEXITCODE = 1
-                        return
-                    }
-                    if ($args[1] -eq '-f') {
-                        if ($script:UnhealthyTag -and $script:LastImage -like "*$($script:UnhealthyTag)*") { return 'unhealthy' }
-                        return 'healthy'
-                    }
-                }
-                { $_ -in 'stop', 'rm' } { $script:LastImage = $null }
-                'ps' { return 'NAMES IMAGE STATUS' }
-            }
-        }
-        Mock Invoke-RestMethod { return [pscustomobject]@{ tags = $script:Tags } }
-        if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
-            Mock Get-CimInstance { return [pscustomobject]@{ ProductType = 3; BuildNumber = 20348; Caption = 'Windows Server 2022' } }
-        }
     }
 
     AfterEach {
