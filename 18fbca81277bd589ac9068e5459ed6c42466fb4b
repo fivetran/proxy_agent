@@ -1,0 +1,27 @@
+tests/integration/windows.ps1
+  9b9d1fbb9abcb60e 94-96
+tests/pwsh/Manager.Tests.ps1
+  9b9d1fbb9abcb60e 116-117
+.github/workflows/ci.yml
+  9b9d1fbb9abcb60e 11-13,16,95-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "18fbca81277bd589ac9068e5459ed6c42466fb4b",
+  "prompts": {
+    "9b9d1fbb9abcb60e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "248b8c38-c176-4a0d-9679-0cd10da7b072",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Paul Harper <paul.harper@fivetran.com>",
+      "messages": [],
+      "total_additions": 12,
+      "total_deletions": 3,
+      "accepted_lines": 12,
+      "overriden_lines": 0
+    }
+  }
+}
