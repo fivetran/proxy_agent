@@ -94,8 +94,10 @@ BeforeAll {
         }
     }
 
-    # Stand-in for the registry tag listing.
+    # Stand-in for the registry tag listing. Records the requested URL.
     function Invoke-RestMethod {
+        param([string]$Uri, [string]$Method)
+        $global:ProxyAgentStub.RegistryUrl = $Uri
         return [pscustomobject]@{ tags = $global:ProxyAgentStub.Tags }
     }
 
@@ -116,11 +118,13 @@ Describe 'proxy-agent-manager.ps1' {
             LastImage    = $null
             UnhealthyTag = $null
             DockerCalls  = @()
+            RegistryUrl  = $null
             Tags         = @('1.2.9-ubuntu-26.04', '1.2.10-ubuntu-26.04', '1.2.11', '1.2.10-windows-ltsc2022', '1.2.10-windows-ltsc2025')
         }
     }
 
     AfterEach {
+        Remove-Item Env:\PROXY_AGENT_REGISTRY_TAGS_URL -ErrorAction SilentlyContinue
         if ($script:AgentDir -and (Test-Path -LiteralPath $script:AgentDir)) {
             Remove-Item -LiteralPath $script:AgentDir -Recurse -Force
         }
@@ -175,6 +179,16 @@ Describe 'proxy-agent-manager.ps1' {
             $LASTEXITCODE | Should -Be 0
             $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.10-ubuntu-26.04"
             Get-VersionFile | Should -BeLike '1.2.10*'
+        }
+
+        It 'queries the registry tag listing, or its override, on upgrade' {
+            $manager = New-AgentDir
+            $null = Invoke-Manager $manager upgrade
+            $global:ProxyAgentStub.RegistryUrl | Should -Be "https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list"
+
+            $env:PROXY_AGENT_REGISTRY_TAGS_URL = 'http://127.0.0.1:1/v2/stub/tags/list'
+            $null = Invoke-Manager $manager upgrade
+            $global:ProxyAgentStub.RegistryUrl | Should -Be 'http://127.0.0.1:1/v2/stub/tags/list'
         }
 
         It 'does nothing on upgrade when already on the latest version' {
@@ -246,7 +260,11 @@ Describe 'proxy-agent-manager.ps1' {
             $null = Invoke-Manager $manager start
             $runArgs = Get-DockerRunArgs
             ($runArgs | Where-Object { $_ -like '*:C:/config:ro' }) | Should -Not -BeNullOrEmpty
-            ($runArgs | Where-Object { $_ -like 'powershell.exe -NoProfile -EncodedCommand *' }) | Should -Not -BeNullOrEmpty
+            $healthCmd = $runArgs | Where-Object { $_ -like 'powershell.exe -NoProfile -EncodedCommand *' }
+            $healthCmd | Should -Not -BeNullOrEmpty
+            $encoded = ($healthCmd -split ' ')[-1]
+            $decoded = [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encoded))
+            $decoded | Should -Match 'HEARTBEAT_EXPIRE_AT'
         }
     }
 }

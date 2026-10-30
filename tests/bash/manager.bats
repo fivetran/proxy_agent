@@ -20,6 +20,7 @@ setup() {
 
     # State shared with the stubs in ./stubs; see the comments there.
     export DOCKER_LOG="$AGENT_DIR/docker.log"
+    export CURL_LOG="$AGENT_DIR/curl.log"
     export DOCKER_LAST_IMAGE="$AGENT_DIR/docker.image"
     export DOCKER_UNHEALTHY_TAG=""
     # Registry tag listing returned by the curl stub.
@@ -80,6 +81,17 @@ last_image() {
     [ "$status" -eq 0 ]
     [ "$(last_image)" = "$IMAGE_REPO:1.2.10-ubuntu-26.04" ]
     [[ "$(cat "$AGENT_DIR/version")" == 1.2.10* ]]
+}
+
+@test "upgrade queries the registry tag listing, or its override" {
+    run manager upgrade
+    [ "$status" -eq 0 ]
+    grep -q "https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list" "$CURL_LOG"
+
+    export PROXY_AGENT_REGISTRY_TAGS_URL="http://127.0.0.1:1/v2/stub/tags/list"
+    run manager upgrade
+    [ "$status" -eq 0 ]
+    grep -q "http://127.0.0.1:1/v2/stub/tags/list" "$CURL_LOG"
 }
 
 @test "upgrade is a no-op when already on the latest version" {
