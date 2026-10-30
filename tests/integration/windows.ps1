@@ -91,6 +91,9 @@ try {
     )
     $ready = $false
     foreach ($attempt in 1..40) {
+        # A server that died on bind (port in use) must not let the readiness
+        # check succeed against some other listener.
+        if ($Server.HasExited) { Fail "stub registry exited; is port $Port in use?" }
         try {
             $null = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/proxy-agent-manager.ps1" -UseBasicParsing -TimeoutSec 2
             $ready = $true

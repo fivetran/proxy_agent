@@ -113,6 +113,8 @@ AfterAll {
 
 Describe 'proxy-agent-manager.ps1' {
     BeforeEach {
+        # A developer's environment must not leak into the default-URL assertion.
+        Remove-Item Env:\PROXY_AGENT_REGISTRY_TAGS_URL -ErrorAction SilentlyContinue
         $global:ProxyAgentStub = @{
             OsType       = 'linux'
             LastImage    = $null
