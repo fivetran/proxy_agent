@@ -21,10 +21,14 @@ $RepoRoot    = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $StubImage   = 'proxy-agent-stub'
 $OldVersion  = '1.2.3'
 $NewVersion  = '1.2.4'
-$AgentId     = 'test-agent'   # matches fixtures\config.json
+$AgentId     = 'test-agent'   # matches the fixtures
 $Container   = "proxy-agent-$AgentId"
 $TempRoot    = Join-Path ([System.IO.Path]::GetTempPath()) "proxy-agent-test-$PID"
 $InstallDir  = Join-Path $TempRoot 'fivetran-proxy-agent'
+$Fixtures    = Join-Path $RepoRoot 'tests\integration\fixtures'
+# Credential the stub configure endpoint accepts: agent_id:auth_token from
+# fixtures\config-websocket.json, base64 encoded as the dashboard does.
+$TokenValue  = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('test-agent:secret'))
 $Server      = $null
 
 function Fail {
@@ -64,11 +68,18 @@ function Assert-VersionFile {
 }
 
 function Invoke-Manager {
-    param([string]$Command)
-    $output = & (Join-Path $InstallDir 'proxy-agent-manager.ps1') $Command *>&1 | Out-String
+    param([string]$Command, [string]$Dir = $InstallDir)
+    $output = & (Join-Path $Dir 'proxy-agent-manager.ps1') $Command *>&1 | Out-String
     Write-Host $output
     if ($LASTEXITCODE -ne 0) { Fail "manager $Command exited with $LASTEXITCODE" }
     return $output
+}
+
+function Assert-ConfigMatches {
+    param([string]$Dir, [string]$Fixture)
+    $expected = Get-Content -LiteralPath (Join-Path $Fixtures $Fixture) -Raw
+    $actual = Get-Content -LiteralPath (Join-Path $Dir 'config\config.json') -Raw
+    if ($actual -ne $expected) { Fail "config.json in $Dir does not match $Fixture" }
 }
 
 try {
@@ -87,7 +98,8 @@ try {
     # Start-Process does not quote arguments, so paths are quoted here.
     $Server = Start-Process -FilePath python -PassThru -NoNewWindow -ArgumentList @(
         "`"$(Join-Path $RepoRoot 'tests\integration\registry_server.py')`"",
-        '--port', $Port, '--root', "`"$RepoRoot`"", '--tags', $tags
+        '--port', $Port, '--root', "`"$RepoRoot`"", '--tags', $tags,
+        '--token', $TokenValue, '--config', "`"$(Join-Path $Fixtures 'config.json')`""
     )
     $ready = $false
     foreach ($attempt in 1..40) {
@@ -109,9 +121,10 @@ try {
     $env:PROXY_AGENT_IMAGE = $StubImage
     $env:PROXY_AGENT_REGISTRY_TAGS_URL = "http://127.0.0.1:$Port/v2/stub/tags/list"
     $env:PROXY_AGENT_SCRIPT_URL = "http://127.0.0.1:$Port/proxy-agent-manager.ps1"
+    $env:FIVETRAN_API_URL = "http://127.0.0.1:$Port"
 
-    Write-Host '== Installing'
-    & (Join-Path $RepoRoot 'install.ps1') (Join-Path $RepoRoot 'tests\integration\fixtures\config.json') -InstallDir $InstallDir
+    Write-Host '== Installing from a config file'
+    & (Join-Path $RepoRoot 'install.ps1') (Join-Path $Fixtures 'config.json') -InstallDir $InstallDir
     if ($LASTEXITCODE -ne 0) { Fail "install.ps1 exited with $LASTEXITCODE" }
     Assert-Image "${StubImage}:$newTag"
     Assert-Healthy
@@ -120,9 +133,7 @@ try {
     if ($settings -notmatch '\$MEMORY_ALLOCATION_MB = 512') { Fail 'settings.ps1 does not record the memory allocation' }
     $memory = [int64](docker inspect -f '{{.HostConfig.Memory}}' $Container).Trim()
     if ($memory -ne 512MB) { Fail "container memory limit not applied (got $memory)" }
-    $expectedConfig = Get-Content -LiteralPath (Join-Path $RepoRoot 'tests\integration\fixtures\config.json') -Raw
-    $actualConfig = Get-Content -LiteralPath (Join-Path $InstallDir 'config\config.json') -Raw
-    if ($actualConfig -ne $expectedConfig) { Fail 'config.json was not copied verbatim' }
+    Assert-ConfigMatches $InstallDir 'config.json'
 
     Write-Host '== status'
     $status = Invoke-Manager status
@@ -153,6 +164,39 @@ try {
     $null = Invoke-Manager stop
     $remaining = docker ps -a --filter "name=$Container" --format '{{.Names}}'
     if ($remaining) { Fail "container still exists after stop: $remaining" }
+
+    Write-Host '== Installing with TOKEN fetches the config from the configure endpoint'
+    $tokenInstallDir = Join-Path $TempRoot 'fivetran-proxy-agent-token'
+    $env:TOKEN = $TokenValue
+    & (Join-Path $RepoRoot 'install.ps1') -InstallDir $tokenInstallDir
+    if ($LASTEXITCODE -ne 0) { Fail "install.ps1 with TOKEN exited with $LASTEXITCODE" }
+    Remove-Item Env:\TOKEN -ErrorAction SilentlyContinue
+    Assert-ConfigMatches $tokenInstallDir 'config.json'
+    Assert-Image "${StubImage}:$newTag"
+    Assert-Healthy
+    $null = Invoke-Manager stop -Dir $tokenInstallDir
+
+    Write-Host '== Installing with a wrong TOKEN fails'
+    $badTokenInstallDir = Join-Path $TempRoot 'fivetran-proxy-agent-bad-token'
+    $env:TOKEN = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('test-agent:wrong'))
+    $badTokenOutput = & (Join-Path $RepoRoot 'install.ps1') -InstallDir $badTokenInstallDir *>&1 | Out-String
+    $badTokenExit = $LASTEXITCODE
+    Remove-Item Env:\TOKEN -ErrorAction SilentlyContinue
+    if ($badTokenExit -eq 0) { Fail 'install.ps1 succeeded with a wrong TOKEN' }
+    if ($badTokenOutput -notmatch 'HTTP 401') { Fail "expected an HTTP 401 error, got: $badTokenOutput" }
+    $badConfig = Join-Path $badTokenInstallDir 'config\config.json'
+    if ((Test-Path -LiteralPath $badConfig) -and (Get-Item -LiteralPath $badConfig).Length -gt 0) {
+        Fail 'config.json was written despite the failed configure call'
+    }
+
+    Write-Host '== Installing from a WebSocket config migrates it through the configure endpoint'
+    $wsInstallDir = Join-Path $TempRoot 'fivetran-proxy-agent-websocket'
+    & (Join-Path $RepoRoot 'install.ps1') (Join-Path $Fixtures 'config-websocket.json') -InstallDir $wsInstallDir
+    if ($LASTEXITCODE -ne 0) { Fail "install.ps1 with a WebSocket config exited with $LASTEXITCODE" }
+    Assert-ConfigMatches $wsInstallDir 'config.json'
+    Assert-Image "${StubImage}:$newTag"
+    Assert-Healthy
+    $null = Invoke-Manager stop -Dir $wsInstallDir
 
     Write-Host 'PASS'
 } finally {

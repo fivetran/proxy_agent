@@ -16,9 +16,14 @@ STUB_IMAGE="proxy-agent-stub"
 SUFFIX="-ubuntu-26.04"
 OLD_VERSION="1.2.3"
 NEW_VERSION="1.2.4"
-AGENT_ID="test-agent"   # matches fixtures/config.json
+AGENT_ID="test-agent"   # matches the fixtures
 CONTAINER="proxy-agent-${AGENT_ID}"
-INSTALL_DIR="$(mktemp -d)/fivetran-proxy-agent"
+TEMP_ROOT="$(mktemp -d)"
+INSTALL_DIR="$TEMP_ROOT/fivetran-proxy-agent"
+FIXTURES="$REPO_ROOT/tests/integration/fixtures"
+# Credential the stub configure endpoint accepts: agent_id:auth_token from
+# fixtures/config-websocket.json, base64 encoded as the dashboard does.
+TOKEN_VALUE="$(printf 'test-agent:secret' | base64 | tr -d '\n')"
 SERVER_PID=""
 
 cleanup() {
@@ -27,7 +32,7 @@ cleanup() {
         wait "$SERVER_PID" 2>/dev/null || true
     fi
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-    rm -rf "$(dirname "$INSTALL_DIR")"
+    rm -rf "$TEMP_ROOT"
 }
 trap cleanup EXIT
 
@@ -68,7 +73,8 @@ done
 
 echo "== Starting stub registry on port $PORT"
 python3 "$REPO_ROOT/tests/integration/registry_server.py" --port "$PORT" --root "$REPO_ROOT" \
-    --tags "$OLD_VERSION,$OLD_VERSION$SUFFIX,$NEW_VERSION,$NEW_VERSION$SUFFIX,$NEW_VERSION-windows-ltsc2022" &
+    --tags "$OLD_VERSION,$OLD_VERSION$SUFFIX,$NEW_VERSION,$NEW_VERSION$SUFFIX,$NEW_VERSION-windows-ltsc2022" \
+    --token "$TOKEN_VALUE" --config "$FIXTURES/config.json" &
 SERVER_PID=$!
 for _ in $(seq 1 40); do
     # The liveness check catches a server that died on bind (port in use), so
@@ -84,9 +90,10 @@ export MEMORY_ALLOCATION_MB=256
 export PROXY_AGENT_IMAGE="$STUB_IMAGE"
 export PROXY_AGENT_REGISTRY_TAGS_URL="http://127.0.0.1:$PORT/v2/stub/tags/list"
 export PROXY_AGENT_SCRIPT_URL="http://127.0.0.1:$PORT/proxy-agent-manager.sh"
+export FIVETRAN_API_URL="http://127.0.0.1:$PORT"
 
-echo "== Installing"
-"$REPO_ROOT/install.sh" "$REPO_ROOT/tests/integration/fixtures/config.json" --install-dir "$INSTALL_DIR"
+echo "== Installing from a config file"
+"$REPO_ROOT/install.sh" "$FIXTURES/config.json" --install-dir "$INSTALL_DIR"
 assert_image "$STUB_IMAGE:$NEW_VERSION$SUFFIX"
 assert_healthy
 assert_version_file "$NEW_VERSION"
@@ -94,7 +101,7 @@ grep -qx "MEMORY_ALLOCATION_MB=256" "$INSTALL_DIR/settings.sh" || fail "settings
 [ "$(docker inspect -f '{{.HostConfig.Memory}}' "$CONTAINER")" = "$((256 * 1024 * 1024))" ] || fail "container memory limit not applied"
 config_mode=$(stat -c %a "$INSTALL_DIR/config/config.json" 2>/dev/null || stat -f %Lp "$INSTALL_DIR/config/config.json")
 [ "$config_mode" = "600" ] || fail "config.json is not mode 600 (got $config_mode)"
-cmp -s "$REPO_ROOT/tests/integration/fixtures/config.json" "$INSTALL_DIR/config/config.json" || fail "config.json was not copied verbatim"
+cmp -s "$FIXTURES/config.json" "$INSTALL_DIR/config/config.json" || fail "config.json was not copied verbatim"
 
 MANAGER="$INSTALL_DIR/proxy-agent-manager.sh"
 
@@ -131,5 +138,29 @@ echo "== stop"
 if docker inspect "$CONTAINER" >/dev/null 2>&1; then
     fail "container still exists after stop"
 fi
+
+echo "== Installing with TOKEN fetches the config from the configure endpoint"
+TOKEN_INSTALL_DIR="$TEMP_ROOT/fivetran-proxy-agent-token"
+TOKEN="$TOKEN_VALUE" "$REPO_ROOT/install.sh" --install-dir "$TOKEN_INSTALL_DIR"
+cmp -s "$FIXTURES/config.json" "$TOKEN_INSTALL_DIR/config/config.json" || fail "config.json does not match the configure endpoint's response"
+assert_image "$STUB_IMAGE:$NEW_VERSION$SUFFIX"
+assert_healthy
+"$TOKEN_INSTALL_DIR/proxy-agent-manager.sh" stop
+
+echo "== Installing with a wrong TOKEN fails"
+BAD_TOKEN_INSTALL_DIR="$TEMP_ROOT/fivetran-proxy-agent-bad-token"
+if bad_token_output=$(TOKEN="$(printf 'test-agent:wrong' | base64 | tr -d '\n')" "$REPO_ROOT/install.sh" --install-dir "$BAD_TOKEN_INSTALL_DIR" 2>&1); then
+    fail "install.sh succeeded with a wrong TOKEN"
+fi
+[[ "$bad_token_output" == *"HTTP 401"* ]] || fail "expected an HTTP 401 error, got: $bad_token_output"
+[ ! -s "$BAD_TOKEN_INSTALL_DIR/config/config.json" ] || fail "config.json was written despite the failed configure call"
+
+echo "== Installing from a WebSocket config migrates it through the configure endpoint"
+WS_INSTALL_DIR="$TEMP_ROOT/fivetran-proxy-agent-websocket"
+"$REPO_ROOT/install.sh" "$FIXTURES/config-websocket.json" --install-dir "$WS_INSTALL_DIR"
+cmp -s "$FIXTURES/config.json" "$WS_INSTALL_DIR/config/config.json" || fail "WebSocket config was not replaced by the configure endpoint's response"
+assert_image "$STUB_IMAGE:$NEW_VERSION$SUFFIX"
+assert_healthy
+"$WS_INSTALL_DIR/proxy-agent-manager.sh" stop
 
 echo "PASS"
