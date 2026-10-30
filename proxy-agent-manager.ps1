@@ -171,9 +171,13 @@ function Get-LatestVersion {
         [string]$WindowsVersion
     )
 
-    $registryHost   = $IMAGE.Split('/')[0]
-    $repositoryPath = $IMAGE.Substring($registryHost.Length + 1)
-    $registryUrl    = if ($env:PROXY_AGENT_REGISTRY_TAGS_URL) { $env:PROXY_AGENT_REGISTRY_TAGS_URL } else { "https://$registryHost/v2/$repositoryPath/tags/list" }
+    if ($env:PROXY_AGENT_REGISTRY_TAGS_URL) {
+        $registryUrl = $env:PROXY_AGENT_REGISTRY_TAGS_URL
+    } else {
+        $registryHost   = $IMAGE.Split('/')[0]
+        $repositoryPath = $IMAGE.Substring($registryHost.Length + 1)
+        $registryUrl    = "https://$registryHost/v2/$repositoryPath/tags/list"
+    }
 
     try {
         $tagsJson = Invoke-RestMethod -Uri $registryUrl -Method Get

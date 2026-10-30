@@ -140,7 +140,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 CI (`.github/workflows/ci.yml`) runs on every pull request:
 
-- `shellcheck` on the shell scripts.
+- `shellcheck` on the shell scripts and PSScriptAnalyzer (settings in `PSScriptAnalyzerSettings.psd1`) on the PowerShell scripts.
 - Unit tests for the management scripts: `tests/bash/manager.bats` (bats) and `tests/pwsh/Manager.Tests.ps1` (Pester 5 under Windows PowerShell 5.1). Both run the script with stubbed `docker` and registry calls, so they need no Docker daemon.
 - Integration tests that run the installer and management script against a real Docker daemon: `tests/integration/linux.sh` on Ubuntu, and `tests/integration/windows.ps1` on Windows Server 2022 and 2025 with Windows containers. They use a stub agent image (`tests/stub/`) that only writes the heartbeat file, and a local stand-in for the registry and the script download (`tests/integration/registry_server.py`), so they need no Fivetran credentials.
 

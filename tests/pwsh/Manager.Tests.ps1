@@ -41,172 +41,178 @@ BeforeAll {
         param([string]$Manager, [string]$Command)
         return (& $Manager $Command *>&1 | Out-String)
     }
+
+    function Get-DockerRunArgs {
+        return ($script:DockerCalls | Where-Object { $_[0] -eq 'run' })[0]
+    }
 }
 
-BeforeEach {
-    # Mock state. LastImage is $null while no container "runs" and otherwise
-    # holds the image the container was started from.
-    $script:OsType = 'linux'
-    $script:LastImage = $null
-    $script:UnhealthyTag = $null
-    $script:DockerCalls = @()
-    $script:Tags = @('1.2.9-ubuntu-26.04', '1.2.10-ubuntu-26.04', '1.2.11', '1.2.10-windows-ltsc2022', '1.2.10-windows-ltsc2025')
+Describe 'proxy-agent-manager.ps1' {
+    BeforeEach {
+        # Mock state. LastImage is $null while no container "runs" and
+        # otherwise holds the image the container was started from.
+        $script:OsType = 'linux'
+        $script:LastImage = $null
+        $script:UnhealthyTag = $null
+        $script:DockerCalls = @()
+        $script:Tags = @('1.2.9-ubuntu-26.04', '1.2.10-ubuntu-26.04', '1.2.11', '1.2.10-windows-ltsc2022', '1.2.10-windows-ltsc2025')
 
-    Mock docker {
-        $script:DockerCalls += ,@($args)
-        $global:LASTEXITCODE = 0
-        switch ($args[0]) {
-            'info' { return $script:OsType }
-            'run' {
-                $script:LastImage = $args | Where-Object { $_ -like "*proxy-agent:*" } | Select-Object -First 1
-                return 'container-id'
-            }
-            'inspect' {
-                if (-not $script:LastImage) {
-                    $global:LASTEXITCODE = 1
-                    return
+        Mock docker {
+            $script:DockerCalls += ,@($args)
+            $global:LASTEXITCODE = 0
+            switch ($args[0]) {
+                'info' { return $script:OsType }
+                'run' {
+                    $script:LastImage = $args | Where-Object { $_ -like "*proxy-agent:*" } | Select-Object -First 1
+                    return 'container-id'
                 }
-                if ($args[1] -eq '-f') {
-                    if ($script:UnhealthyTag -and $script:LastImage -like "*$($script:UnhealthyTag)*") { return 'unhealthy' }
-                    return 'healthy'
+                'inspect' {
+                    if (-not $script:LastImage) {
+                        $global:LASTEXITCODE = 1
+                        return
+                    }
+                    if ($args[1] -eq '-f') {
+                        if ($script:UnhealthyTag -and $script:LastImage -like "*$($script:UnhealthyTag)*") { return 'unhealthy' }
+                        return 'healthy'
+                    }
                 }
+                { $_ -in 'stop', 'rm' } { $script:LastImage = $null }
+                'ps' { return 'NAMES IMAGE STATUS' }
             }
-            { $_ -in 'stop', 'rm' } { $script:LastImage = $null }
-            'ps' { return 'NAMES IMAGE STATUS' }
+        }
+        Mock Invoke-RestMethod { return [pscustomobject]@{ tags = $script:Tags } }
+        if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+            Mock Get-CimInstance { return [pscustomobject]@{ ProductType = 3; BuildNumber = 20348; Caption = 'Windows Server 2022' } }
         }
     }
-    Mock Invoke-RestMethod { return [pscustomobject]@{ tags = $script:Tags } }
-    if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
-        Mock Get-CimInstance { return [pscustomobject]@{ ProductType = 3; BuildNumber = 20348; Caption = 'Windows Server 2022' } }
-    }
-}
 
-AfterEach {
-    if ($script:AgentDir -and (Test-Path -LiteralPath $script:AgentDir)) {
-        Remove-Item -LiteralPath $script:AgentDir -Recurse -Force
-    }
-}
-
-Describe 'proxy-agent-manager.ps1 with Linux containers' {
-    It 'starts the pinned Ubuntu image with the default memory limit' {
-        $manager = New-AgentDir
-        $null = Invoke-Manager $manager start
-        $LASTEXITCODE | Should -Be 0
-        $script:LastImage | Should -Be "$($script:Image):1.2.9-ubuntu-26.04"
-        ($script:DockerCalls | Where-Object { $_[0] -eq 'run' })[0] | Should -Contain '--memory=5120m'
+    AfterEach {
+        if ($script:AgentDir -and (Test-Path -LiteralPath $script:AgentDir)) {
+            Remove-Item -LiteralPath $script:AgentDir -Recurse -Force
+        }
     }
 
-    It 'honors MEMORY_ALLOCATION_MB from settings.ps1' {
-        $manager = New-AgentDir -Settings '$MEMORY_ALLOCATION_MB = 2048'
-        $null = Invoke-Manager $manager start
-        ($script:DockerCalls | Where-Object { $_[0] -eq 'run' })[0] | Should -Contain '--memory=2048m'
+    Context 'with Linux containers' {
+        It 'starts the pinned Ubuntu image with the default memory limit' {
+            $manager = New-AgentDir
+            $null = Invoke-Manager $manager start
+            $LASTEXITCODE | Should -Be 0
+            $script:LastImage | Should -Be "$($script:Image):1.2.9-ubuntu-26.04"
+            Get-DockerRunArgs | Should -Contain '--memory=5120m'
+        }
+
+        It 'honors MEMORY_ALLOCATION_MB from settings.ps1' {
+            $manager = New-AgentDir -Settings '$MEMORY_ALLOCATION_MB = 2048'
+            $null = Invoke-Manager $manager start
+            Get-DockerRunArgs | Should -Contain '--memory=2048m'
+        }
+
+        It 'labels the container with the agent id' {
+            $manager = New-AgentDir
+            $null = Invoke-Manager $manager start
+            $runArgs = Get-DockerRunArgs
+            $runArgs | Should -Contain 'proxy-agent-abc123'
+            $runArgs | Should -Contain 'proxy_agent_id=abc123'
+        }
+
+        It 'fails when the config file is missing' {
+            $manager = New-AgentDir
+            Remove-Item -LiteralPath (Join-Path $script:AgentDir 'config\config.json')
+            $output = Invoke-Manager $manager start
+            $LASTEXITCODE | Should -Be 1
+            $output | Should -Match 'Config file not found'
+        }
+
+        It 'fails when the version file is empty' {
+            $manager = New-AgentDir -Version ''
+            $output = Invoke-Manager $manager start
+            $LASTEXITCODE | Should -Be 1
+            $output | Should -Match 'is empty'
+        }
+
+        It 'refuses a Windows image tag' {
+            $manager = New-AgentDir -Version '1.2.9-windows-ltsc2022'
+            { & $manager start } | Should -Throw '*Windows containers*'
+        }
+
+        It 'upgrades to the newest Ubuntu tag and ignores bare and Windows tags' {
+            $manager = New-AgentDir
+            $null = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 0
+            $script:LastImage | Should -Be "$($script:Image):1.2.10-ubuntu-26.04"
+            Get-VersionFile | Should -BeLike '1.2.10*'
+        }
+
+        It 'does nothing on upgrade when already on the latest version' {
+            $script:Tags = @('1.2.9-ubuntu-26.04', '1.2.11')
+            $manager = New-AgentDir
+            $output = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 0
+            $output | Should -Match 'Already running the latest version'
+            $script:DockerCalls | Where-Object { $_[0] -eq 'run' } | Should -BeNullOrEmpty
+        }
+
+        It 'rolls back when the upgraded container is unhealthy' {
+            $script:UnhealthyTag = '1.2.10'
+            $manager = New-AgentDir
+            $output = Invoke-Manager $manager upgrade
+            $output | Should -Match 'rolling back'
+            $script:LastImage | Should -Be "$($script:Image):1.2.9-ubuntu-26.04"
+            Get-VersionFile | Should -BeLike '1.2.9*'
+        }
+
+        It 'rejects an invalid version file entry on upgrade' {
+            $manager = New-AgentDir -Version '2.0'
+            { & $manager upgrade } | Should -Throw '*Invalid*'
+        }
+
+        It 'removes the running container on stop' {
+            $manager = New-AgentDir
+            $null = Invoke-Manager $manager start
+            $null = Invoke-Manager $manager stop
+            $LASTEXITCODE | Should -Be 0
+            $script:LastImage | Should -BeNullOrEmpty
+            ($script:DockerCalls | Where-Object { $_[0] -eq 'rm' })[0] | Should -Contain 'proxy-agent-abc123'
+        }
     }
 
-    It 'labels the container with the agent id' {
-        $manager = New-AgentDir
-        $null = Invoke-Manager $manager start
-        $runArgs = ($script:DockerCalls | Where-Object { $_[0] -eq 'run' })[0]
-        $runArgs | Should -Contain 'proxy-agent-abc123'
-        $runArgs | Should -Contain 'proxy_agent_id=abc123'
-    }
+    Context 'with Windows containers' -Skip:(-not (Get-Command Get-CimInstance -ErrorAction SilentlyContinue)) {
+        BeforeEach {
+            $script:OsType = 'windows'
+        }
 
-    It 'fails when the config file is missing' {
-        $manager = New-AgentDir
-        Remove-Item -LiteralPath (Join-Path $script:AgentDir 'config\config.json')
-        $output = Invoke-Manager $manager start
-        $LASTEXITCODE | Should -Be 1
-        $output | Should -Match 'Config file not found'
-    }
+        It 'starts the image for the detected LTSC version from a plain version' {
+            $manager = New-AgentDir -Version '1.2.9'
+            $null = Invoke-Manager $manager start
+            $LASTEXITCODE | Should -Be 0
+            $script:LastImage | Should -Be "$($script:Image):1.2.9-windows-ltsc2022"
+        }
 
-    It 'fails when the version file is empty' {
-        $manager = New-AgentDir -Version ''
-        $output = Invoke-Manager $manager start
-        $LASTEXITCODE | Should -Be 1
-        $output | Should -Match 'is empty'
-    }
+        It 'starts a pinned Windows image tag as is' {
+            $manager = New-AgentDir -Version '1.2.9-windows-ltsc2025'
+            $null = Invoke-Manager $manager start
+            $script:LastImage | Should -Be "$($script:Image):1.2.9-windows-ltsc2025"
+        }
 
-    It 'refuses a Windows image tag' {
-        $manager = New-AgentDir -Version '1.2.9-windows-ltsc2022'
-        { & $manager start } | Should -Throw '*Windows containers*'
-    }
+        It 'refuses an Ubuntu image tag' {
+            $manager = New-AgentDir -Version '1.2.9-ubuntu-26.04'
+            { & $manager start } | Should -Throw '*Linux containers*'
+        }
 
-    It 'upgrades to the newest Ubuntu tag and ignores bare and Windows tags' {
-        $manager = New-AgentDir
-        $null = Invoke-Manager $manager upgrade
-        $LASTEXITCODE | Should -Be 0
-        $script:LastImage | Should -Be "$($script:Image):1.2.10-ubuntu-26.04"
-        Get-VersionFile | Should -BeLike '1.2.10*'
-    }
+        It 'upgrades to the newest tag for the same LTSC version only' {
+            $manager = New-AgentDir -Version '1.2.9-windows-ltsc2022'
+            $null = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 0
+            $script:LastImage | Should -Be "$($script:Image):1.2.10-windows-ltsc2022"
+            Get-VersionFile | Should -BeLike '1.2.10*'
+        }
 
-    It 'does nothing on upgrade when already on the latest version' {
-        $script:Tags = @('1.2.9-ubuntu-26.04', '1.2.11')
-        $manager = New-AgentDir
-        $output = Invoke-Manager $manager upgrade
-        $LASTEXITCODE | Should -Be 0
-        $output | Should -Match 'Already running the latest version'
-        $script:DockerCalls | Where-Object { $_[0] -eq 'run' } | Should -BeNullOrEmpty
-    }
-
-    It 'rolls back when the upgraded container is unhealthy' {
-        $script:UnhealthyTag = '1.2.10'
-        $manager = New-AgentDir
-        $output = Invoke-Manager $manager upgrade
-        $output | Should -Match 'rolling back'
-        $script:LastImage | Should -Be "$($script:Image):1.2.9-ubuntu-26.04"
-        Get-VersionFile | Should -BeLike '1.2.9*'
-    }
-
-    It 'rejects an invalid version file entry on upgrade' {
-        $manager = New-AgentDir -Version '2.0'
-        { & $manager upgrade } | Should -Throw '*Invalid*'
-    }
-
-    It 'removes the running container on stop' {
-        $manager = New-AgentDir
-        $null = Invoke-Manager $manager start
-        $null = Invoke-Manager $manager stop
-        $LASTEXITCODE | Should -Be 0
-        $script:LastImage | Should -BeNullOrEmpty
-        ($script:DockerCalls | Where-Object { $_[0] -eq 'rm' })[0] | Should -Contain 'proxy-agent-abc123'
-    }
-}
-
-Describe 'proxy-agent-manager.ps1 with Windows containers' -Skip:(-not (Get-Command Get-CimInstance -ErrorAction SilentlyContinue)) {
-    BeforeEach {
-        $script:OsType = 'windows'
-    }
-
-    It 'starts the image for the detected LTSC version from a plain version' {
-        $manager = New-AgentDir -Version '1.2.9'
-        $null = Invoke-Manager $manager start
-        $LASTEXITCODE | Should -Be 0
-        $script:LastImage | Should -Be "$($script:Image):1.2.9-windows-ltsc2022"
-    }
-
-    It 'starts a pinned Windows image tag as is' {
-        $manager = New-AgentDir -Version '1.2.9-windows-ltsc2025'
-        $null = Invoke-Manager $manager start
-        $script:LastImage | Should -Be "$($script:Image):1.2.9-windows-ltsc2025"
-    }
-
-    It 'refuses an Ubuntu image tag' {
-        $manager = New-AgentDir -Version '1.2.9-ubuntu-26.04'
-        { & $manager start } | Should -Throw '*Linux containers*'
-    }
-
-    It 'upgrades to the newest tag for the same LTSC version only' {
-        $manager = New-AgentDir -Version '1.2.9-windows-ltsc2022'
-        $null = Invoke-Manager $manager upgrade
-        $LASTEXITCODE | Should -Be 0
-        $script:LastImage | Should -Be "$($script:Image):1.2.10-windows-ltsc2022"
-        Get-VersionFile | Should -BeLike '1.2.10*'
-    }
-
-    It 'mounts the config directory and uses the Windows health check' {
-        $manager = New-AgentDir -Version '1.2.9'
-        $null = Invoke-Manager $manager start
-        $runArgs = ($script:DockerCalls | Where-Object { $_[0] -eq 'run' })[0]
-        ($runArgs | Where-Object { $_ -like '*:C:/config:ro' }) | Should -Not -BeNullOrEmpty
-        ($runArgs | Where-Object { $_ -like 'powershell.exe -NoProfile -EncodedCommand *' }) | Should -Not -BeNullOrEmpty
+        It 'mounts the config directory and uses the Windows health check' {
+            $manager = New-AgentDir -Version '1.2.9'
+            $null = Invoke-Manager $manager start
+            $runArgs = Get-DockerRunArgs
+            ($runArgs | Where-Object { $_ -like '*:C:/config:ro' }) | Should -Not -BeNullOrEmpty
+            ($runArgs | Where-Object { $_ -like 'powershell.exe -NoProfile -EncodedCommand *' }) | Should -Not -BeNullOrEmpty
+        }
     }
 }
