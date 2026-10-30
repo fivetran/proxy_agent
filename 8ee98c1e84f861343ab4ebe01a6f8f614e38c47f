@@ -1,0 +1,31 @@
+install.ps1
+  9b9d1fbb9abcb60e 222,241,344-350
+proxy-agent-manager.ps1
+  9b9d1fbb9abcb60e 16-17,19-20,25,60-61,110-112,115-116,119,122-138,140-143,146,148-150,154,156,159-163,201,206,220,223,268,281,333-334,336,340,348-349,351-353,357-358,360-365,371-372
+proxy-agent-manager.sh
+  9b9d1fbb9abcb60e 12-13,41-42,75,81-82,90,94-101,110-111,116,119,157,189-190,193,209
+README.md
+  9b9d1fbb9abcb60e 64,66
+install.sh
+  9b9d1fbb9abcb60e 230
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "8ee98c1e84f861343ab4ebe01a6f8f614e38c47f",
+  "prompts": {
+    "9b9d1fbb9abcb60e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "248b8c38-c176-4a0d-9679-0cd10da7b072",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Paul Harper <paul.harper@fivetran.com>",
+      "messages": [],
+      "total_additions": 110,
+      "total_deletions": 106,
+      "accepted_lines": 109,
+      "overriden_lines": 0
+    }
+  }
+}
