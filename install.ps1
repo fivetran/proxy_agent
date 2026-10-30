@@ -25,7 +25,9 @@ $DEFAULT_CONTAINER_MEMORY_MB            = 5120  # default memory (5GB) allocated
 $MIN_RECOMMENDED_CONTAINER_MEMORY_MB    = 5120  # proxy agent container should get at least 5GB
 $HOST_RESERVED_MEMORY_MB                = 3072  # leave at least this much RAM for the host on Windows
 $MIN_RECOMMENDED_DISK_SPACE_MB          = 2048
-$MIN_RECOMMENDED_WINDOWS_DISK_SPACE_MB  = 12288  # Windows Server Core based images need more space to pull and upgrade
+# Docker storage for Windows Server Core based images: about 7 GB unpacked, up to 3 GB while pulling, and up to 2 GB
+# for a new base image on upgrade. Sized from the 1.2.9 images (fivetran/engineering#330090); revisit when the image changes.
+$MIN_RECOMMENDED_WINDOWS_DISK_SPACE_MB  = 12288
 $AGENT_SCRIPT                           = 'proxy-agent-manager.ps1'
 $AGENT_SCRIPT_URL                       = 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1'
 $REGISTRY_TAGS_URL                      = 'https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list'
@@ -149,11 +151,25 @@ function Test-DiskSpace {
         $drive       = Get-PSDrive ($qualifier.TrimEnd(':'))
         $freeSpaceMB = [math]::Round($drive.Free / 1MB)
         if ($freeSpaceMB -lt $MinimumMB) {
-            $script:Warnings.Add("Available disk space (${freeSpaceMB}MB) is below the recommended minimum of ${MinimumMB}MB")
+            $script:Warnings.Add("Available disk space on drive $qualifier (${freeSpaceMB}MB) is below the recommended minimum of ${MinimumMB}MB")
         }
     } catch {
         $script:Warnings.Add("Unable to determine available disk space for $parentDir")
     }
+}
+
+function Get-DockerRootDir {
+    $rootDirOutput = docker info --format '{{.DockerRootDir}}' 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        return $null
+    }
+
+    $rootDir = ([string]$rootDirOutput).Trim()
+    if (-not $rootDir) {
+        return $null
+    }
+
+    return $rootDir
 }
 
 function Show-WarningsAndErrors {
@@ -309,8 +325,18 @@ try {
         $script:Errors.Add("-WindowsVersion can only be used when Docker is running Windows containers")
     }
     Test-Resources $memoryMB
-    $minimumDiskSpaceMB = if ($containerOsType -eq 'windows') { $MIN_RECOMMENDED_WINDOWS_DISK_SPACE_MB } else { $MIN_RECOMMENDED_DISK_SPACE_MB }
-    Test-DiskSpace $InstallDir $minimumDiskSpaceMB
+    if ($containerOsType -eq 'windows') {
+        # Images are stored in Docker's data root, which may be on a different drive than the install directory.
+        $dockerRootDir = Get-DockerRootDir
+        if ($dockerRootDir) {
+            Test-DiskSpace $dockerRootDir $MIN_RECOMMENDED_WINDOWS_DISK_SPACE_MB
+        } else {
+            $script:Warnings.Add("Unable to determine Docker's data root; checking disk space for $InstallDir instead")
+            Test-DiskSpace $InstallDir $MIN_RECOMMENDED_WINDOWS_DISK_SPACE_MB
+        }
+    } else {
+        Test-DiskSpace $InstallDir $MIN_RECOMMENDED_DISK_SPACE_MB
+    }
 
     if ($script:Warnings.Count -eq 0 -and $script:Errors.Count -eq 0) {
         Write-Host "OK`n"
