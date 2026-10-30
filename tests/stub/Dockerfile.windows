@@ -1,0 +1,8 @@
+# Stub proxy agent image for the Windows-container integration tests. It only
+# writes the heartbeat file the management script's health check reads.
+# servercore is required because the health check runs powershell.exe inside
+# the container. BASE_TAG must match the host's LTSC version.
+ARG BASE_TAG=ltsc2022
+FROM mcr.microsoft.com/windows/servercore:${BASE_TAG}
+COPY heartbeat.ps1 C:/heartbeat.ps1
+ENTRYPOINT ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:/heartbeat.ps1"]

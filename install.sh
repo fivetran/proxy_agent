@@ -50,8 +50,10 @@ MIN_RECOMMENDED_CONTAINER_MEMORY_MB=5120  # proxy agent container should get at 
 HOST_RESERVED_MEMORY_MB=1024  # leave at least this much RAM for the host on Linux
 MIN_RECOMMENDED_DISK_SPACE_MB=2048
 AGENT_SCRIPT="proxy-agent-manager.sh"
-AGENT_SCRIPT_URL="https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh"
-REGISTRY_TAGS_URL="https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list"
+# PROXY_AGENT_SCRIPT_URL and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
+# test suite can install the checked-out management script against a stub registry.
+AGENT_SCRIPT_URL="${PROXY_AGENT_SCRIPT_URL:-https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh}"
+REGISTRY_TAGS_URL="${PROXY_AGENT_REGISTRY_TAGS_URL:-https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list}"
 SETTINGS_FILE="settings.sh"
 
 WARNINGS=()
