@@ -1,0 +1,23 @@
+tests/pwsh/Manager.Tests.ps1
+  b9550b6eaf3aae30 117-119,132-133,276-340
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "186cc62faaf8fcbe498ecb136e171e98cba6e162",
+  "prompts": {
+    "b9550b6eaf3aae30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bb5b2079-a3e8-478c-816e-c29e09f475d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Paul Harper <paul.harper@fivetran.com>",
+      "messages": [],
+      "total_additions": 70,
+      "total_deletions": 3,
+      "accepted_lines": 70,
+      "overriden_lines": 0
+    }
+  }
+}
