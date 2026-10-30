@@ -8,11 +8,12 @@ on:
 permissions:
   contents: read
 
-# A new push cancels the previous run of the same branch, which otherwise
-# keeps two Windows runners busy for up to 45 minutes.
+# A new push to a pull request cancels its previous run, which otherwise keeps
+# two Windows runners busy for up to 45 minutes. Runs on main are never
+# cancelled so every merged commit gets a full result.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   shellcheck:
@@ -91,6 +92,9 @@ jobs:
         # The Docker service is not always running when a Windows job starts.
         shell: powershell
         run: |
+          # The default 'Stop' preference would turn docker's stderr into a
+          # terminating error on the first failed attempt.
+          $ErrorActionPreference = 'Continue'
           $service = Get-Service docker -ErrorAction SilentlyContinue
           if ($service -and $service.Status -ne 'Running') { Start-Service docker }
           foreach ($attempt in 1..30) {
