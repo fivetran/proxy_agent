@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck --severity=warning install.sh proxy-agent-manager.sh tests/integration/linux.sh tests/stub/heartbeat.sh
+      - run: shellcheck --severity=warning install.sh proxy-agent-manager.sh tests/integration/linux.sh tests/stub/heartbeat.sh tests/bash/stubs/docker tests/bash/stubs/curl
 
   psscriptanalyzer:
     runs-on: ubuntu-latest

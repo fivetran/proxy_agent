@@ -5,9 +5,11 @@ Integration test for install.ps1 and proxy-agent-manager.ps1 with Windows
 containers on a real Docker daemon.
 
 .DESCRIPTION
-Uses a stub agent image built for the host's LTSC version and a local stand-in
-for the registry and the script download, so it needs no Fivetran credentials
-or network access beyond pulling the servercore base image.
+Uses a stub agent image built here (tests\stub) for the host's LTSC version and
+a local stand-in for the registry and the script download, so it needs no
+Fivetran credentials and never contacts the real registry; the versions below
+are fixtures. The only network access is pulling the stub's servercore base
+image.
 #>
 param(
     [int]$Port = 8181

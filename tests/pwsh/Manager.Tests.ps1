@@ -18,7 +18,10 @@ param()
 
 BeforeAll {
     $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-    $script:Image = 'us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent'
+    # The repository the manager hardcodes; only used to build expected image
+    # strings. The docker stub never pulls anything and the tag list below is
+    # a fixture, so these tests do not depend on what is published.
+    $script:ImageRepo = 'us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent'
 
     # Creates an installation directory with the management script, a config
     # file and the given version file content, and returns the manager's path.
@@ -128,7 +131,7 @@ Describe 'proxy-agent-manager.ps1' {
             $manager = New-AgentDir
             $null = Invoke-Manager $manager start
             $LASTEXITCODE | Should -Be 0
-            $global:ProxyAgentStub.LastImage | Should -Be "$($script:Image):1.2.9-ubuntu-26.04"
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-ubuntu-26.04"
             Get-DockerRunArgs | Should -Contain '--memory=5120m'
         }
 
@@ -170,7 +173,7 @@ Describe 'proxy-agent-manager.ps1' {
             $manager = New-AgentDir
             $null = Invoke-Manager $manager upgrade
             $LASTEXITCODE | Should -Be 0
-            $global:ProxyAgentStub.LastImage | Should -Be "$($script:Image):1.2.10-ubuntu-26.04"
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.10-ubuntu-26.04"
             Get-VersionFile | Should -BeLike '1.2.10*'
         }
 
@@ -188,7 +191,7 @@ Describe 'proxy-agent-manager.ps1' {
             $manager = New-AgentDir
             $output = Invoke-Manager $manager upgrade
             $output | Should -Match 'rolling back'
-            $global:ProxyAgentStub.LastImage | Should -Be "$($script:Image):1.2.9-ubuntu-26.04"
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-ubuntu-26.04"
             Get-VersionFile | Should -BeLike '1.2.9*'
         }
 
@@ -216,13 +219,13 @@ Describe 'proxy-agent-manager.ps1' {
             $manager = New-AgentDir -Version '1.2.9'
             $null = Invoke-Manager $manager start
             $LASTEXITCODE | Should -Be 0
-            $global:ProxyAgentStub.LastImage | Should -Be "$($script:Image):1.2.9-windows-ltsc2022"
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-windows-ltsc2022"
         }
 
         It 'starts a pinned Windows image tag as is' {
             $manager = New-AgentDir -Version '1.2.9-windows-ltsc2025'
             $null = Invoke-Manager $manager start
-            $global:ProxyAgentStub.LastImage | Should -Be "$($script:Image):1.2.9-windows-ltsc2025"
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-windows-ltsc2025"
         }
 
         It 'refuses an Ubuntu image tag' {
@@ -234,7 +237,7 @@ Describe 'proxy-agent-manager.ps1' {
             $manager = New-AgentDir -Version '1.2.9-windows-ltsc2022'
             $null = Invoke-Manager $manager upgrade
             $LASTEXITCODE | Should -Be 0
-            $global:ProxyAgentStub.LastImage | Should -Be "$($script:Image):1.2.10-windows-ltsc2022"
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.10-windows-ltsc2022"
             Get-VersionFile | Should -BeLike '1.2.10*'
         }
 
