@@ -71,6 +71,19 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: Wait for the Docker daemon
+        # The Docker service is not always running when a Windows job starts.
+        shell: powershell
+        run: |
+          $service = Get-Service docker -ErrorAction SilentlyContinue
+          if ($service -and $service.Status -ne 'Running') { Start-Service docker }
+          foreach ($attempt in 1..30) {
+            docker info *> $null
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Start-Sleep -Seconds 2
+          }
+          docker info
+          exit 1
       - name: Run integration test
         shell: powershell
         run: tests/integration/windows.ps1
