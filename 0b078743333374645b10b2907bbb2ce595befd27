@@ -1,0 +1,31 @@
+tests/integration/registry_server.py
+  9b9d1fbb9abcb60e 2,4-11,16-18,26-27,30,36-37,41-42,45,49-56
+tests/integration/windows.ps1
+  9b9d1fbb9abcb60e 24,28-31,71-72,78-82,101-102,124,126-127,136,168-200
+README.md
+  9b9d1fbb9abcb60e 145
+tests/integration/linux.sh
+  9b9d1fbb9abcb60e 19,21-26,35,76-77,93,95-96,104,142-165
+tests/integration/fixtures/config-websocket.json
+  9b9d1fbb9abcb60e 1-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "0b078743333374645b10b2907bbb2ce595befd27",
+  "prompts": {
+    "9b9d1fbb9abcb60e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "248b8c38-c176-4a0d-9679-0cd10da7b072",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Paul Harper <paul.harper@fivetran.com>",
+      "messages": [],
+      "total_additions": 130,
+      "total_deletions": 29,
+      "accepted_lines": 127,
+      "overriden_lines": 0
+    }
+  }
+}
