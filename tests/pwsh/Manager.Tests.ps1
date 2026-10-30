@@ -7,8 +7,11 @@ Unit tests for proxy-agent-manager.ps1.
 The script is run as a black box with docker, Invoke-RestMethod and
 Get-CimInstance replaced by functions, so no Docker daemon is needed. Functions
 defined in BeforeAll shadow the real commands for the invoked script because it
-runs in a child scope. Plain functions are used instead of Pester mocks so the
-stubs can read $args and share $script: state with the tests.
+runs in a child scope.
+
+The stubs keep their state in $global:ProxyAgentStub. PowerShell scopes
+dynamically, so inside a stub called from the manager script $script: refers to
+the manager's scope, not this file's; only a global is visible to both.
 #>
 
 BeforeAll {
@@ -45,39 +48,40 @@ BeforeAll {
     }
 
     function Get-DockerRunArgs {
-        return ($script:DockerCalls | Where-Object { $_[0] -eq 'run' })[0]
+        return ($global:ProxyAgentStub.DockerCalls | Where-Object { $_[0] -eq 'run' })[0]
     }
 
     # Stand-in for the docker CLI. Records every call and keeps one container's
     # worth of state: LastImage is $null while no container "runs" and
     # otherwise holds the image it was started from.
     function docker {
-        $script:DockerCalls += ,@($args)
+        $stub = $global:ProxyAgentStub
+        $stub.DockerCalls += ,@($args)
         $global:LASTEXITCODE = 0
         switch ($args[0]) {
-            'info' { return $script:OsType }
+            'info' { return $stub.OsType }
             'run' {
-                $script:LastImage = $args | Where-Object { $_ -like "*proxy-agent:*" } | Select-Object -First 1
+                $stub.LastImage = $args | Where-Object { $_ -like "*proxy-agent:*" } | Select-Object -First 1
                 return 'container-id'
             }
             'inspect' {
-                if (-not $script:LastImage) {
+                if (-not $stub.LastImage) {
                     $global:LASTEXITCODE = 1
                     return
                 }
                 if ($args[1] -eq '-f') {
-                    if ($script:UnhealthyTag -and $script:LastImage -like "*$($script:UnhealthyTag)*") { return 'unhealthy' }
+                    if ($stub.UnhealthyTag -and $stub.LastImage -like "*$($stub.UnhealthyTag)*") { return 'unhealthy' }
                     return 'healthy'
                 }
             }
-            { $_ -in 'stop', 'rm' } { $script:LastImage = $null }
+            { $_ -in 'stop', 'rm' } { $stub.LastImage = $null }
             'ps' { return 'NAMES IMAGE STATUS' }
         }
     }
 
     # Stand-in for the registry tag listing.
     function Invoke-RestMethod {
-        return [pscustomobject]@{ tags = $script:Tags }
+        return [pscustomobject]@{ tags = $global:ProxyAgentStub.Tags }
     }
 
     # Stand-in for the host OS lookup, reporting Windows Server 2022.
@@ -86,13 +90,19 @@ BeforeAll {
     }
 }
 
+AfterAll {
+    Remove-Variable -Name ProxyAgentStub -Scope Global -ErrorAction SilentlyContinue
+}
+
 Describe 'proxy-agent-manager.ps1' {
     BeforeEach {
-        $script:OsType = 'linux'
-        $script:LastImage = $null
-        $script:UnhealthyTag = $null
-        $script:DockerCalls = @()
-        $script:Tags = @('1.2.9-ubuntu-26.04', '1.2.10-ubuntu-26.04', '1.2.11', '1.2.10-windows-ltsc2022', '1.2.10-windows-ltsc2025')
+        $global:ProxyAgentStub = @{
+            OsType       = 'linux'
+            LastImage    = $null
+            UnhealthyTag = $null
+            DockerCalls  = @()
+            Tags         = @('1.2.9-ubuntu-26.04', '1.2.10-ubuntu-26.04', '1.2.11', '1.2.10-windows-ltsc2022', '1.2.10-windows-ltsc2025')
+        }
     }
 
     AfterEach {
@@ -106,7 +116,7 @@ Describe 'proxy-agent-manager.ps1' {
             $manager = New-AgentDir
             $null = Invoke-Manager $manager start
             $LASTEXITCODE | Should -Be 0
-            $script:LastImage | Should -Be "$($script:Image):1.2.9-ubuntu-26.04"
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:Image):1.2.9-ubuntu-26.04"
             Get-DockerRunArgs | Should -Contain '--memory=5120m'
         }
 
@@ -148,25 +158,25 @@ Describe 'proxy-agent-manager.ps1' {
             $manager = New-AgentDir
             $null = Invoke-Manager $manager upgrade
             $LASTEXITCODE | Should -Be 0
-            $script:LastImage | Should -Be "$($script:Image):1.2.10-ubuntu-26.04"
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:Image):1.2.10-ubuntu-26.04"
             Get-VersionFile | Should -BeLike '1.2.10*'
         }
 
         It 'does nothing on upgrade when already on the latest version' {
-            $script:Tags = @('1.2.9-ubuntu-26.04', '1.2.11')
+            $global:ProxyAgentStub.Tags = @('1.2.9-ubuntu-26.04', '1.2.11')
             $manager = New-AgentDir
             $output = Invoke-Manager $manager upgrade
             $LASTEXITCODE | Should -Be 0
             $output | Should -Match 'Already running the latest version'
-            $script:DockerCalls | Where-Object { $_[0] -eq 'run' } | Should -BeNullOrEmpty
+            Get-DockerRunArgs | Should -BeNullOrEmpty
         }
 
         It 'rolls back when the upgraded container is unhealthy' {
-            $script:UnhealthyTag = '1.2.10'
+            $global:ProxyAgentStub.UnhealthyTag = '1.2.10'
             $manager = New-AgentDir
             $output = Invoke-Manager $manager upgrade
             $output | Should -Match 'rolling back'
-            $script:LastImage | Should -Be "$($script:Image):1.2.9-ubuntu-26.04"
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:Image):1.2.9-ubuntu-26.04"
             Get-VersionFile | Should -BeLike '1.2.9*'
         }
 
@@ -180,27 +190,27 @@ Describe 'proxy-agent-manager.ps1' {
             $null = Invoke-Manager $manager start
             $null = Invoke-Manager $manager stop
             $LASTEXITCODE | Should -Be 0
-            $script:LastImage | Should -BeNullOrEmpty
-            ($script:DockerCalls | Where-Object { $_[0] -eq 'rm' })[0] | Should -Contain 'proxy-agent-abc123'
+            $global:ProxyAgentStub.LastImage | Should -BeNullOrEmpty
+            ($global:ProxyAgentStub.DockerCalls | Where-Object { $_[0] -eq 'rm' })[0] | Should -Contain 'proxy-agent-abc123'
         }
     }
 
-    Context 'with Windows containers' -Skip:(-not (Get-Command Get-CimInstance -ErrorAction SilentlyContinue)) {
+    Context 'with Windows containers' {
         BeforeEach {
-            $script:OsType = 'windows'
+            $global:ProxyAgentStub.OsType = 'windows'
         }
 
         It 'starts the image for the detected LTSC version from a plain version' {
             $manager = New-AgentDir -Version '1.2.9'
             $null = Invoke-Manager $manager start
             $LASTEXITCODE | Should -Be 0
-            $script:LastImage | Should -Be "$($script:Image):1.2.9-windows-ltsc2022"
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:Image):1.2.9-windows-ltsc2022"
         }
 
         It 'starts a pinned Windows image tag as is' {
             $manager = New-AgentDir -Version '1.2.9-windows-ltsc2025'
             $null = Invoke-Manager $manager start
-            $script:LastImage | Should -Be "$($script:Image):1.2.9-windows-ltsc2025"
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:Image):1.2.9-windows-ltsc2025"
         }
 
         It 'refuses an Ubuntu image tag' {
@@ -212,7 +222,7 @@ Describe 'proxy-agent-manager.ps1' {
             $manager = New-AgentDir -Version '1.2.9-windows-ltsc2022'
             $null = Invoke-Manager $manager upgrade
             $LASTEXITCODE | Should -Be 0
-            $script:LastImage | Should -Be "$($script:Image):1.2.10-windows-ltsc2022"
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:Image):1.2.10-windows-ltsc2022"
             Get-VersionFile | Should -BeLike '1.2.10*'
         }
 
