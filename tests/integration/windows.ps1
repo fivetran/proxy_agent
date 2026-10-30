@@ -84,9 +84,10 @@ try {
 
     Write-Host "== Starting stub registry on port $Port"
     $tags = "$oldTag,$newTag,$NewVersion-ubuntu-26.04,$NewVersion,$NewVersion-windows-ltsc2016"
+    # Start-Process does not quote arguments, so paths are quoted here.
     $Server = Start-Process -FilePath python -PassThru -NoNewWindow -ArgumentList @(
-        (Join-Path $RepoRoot 'tests\integration\registry_server.py'),
-        '--port', $Port, '--root', $RepoRoot, '--tags', $tags
+        "`"$(Join-Path $RepoRoot 'tests\integration\registry_server.py')`"",
+        '--port', $Port, '--root', "`"$RepoRoot`"", '--tags', $tags
     )
     $ready = $false
     foreach ($attempt in 1..40) {

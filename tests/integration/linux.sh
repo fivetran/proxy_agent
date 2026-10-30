@@ -71,6 +71,9 @@ python3 "$REPO_ROOT/tests/integration/registry_server.py" --port "$PORT" --root 
     --tags "$OLD_VERSION,$OLD_VERSION$SUFFIX,$NEW_VERSION,$NEW_VERSION$SUFFIX,$NEW_VERSION-windows-ltsc2022" &
 SERVER_PID=$!
 for _ in $(seq 1 40); do
+    # The liveness check catches a server that died on bind (port in use), so
+    # the readiness check below cannot succeed against some other listener.
+    kill -0 "$SERVER_PID" 2>/dev/null || fail "stub registry exited; is port $PORT in use?"
     curl -sf "http://127.0.0.1:$PORT/proxy-agent-manager.sh" >/dev/null && break
     sleep 0.25
 done
@@ -96,7 +99,8 @@ cmp -s "$REPO_ROOT/tests/integration/fixtures/config.json" "$INSTALL_DIR/config/
 MANAGER="$INSTALL_DIR/proxy-agent-manager.sh"
 
 echo "== status"
-"$MANAGER" status | grep -q "$CONTAINER" || fail "status does not list the container"
+status_output=$("$MANAGER" status)
+[[ "$status_output" == *"$CONTAINER"* ]] || fail "status does not list the container"
 
 echo "== Rolling back to $OLD_VERSION via the version file"
 echo "$OLD_VERSION" > "$INSTALL_DIR/version"
@@ -114,7 +118,8 @@ assert_healthy
 assert_version_file "$NEW_VERSION"
 
 echo "== Upgrading again is a no-op"
-"$MANAGER" upgrade | grep -q "Already running the latest version" || fail "second upgrade did not report already latest"
+upgrade_output=$("$MANAGER" upgrade)
+[[ "$upgrade_output" == *"Already running the latest version"* ]] || fail "second upgrade did not report already latest"
 assert_image "$STUB_IMAGE:$NEW_VERSION$SUFFIX"
 
 echo "== restart"
