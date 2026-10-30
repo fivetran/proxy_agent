@@ -94,10 +94,11 @@ BeforeAll {
         }
     }
 
-    # Stand-in for the registry tag listing. Records the requested URL.
+    # Stand-in for the registry tag listing. Records the request.
     function Invoke-RestMethod {
         param([string]$Uri, [string]$Method)
         $global:ProxyAgentStub.RegistryUrl = $Uri
+        $global:ProxyAgentStub.RegistryMethod = $Method
         return [pscustomobject]@{ tags = $global:ProxyAgentStub.Tags }
     }
 
@@ -121,7 +122,8 @@ Describe 'proxy-agent-manager.ps1' {
             UnhealthyTag = $null
             DockerCalls  = @()
             RegistryUrl  = $null
-            Tags         = @('1.2.9-ubuntu-26.04', '1.2.10-ubuntu-26.04', '1.2.11', '1.2.10-windows-ltsc2022', '1.2.10-windows-ltsc2025')
+            RegistryMethod = $null
+            Tags        = @('1.2.9-ubuntu-26.04', '1.2.10-ubuntu-26.04', '1.2.11', '1.2.10-windows-ltsc2022', '1.2.10-windows-ltsc2025')
         }
     }
 
