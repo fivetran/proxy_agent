@@ -152,6 +152,8 @@ try {
 
     Write-Host 'PASS'
 } finally {
+    # Best-effort cleanup; a failure here must not hide the test's own error.
+    $ErrorActionPreference = 'Continue'
     if ($Server -and -not $Server.HasExited) { Stop-Process -Id $Server.Id -Force }
     docker rm -f $Container 2>&1 | Out-Null
     if (Test-Path -LiteralPath $TempRoot) { Remove-Item -LiteralPath $TempRoot -Recurse -Force }

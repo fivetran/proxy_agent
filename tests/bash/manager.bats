@@ -22,7 +22,8 @@ setup() {
     export DOCKER_LOG="$AGENT_DIR/docker.log"
     export DOCKER_LAST_IMAGE="$AGENT_DIR/docker.image"
     export DOCKER_UNHEALTHY_TAG=""
-    export STUB_TAGS='["1.2.9-ubuntu-26.04","1.2.10-ubuntu-26.04","1.2.11","1.2.10-windows-ltsc2022"]'
+    # Registry tag listing returned by the curl stub.
+    export STUB_CURL_RESPONSE='{"tags": ["1.2.9-ubuntu-26.04","1.2.10-ubuntu-26.04","1.2.11","1.2.10-windows-ltsc2022"]}'
     export PATH="$REPO_ROOT/tests/bash/stubs:$PATH"
 }
 
@@ -82,7 +83,7 @@ last_image() {
 }
 
 @test "upgrade is a no-op when already on the latest version" {
-    export STUB_TAGS='["1.2.9-ubuntu-26.04","1.2.11"]'
+    export STUB_CURL_RESPONSE='{"tags": ["1.2.9-ubuntu-26.04","1.2.11"]}'
     run manager upgrade
     [ "$status" -eq 0 ]
     [[ "$output" == *"Already running the latest version"* ]]
