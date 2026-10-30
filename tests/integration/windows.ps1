@@ -70,6 +70,7 @@ function Invoke-Manager {
 }
 
 try {
+    $null = New-Item -ItemType Directory -Force -Path $TempRoot
     $ltsc = Get-LtscVersion
     $oldTag = "$OldVersion-windows-$ltsc"
     $newTag = "$NewVersion-windows-$ltsc"

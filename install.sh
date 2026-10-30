@@ -277,8 +277,9 @@ main() {
         local agent_id auth_token
         agent_id=$(extract_json_string "agent_id" "$config_path")
         auth_token=$(extract_json_string "auth_token" "$config_path")
-        [ -n "$agent_id" ] && [ -n "$auth_token" ] \
-            || die "Could not extract credentials from WebSocket config"
+        if [ -z "$agent_id" ] || [ -z "$auth_token" ]; then
+            die "Could not extract credentials from WebSocket config"
+        fi
         TOKEN=$(printf '%s:%s' "$agent_id" "$auth_token" | base64 | tr -d '\n')
         config_path=""
         echo "Detected WebSocket agent configuration. Fetching updated config from Fivetran..."
