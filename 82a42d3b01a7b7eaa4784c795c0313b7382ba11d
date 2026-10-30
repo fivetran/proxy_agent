@@ -1,0 +1,33 @@
+tests/bash/manager.bats
+  9b9d1fbb9abcb60e 4-6,10-12,21,26
+tests/pwsh/Manager.Tests.ps1
+  9b9d1fbb9abcb60e 21-24,134,176,194,222,228,240
+tests/integration/windows.ps1
+  9b9d1fbb9abcb60e 8-12
+tests/bash/stubs/docker
+  9b9d1fbb9abcb60e 1-31
+tests/bash/stubs/curl
+  9b9d1fbb9abcb60e 1-7
+tests/integration/linux.sh
+  9b9d1fbb9abcb60e 4-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "82a42d3b01a7b7eaa4784c795c0313b7382ba11d",
+  "prompts": {
+    "9b9d1fbb9abcb60e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "248b8c38-c176-4a0d-9679-0cd10da7b072",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Paul Harper <paul.harper@fivetran.com>",
+      "messages": [],
+      "total_additions": 66,
+      "total_deletions": 51,
+      "accepted_lines": 65,
+      "overriden_lines": 0
+    }
+  }
+}
