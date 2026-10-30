@@ -67,6 +67,20 @@ Windows Server hosts use an exact LTSC mapping: Server 2019 selects `ltsc2019`, 
 
 Linux releases continue to use `proxy-agent:<version>` for backward compatibility and are also published as `proxy-agent:<version>-ubuntu-26.04`. Both tags reference the same Linux multi-architecture image. Windows releases use the explicit `proxy-agent:<version>-windows-ltsc2019`, `proxy-agent:<version>-windows-ltsc2022`, or `proxy-agent:<version>-windows-ltsc2025` tags.
 
+### Installing behind a network proxy
+
+Both installers and the `upgrade` command honor `HTTPS_PROXY` (or `HTTP_PROXY`) and `NO_PROXY` for the web requests they make: downloading the management script, listing image tags, and fetching the agent configuration from Fivetran. On Linux, `curl` reads these variables natively. On Windows, Windows PowerShell 5.1 does not, so `install.ps1` and `proxy-agent-manager.ps1` apply them themselves. The URL may include credentials: `http://user:pass@proxy.example.com:3128`.
+
+```powershell
+$env:HTTPS_PROXY = 'http://proxy.example.com:3128'
+$env:NO_PROXY    = 'localhost,127.0.0.1,.example.com'
+$env:RUNTIME = 'docker'; $env:TOKEN = 'YOUR_AGENT_TOKEN'; & .\install.ps1
+```
+
+On Windows, download `install.ps1` first, as shown above, rather than fetching it inline with `Invoke-RestMethod`: the download itself runs before the script can apply the proxy settings.
+
+These variables do not configure Docker. The Docker daemon needs its own proxy settings to pull the agent image, and the agent needs `proxy_host` and `proxy_port` in `config.json` to reach Fivetran through a proxy at runtime. See the [Proxy Agent documentation](https://fivetran.com/docs/destinations/connection-options/proxy-agent) for both.
+
 The installer will:
 - Check prerequisites
 - Create the installation directory

@@ -70,6 +70,44 @@ function Write-Log {
     Add-Content -Path $LOGFILE -Value "$timestamp UTC - $Message" -Encoding ascii
 }
 
+# Windows PowerShell 5.1 ignores HTTP_PROXY/HTTPS_PROXY/NO_PROXY, so apply them to this
+# script's web requests (the image registry lookup during upgrade). Kept in sync with
+# install.ps1. Docker itself reads its own proxy settings; see the README.
+function Set-WebProxyFromEnvironment {
+    $proxyUrl = if ($env:HTTPS_PROXY) { $env:HTTPS_PROXY } elseif ($env:HTTP_PROXY) { $env:HTTP_PROXY } else { $null }
+    if (-not $proxyUrl) { return }
+
+    try {
+        $proxyUri = [Uri]$proxyUrl
+    } catch {
+        Write-Host "ERROR: Invalid proxy URL in HTTPS_PROXY/HTTP_PROXY: $proxyUrl" -ForegroundColor Red
+        exit 1
+    }
+
+    # .NET bypass entries are regular expressions matched against the request URL. As with curl,
+    # each entry matches the host and its subdomains, with or without a leading dot. CIDR ranges aren't supported.
+    $bypassList = @()
+    if ($env:NO_PROXY) {
+        foreach ($entry in ($env:NO_PROXY -split ',')) {
+            $bypassHost = $entry.Trim().TrimStart('.')
+            if (-not $bypassHost) { continue }
+            $bypassList += '^https?://([^/]+\.)?' + [regex]::Escape($bypassHost) + '(:\d+)?(/|$)'
+        }
+    }
+
+    # Keep credentials out of the proxy address; pass them separately.
+    $proxyAddress = [Uri]"$($proxyUri.Scheme)://$($proxyUri.Authority)"
+    $webProxy = New-Object System.Net.WebProxy($proxyAddress, $false, [string[]]$bypassList)
+    if ($proxyUri.UserInfo) {
+        $userInfo = $proxyUri.UserInfo.Split(':', 2)
+        $proxyUser     = [Uri]::UnescapeDataString($userInfo[0])
+        $proxyPassword = if ($userInfo.Length -gt 1) { [Uri]::UnescapeDataString($userInfo[1]) } else { '' }
+        $webProxy.Credentials = New-Object System.Net.NetworkCredential($proxyUser, $proxyPassword)
+    }
+    [System.Net.WebRequest]::DefaultWebProxy = $webProxy
+    Write-Log "Using proxy $proxyAddress from the environment"
+}
+
 function Get-ContainerOsType {
     $osTypeOutput = docker info --format '{{.OSType}}' 2>$null
     if ($LASTEXITCODE -ne 0) {
@@ -404,6 +442,7 @@ switch ($Command) {
         if (-not (Start-CurrentProxyAgent)) { exit 1 }
     }
     'upgrade' {
+        Set-WebProxyFromEnvironment
         Invoke-Upgrade
     }
     'status' {
