@@ -1,0 +1,23 @@
+proxy-agent-manager.ps1
+  9b9d1fbb9abcb60e 16-17,19-20,25,60-61,110-112,115-116,119,122-127,129-131,133-135,137,139-145,147-148,150,153,155-157,161,163,166-170,208,213,227,230,275,288,340-342,344,354-355,357-359,363-364,366-371,377-378
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "e4620a1301fe2b50acb1c71441d6eba7328ec832",
+  "prompts": {
+    "9b9d1fbb9abcb60e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "248b8c38-c176-4a0d-9679-0cd10da7b072",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Paul Harper <paul.harper@fivetran.com>",
+      "messages": [],
+      "total_additions": 120,
+      "total_deletions": 110,
+      "accepted_lines": 77,
+      "overriden_lines": 0
+    }
+  }
+}
