@@ -49,15 +49,14 @@ BeforeAll {
         return (& $Manager $Command *>&1 | Out-String)
     }
 
-    # Returns the argument list of the first recorded docker call for the
-    # given subcommand, or $null. A foreach loop is used because piping the
+    # Returns the arguments of the first recorded docker call for the given
+    # subcommand, or nothing. A foreach loop is used because piping the
     # recorded calls through Where-Object would flatten them into strings.
     function Get-DockerCall {
         param([string]$Subcommand)
         foreach ($call in $global:ProxyAgentStub.DockerCalls) {
-            if ($call[0] -eq $Subcommand) { return ,$call }
+            if ($call[0] -eq $Subcommand) { return $call }
         }
-        return $null
     }
 
     function Get-DockerRunArgs {
