@@ -13,11 +13,16 @@ $VERSION_FILE       = Join-Path $BASE_DIR 'version'
 $LOGFILE            = Join-Path $BASE_DIR 'logs\proxy-agent-manager.log'
 $CONTAINER_LOG_DIR  = '/app/logs'
 $SETTINGS_FILE = Join-Path $BASE_DIR 'settings.ps1'
+# Appended to the plain agent version to form the Linux image tag.
+$LINUX_IMAGE_TAG_SUFFIX = '-ubuntu-26.04'
 
+# settings.ps1 may set $MEMORY_ALLOCATION_MB and, for Windows containers,
+# $WINDOWS_VERSION (an LTSC variant that overrides host detection).
 if (Test-Path -LiteralPath $SETTINGS_FILE) {
     . $SETTINGS_FILE
 }
 if (-not $MEMORY_ALLOCATION_MB) { $MEMORY_ALLOCATION_MB = 5120 }
+if (-not $WINDOWS_VERSION) { $WINDOWS_VERSION = $null }
 
 # ── Startup validation ───────────────────────────────────────────────────────
 
@@ -52,8 +57,8 @@ if (-not (Test-Path $VERSION_FILE)) {
     exit 1
 }
 
-$CURRENT_VERSION = (Get-Content $VERSION_FILE -Raw).Trim()
-if (-not $CURRENT_VERSION) {
+$PINNED_VERSION = (Get-Content $VERSION_FILE -Raw).Trim()
+if (-not $PINNED_VERSION) {
     Write-Host "ERROR: $VERSION_FILE is empty." -ForegroundColor Red
     exit 1
 }
@@ -102,65 +107,68 @@ function Get-WindowsLtscVersion {
     throw "Unsupported Windows Server build '$($operatingSystem.BuildNumber)' ('$($operatingSystem.Caption)')."
 }
 
-function Get-ImageTagType {
-    param([Parameter(Mandatory)][string]$Tag)
-
-    if ($Tag -match '^\d+\.\d+\.\d+-windows-(?:ltsc2019|ltsc2022|ltsc2025)$') {
-        return 'windows'
-    }
-    if ($Tag -match '^\d+\.\d+\.\d+-ubuntu-26\.04$') {
-        return 'linux'
-    }
-    if ($Tag -match '^\d+\.\d+\.\d+$') {
-        return 'legacy-linux'
-    }
-
-    throw "Invalid proxy-agent image tag '$Tag'."
-}
-
-function Get-ImageTagVariant {
-    param([Parameter(Mandatory)][string]$Tag)
-
-    if ($Tag -match '^\d+\.\d+\.\d+-windows-(?<variant>ltsc2019|ltsc2022|ltsc2025)$') {
-        return $Matches.variant
-    }
-
-    throw "Invalid Windows proxy-agent image tag '$Tag'. Expected <version>-windows-ltsc2019, <version>-windows-ltsc2022, or <version>-windows-ltsc2025."
-}
-
-function Resolve-ImageTag {
-    param(
-        [Parameter(Mandatory)][string]$Tag,
-        [Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType
-    )
-
-    $tagType = Get-ImageTagType -Tag $Tag
-
-    if ($Tag -match '^\d+\.\d+\.\d+$') {
-        if ($ContainerOsType -eq 'windows') {
-            return "$Tag-windows-$(Get-WindowsLtscVersion)"
-        }
-        return $Tag
-    }
-
-    if ($tagType -eq 'windows' -and $ContainerOsType -ne 'windows') {
-        throw "Windows proxy-agent image tags require Docker to run Windows containers."
-    }
-    if ($tagType -eq 'linux' -and $ContainerOsType -ne 'linux') {
-        throw "Linux proxy-agent image tags require Docker to run Linux containers."
-    }
-
-    return $Tag
-}
-
+# Returns the plain agent version for a version file entry. Accepts a plain
+# version (1.2.9) or a legacy image tag (1.2.9-ubuntu-26.04, 1.2.9-windows-ltsc2022).
 function Get-ReleaseVersion {
     param([Parameter(Mandatory)][string]$Tag)
 
-    if ($Tag -match '^(?<version>\d+\.\d+\.\d+)(?:(?:-ubuntu-26\.04)|(?:-windows-(?:ltsc2019|ltsc2022|ltsc2025)))?$') {
+    if ($Tag -match '^(?<version>\d+\.\d+\.\d+)(?:-ubuntu-26\.04|-windows-(?:ltsc2019|ltsc2022|ltsc2025))?$') {
         return $Matches.version
     }
 
-    throw "Invalid proxy-agent image tag '$Tag'."
+    throw "Invalid proxy agent version '$Tag' in $VERSION_FILE. Expected <major>.<minor>.<patch>."
+}
+
+# Returns the LTSC variant to use for Windows containers, or $null for Linux
+# containers. A variant pinned by a legacy Windows image tag in the version file
+# wins and is saved to settings.ps1, then the $WINDOWS_VERSION setting, then the
+# variant detected from the host.
+function Resolve-WindowsVersion {
+    param([Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType)
+
+    $pinnedWindowsVariant = $null
+    if ($PINNED_VERSION -match '-windows-(?<variant>ltsc2019|ltsc2022|ltsc2025)$') {
+        $pinnedWindowsVariant = $Matches.variant
+    }
+    if ($ContainerOsType -ne 'windows') {
+        if ($pinnedWindowsVariant) {
+            throw "Windows proxy-agent image tags require Docker to run Windows containers."
+        }
+        return $null
+    }
+    if ($pinnedWindowsVariant) {
+        $legacyVariant = $pinnedWindowsVariant
+        if ($WINDOWS_VERSION -ne $legacyVariant) {
+            Add-Content -Path $SETTINGS_FILE -Value "`$WINDOWS_VERSION = '$legacyVariant'" -Encoding ascii
+            $script:WINDOWS_VERSION = $legacyVariant
+        }
+        return $legacyVariant
+    }
+    if ($WINDOWS_VERSION) {
+        return $WINDOWS_VERSION
+    }
+    return Get-WindowsLtscVersion
+}
+
+function Get-ImageTag {
+    param(
+        [Parameter(Mandatory)][string]$Version,
+        [Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType,
+        [string]$WindowsVersion
+    )
+
+    if ($ContainerOsType -eq 'windows') {
+        return "$Version-windows-$WindowsVersion"
+    }
+    return "$Version$LINUX_IMAGE_TAG_SUFFIX"
+}
+
+function Set-PinnedVersion {
+    param([Parameter(Mandatory)][string]$Version)
+    if ($Version -ne $PINNED_VERSION) {
+        Set-Content -Path $VERSION_FILE -Value $Version -Encoding ascii
+        $script:PINNED_VERSION = $Version
+    }
 }
 
 function Get-LatestVersion {
@@ -197,15 +205,12 @@ function Get-LatestVersion {
         exit 1
     }
 
-    $latest = $versions | Sort-Object { [version]($_ -replace $releasePattern, '') } | Select-Object -Last 1
-    return $latest
+    return ($versions | ForEach-Object { $_ -replace $releasePattern, '' } | Sort-Object { [version]$_ } | Select-Object -Last 1)
 }
 
 function Compare-SemVer {
     param([string]$A, [string]$B)
-    $aVer = [version](Get-ReleaseVersion -Tag $A)
-    $bVer = [version](Get-ReleaseVersion -Tag $B)
-    return $aVer.CompareTo($bVer)
+    return ([version]$A).CompareTo([version]$B)
 }
 
 function Stop-ProxyAgent {
@@ -219,10 +224,10 @@ function Stop-ProxyAgent {
 
 function Start-ProxyAgent {
     param(
-        [Parameter(Mandatory)][string]$Version,
+        [Parameter(Mandatory)][string]$ImageTag,
         [Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType
     )
-    Write-Log "Starting $CONTAINER_NAME (version: $Version)..."
+    Write-Log "Starting $CONTAINER_NAME (image tag: $ImageTag)..."
 
     Stop-ProxyAgent
 
@@ -267,7 +272,7 @@ function Start-ProxyAgent {
             '--health-timeout', '15s',
             '-v', "${configDirectoryMount}:C:/config:ro",
             '-v', "${logsMount}:$containerLogDir",
-            "${IMAGE}:${Version}",
+            "${IMAGE}:${ImageTag}",
             '-i', $containerConfigPath
         )
     } else {
@@ -280,7 +285,7 @@ function Start-ProxyAgent {
             '--health-timeout', '3s',
             '-v', "${configFileMount}:/config/config.json:ro",
             '-v', "${logsMount}:$containerLogDir",
-            "${IMAGE}:${Version}",
+            "${IMAGE}:${ImageTag}",
             '-i', $containerConfigPath
         )
     }
@@ -332,14 +337,12 @@ function Start-ProxyAgent {
 
 function Start-CurrentProxyAgent {
     $containerOsType = Get-ContainerOsType
-    $resolvedVersion = Resolve-ImageTag -Tag $CURRENT_VERSION -ContainerOsType $containerOsType
+    $windowsVersion = Resolve-WindowsVersion -ContainerOsType $containerOsType
+    $imageTag = Get-ImageTag -Version $CURRENT_VERSION -ContainerOsType $containerOsType -WindowsVersion $windowsVersion
+    Set-PinnedVersion $CURRENT_VERSION
 
-    if (-not (Start-ProxyAgent -Version $resolvedVersion -ContainerOsType $containerOsType)) {
+    if (-not (Start-ProxyAgent -ImageTag $imageTag -ContainerOsType $containerOsType)) {
         return $false
-    }
-
-    if ($resolvedVersion -ne $CURRENT_VERSION) {
-        Set-Content -Path $VERSION_FILE -Value $resolvedVersion -Encoding ascii
     }
 
     return $true
@@ -348,42 +351,30 @@ function Start-CurrentProxyAgent {
 function Invoke-Upgrade {
     Write-Host "Checking for latest version..."
     $containerOsType = Get-ContainerOsType
-    $currentVersion = Resolve-ImageTag -Tag $CURRENT_VERSION -ContainerOsType $containerOsType
-    if ($containerOsType -eq 'windows') {
-        $windowsVersion = Get-ImageTagVariant -Tag $currentVersion
-        $latestVersion = Get-LatestVersion -ContainerOsType windows -WindowsVersion $windowsVersion
-    } else {
-        $tagType = Get-ImageTagType -Tag $currentVersion
-        if ($tagType -eq 'windows') {
-            throw "Windows proxy-agent image tags require Docker to run Windows containers."
-        }
-        $latestVersion = Get-LatestVersion -ContainerOsType linux
-    }
+    $windowsVersion = Resolve-WindowsVersion -ContainerOsType $containerOsType
+    $latestVersion = Get-LatestVersion -ContainerOsType $containerOsType -WindowsVersion $windowsVersion
 
-    if ((Compare-SemVer $latestVersion $currentVersion) -eq 0) {
-        if ($currentVersion -ne $CURRENT_VERSION) {
-            Write-Log "Switching image tag from $CURRENT_VERSION to $currentVersion..."
-            if (-not (Start-ProxyAgent -Version $currentVersion -ContainerOsType $containerOsType)) {
-                exit 1
-            }
-            Set-Content -Path $VERSION_FILE -Value $currentVersion -Encoding ascii
-        }
-
-        Write-Host "Already running the latest version ($currentVersion)."
+    if ((Compare-SemVer $latestVersion $CURRENT_VERSION) -eq 0) {
+        Set-PinnedVersion $CURRENT_VERSION
+        Write-Host "Already running the latest version ($CURRENT_VERSION)."
         exit 0
     }
 
-    Write-Log "Upgrading from $currentVersion to $latestVersion..."
-    Set-Content -Path $VERSION_FILE -Value $latestVersion -Encoding ascii
+    Write-Log "Upgrading from $CURRENT_VERSION to $latestVersion..."
+    Set-PinnedVersion $latestVersion
 
-    if (-not (Start-ProxyAgent -Version $latestVersion -ContainerOsType $containerOsType)) {
-        Write-Log "Upgrade failed, rolling back to $currentVersion..."
-        Set-Content -Path $VERSION_FILE -Value $currentVersion -Encoding ascii
-        Start-ProxyAgent -Version $currentVersion -ContainerOsType $containerOsType | Out-Null
+    $latestTag = Get-ImageTag -Version $latestVersion -ContainerOsType $containerOsType -WindowsVersion $windowsVersion
+    if (-not (Start-ProxyAgent -ImageTag $latestTag -ContainerOsType $containerOsType)) {
+        Write-Log "Upgrade failed, rolling back to $CURRENT_VERSION..."
+        Set-PinnedVersion $CURRENT_VERSION
+        $currentTag = Get-ImageTag -Version $CURRENT_VERSION -ContainerOsType $containerOsType -WindowsVersion $windowsVersion
+        Start-ProxyAgent -ImageTag $currentTag -ContainerOsType $containerOsType | Out-Null
     }
 }
 
 # ── Commands ─────────────────────────────────────────────────────────────────
+
+$CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
 
 switch ($Command) {
     'start' {
