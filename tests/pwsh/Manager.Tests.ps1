@@ -298,20 +298,34 @@ Describe 'proxy-agent-manager.ps1' {
             $proxy.IsBypassed([Uri]'https://notcorp.example.com/') | Should -BeFalse
         }
 
-        It 'falls back to HTTP_PROXY without credentials' {
+        It 'falls back to HTTP_PROXY and uses Windows credentials when the URL has none' {
             $env:HTTP_PROXY = 'http://proxy.example.com:8080'
             $manager = New-AgentDir
             $null = Invoke-Manager $manager upgrade
             $LASTEXITCODE | Should -Be 0
             $proxy = [System.Net.WebRequest]::DefaultWebProxy
             $proxy.Address | Should -Be 'http://proxy.example.com:8080/'
-            $proxy.Credentials | Should -BeNullOrEmpty
+            $proxy.UseDefaultCredentials | Should -BeTrue
         }
 
-        It 'leaves the default proxy alone when no proxy variables are set' {
+        It 'keeps the system proxy, reports it and lets it use Windows credentials when no variables are set' {
+            # Stands in for an Internet Options proxy, which .NET exposes as the default.
+            $systemProxy = New-Object System.Net.WebProxy('http://system-proxy.example.com:8080')
+            [System.Net.WebRequest]::DefaultWebProxy = $systemProxy
             $manager = New-AgentDir
-            $null = Invoke-Manager $manager upgrade
-            [object]::ReferenceEquals($script:OriginalWebProxy, [System.Net.WebRequest]::DefaultWebProxy) | Should -BeTrue
+            $output = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 0
+            [object]::ReferenceEquals($systemProxy, [System.Net.WebRequest]::DefaultWebProxy) | Should -BeTrue
+            $systemProxy.Credentials | Should -Be ([System.Net.CredentialCache]::DefaultCredentials)
+            $output | Should -Match 'Using system proxy http://system-proxy.example.com:8080/'
+        }
+
+        It 'reports nothing when the system proxy is a direct connection' {
+            [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy
+            $manager = New-AgentDir
+            $output = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 0
+            $output | Should -Not -Match 'Using (system )?proxy'
         }
 
         It 'rejects an invalid proxy URL before contacting the registry' {

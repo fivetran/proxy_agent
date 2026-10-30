@@ -77,6 +77,8 @@ $env:NO_PROXY    = 'localhost,127.0.0.1,.example.com'
 $env:RUNTIME = 'docker'; $env:TOKEN = 'YOUR_AGENT_TOKEN'; & .\install.ps1
 ```
 
+On Windows, the variables take precedence over the proxy in Internet Options; without them, the scripts use the Internet Options proxy as any PowerShell web request would, and print it when one is in effect. In both cases a proxy that asks for NTLM or Kerberos authentication is answered with the current Windows identity, unless the URL carries its own credentials.
+
 On Windows, download `install.ps1` first, as shown above, rather than fetching it inline with `Invoke-RestMethod`: the download itself runs before the script can apply the proxy settings.
 
 These variables do not configure Docker. The Docker daemon needs its own proxy settings to pull the agent image, and the agent needs `proxy_host` and `proxy_port` in `config.json` to reach Fivetran through a proxy at runtime. See the [Proxy Agent documentation](https://fivetran.com/docs/destinations/connection-options/proxy-agent) for both.

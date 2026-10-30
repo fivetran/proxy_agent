@@ -56,12 +56,27 @@ Environment:
 }
 
 # Windows PowerShell 5.1 ignores HTTP_PROXY/HTTPS_PROXY/NO_PROXY, so apply them to this
-# script's web requests (GitHub, the image registry, the Fivetran API). curl honors the
-# same variables, so install.sh and install.ps1 behave alike behind a proxy. Docker itself
-# reads its own proxy settings; see the README.
+# script's web requests. curl honors the same variables, so install.sh and install.ps1
+# behave alike behind a proxy. Without them, .NET's default proxy is the user's Internet
+# Options proxy, which is kept. Either way the proxy may answer NTLM/Kerberos challenges
+# with the current Windows identity, which .NET doesn't do on its own. Docker itself reads
+# its own proxy settings; see the README.
 function Set-WebProxyFromEnvironment {
+    param([Parameter(Mandatory)][Uri]$ProbeUri)
+
     $proxyUrl = if ($env:HTTPS_PROXY) { $env:HTTPS_PROXY } elseif ($env:HTTP_PROXY) { $env:HTTP_PROXY } else { $null }
-    if (-not $proxyUrl) { return }
+    if (-not $proxyUrl) {
+        $systemProxy = [System.Net.WebRequest]::DefaultWebProxy
+        if ($systemProxy) {
+            $systemProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
+            $effectiveProxy = $systemProxy.GetProxy($ProbeUri)
+            # Direct connections come back as the probe URI on .NET Framework and as null on .NET Core.
+            if ($effectiveProxy -and $effectiveProxy -ne $ProbeUri) {
+                Write-Host "Using system proxy $effectiveProxy"
+            }
+        }
+        return
+    }
 
     try {
         $proxyUri = [Uri]$proxyUrl
@@ -89,6 +104,8 @@ function Set-WebProxyFromEnvironment {
         $proxyUser     = [Uri]::UnescapeDataString($userInfo[0])
         $proxyPassword = if ($userInfo.Length -gt 1) { [Uri]::UnescapeDataString($userInfo[1]) } else { '' }
         $webProxy.Credentials = New-Object System.Net.NetworkCredential($proxyUser, $proxyPassword)
+    } else {
+        $webProxy.UseDefaultCredentials = $true
     }
     [System.Net.WebRequest]::DefaultWebProxy = $webProxy
     Write-Host "Using proxy $proxyAddress from the environment"
@@ -293,7 +310,7 @@ if ($env:RUNTIME -ne 'docker') {
     exit 1
 }
 
-Set-WebProxyFromEnvironment
+Set-WebProxyFromEnvironment -ProbeUri ([Uri]$REGISTRY_TAGS_URL)
 
 $currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if ($currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
