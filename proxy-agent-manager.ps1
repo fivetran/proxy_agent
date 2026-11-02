@@ -139,6 +139,9 @@ function Resolve-WindowsVersion {
         }
         return $null
     }
+    if ($PINNED_VERSION -match '-ubuntu-26\.04$') {
+        Write-Log "WARNING: $VERSION_FILE pins the Linux image tag $PINNED_VERSION, but Docker is running Windows containers. Using the Windows image for version $CURRENT_VERSION instead."
+    }
     if ($pinnedWindowsVariant) {
         $legacyVariant = $pinnedWindowsVariant
         if ($WINDOWS_VERSION -ne $legacyVariant) {

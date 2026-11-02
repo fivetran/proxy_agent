@@ -339,10 +339,11 @@ Describe 'proxy-agent-manager.ps1' {
             Get-SettingsFile | Should -Match ([regex]::Escape("`$WINDOWS_VERSION = 'ltsc2025'"))
         }
 
-        It 'treats a legacy Ubuntu image tag as its plain version' {
+        It 'treats a legacy Ubuntu image tag as its plain version, with a warning' {
             $manager = New-AgentDir -Version '1.2.9-ubuntu-26.04'
-            $null = Invoke-Manager $manager start
+            $output = Invoke-Manager $manager start
             $LASTEXITCODE | Should -Be 0
+            $output | Should -Match 'WARNING: .*Linux image tag 1\.2\.9-ubuntu-26\.04.*Windows containers'
             $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-windows-ltsc2022"
             Get-VersionFile | Should -Be '1.2.9'
         }
