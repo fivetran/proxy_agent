@@ -20,6 +20,10 @@ if (Test-Path -LiteralPath $SETTINGS_FILE) {
     . $SETTINGS_FILE
 }
 if (-not $MEMORY_ALLOCATION_MB) { $MEMORY_ALLOCATION_MB = 5120 }
+if ("$MEMORY_ALLOCATION_MB" -notmatch '^\d+$' -or [int64]"$MEMORY_ALLOCATION_MB" -lt 1) {
+    Write-Host "ERROR: Invalid `$MEMORY_ALLOCATION_MB in ${SETTINGS_FILE}: $MEMORY_ALLOCATION_MB (must be a positive integer, in MB)" -ForegroundColor Red
+    exit 1
+}
 
 # ── Startup validation ───────────────────────────────────────────────────────
 
@@ -180,7 +184,7 @@ function Get-LatestVersion {
     }
 
     try {
-        $tagsJson = Invoke-RestMethod -Uri $registryUrl -Method Get
+        $tagsJson = Invoke-RestMethod -Uri $registryUrl -Method Get -TimeoutSec 30
     } catch {
         Write-Host "ERROR: Unable to query image registry for latest version: $_" -ForegroundColor Red
         exit 1
@@ -385,7 +389,10 @@ function Invoke-Upgrade {
     if (-not (Start-ProxyAgent -Version $latestVersion -ContainerOsType $containerOsType)) {
         Write-Log "Upgrade failed, rolling back to $currentVersion..."
         Set-Content -Path $VERSION_FILE -Value $currentVersion -Encoding ascii
-        Start-ProxyAgent -Version $currentVersion -ContainerOsType $containerOsType | Out-Null
+        if (-not (Start-ProxyAgent -Version $currentVersion -ContainerOsType $containerOsType)) {
+            Write-Log "Rollback to $currentVersion failed."
+        }
+        exit 1
     }
 }
 

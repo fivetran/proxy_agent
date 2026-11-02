@@ -71,8 +71,13 @@ jobs:
           Invoke-Pester -Path tests/pwsh -CI
 
   integration-linux:
-    name: Integration (Linux containers)
-    runs-on: ubuntu-latest
+    name: Integration (Linux containers, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # The published Linux image is multi-architecture (amd64 and arm64).
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4

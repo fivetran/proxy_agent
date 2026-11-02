@@ -129,6 +129,14 @@ Describe 'install.ps1' {
             $global:ProxyAgentStub.ManagerArgs | Should -Be @('start')
         }
 
+        It 'pins the ltsc2019 tag on Windows Server 2019' {
+            $global:ProxyAgentStub.OperatingSystem = [pscustomobject]@{ ProductType = 3; BuildNumber = 17763; Caption = 'Windows Server 2019' }
+            $global:ProxyAgentStub.Tags += '1.2.8-windows-ltsc2019'
+            $null = Invoke-Installer (New-InstallArgs)
+            $LASTEXITCODE | Should -Be 0
+            Get-VersionFile | Should -Be '1.2.8-windows-ltsc2019'
+        }
+
         It 'uses -WindowsVersion instead of detecting the host, even on an unsupported build' {
             $global:ProxyAgentStub.OperatingSystem = [pscustomobject]@{ ProductType = 3; BuildNumber = 99999; Caption = 'Windows Server vNext' }
             $arguments = New-InstallArgs

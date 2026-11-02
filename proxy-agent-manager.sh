@@ -38,7 +38,8 @@ if [ ! -f "$VERSION_FILE" ]; then
     echo "ERROR: $VERSION_FILE not found."
     exit 1
 fi
-CURRENT_VERSION=$(tr -d '[:space:]' < "$VERSION_FILE")
+# Also strips the UTF-8 byte order mark an editor on Windows may add.
+CURRENT_VERSION=$(LC_ALL=C tr -d '[:space:]\357\273\277' < "$VERSION_FILE")
 if [ -z "$CURRENT_VERSION" ]; then
     echo "ERROR: $VERSION_FILE is empty."
     exit 1
@@ -60,13 +61,17 @@ if [ -f "$SETTINGS_FILE" ]; then
     source "$SETTINGS_FILE"
 fi
 MEMORY_ALLOCATION_MB="${MEMORY_ALLOCATION_MB:-5120}"
+if ! [[ "$MEMORY_ALLOCATION_MB" =~ ^[0-9]+$ ]] || [ "$MEMORY_ALLOCATION_MB" -lt 1 ]; then
+    echo "ERROR: Invalid MEMORY_ALLOCATION_MB in $SETTINGS_FILE: $MEMORY_ALLOCATION_MB (must be a positive integer, in MB)"
+    exit 1
+fi
 
 get_latest_version() {
     local registry_host="${IMAGE%%/*}"
     local repository_path="${IMAGE#*/}"
     local registry_url="${PROXY_AGENT_REGISTRY_TAGS_URL:-https://${registry_host}/v2/${repository_path}/tags/list}"
     local tags_json
-    tags_json=$(curl -s -f "$registry_url") || {
+    tags_json=$(curl -s -f --max-time 30 "$registry_url") || {
         echo "ERROR: Unable to query image registry for latest version" >&2
         return 1
     }
@@ -109,7 +114,10 @@ upgrade_agent() {
     if ! start_agent "$latest_version"; then
         log "Upgrade failed, rolling back to $CURRENT_VERSION..."
         echo "$CURRENT_VERSION" > "$VERSION_FILE"
-        start_agent "$CURRENT_VERSION"
+        if ! start_agent "$CURRENT_VERSION"; then
+            log "Rollback to $CURRENT_VERSION failed."
+        fi
+        exit 1
     fi
 }
 

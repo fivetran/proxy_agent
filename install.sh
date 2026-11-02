@@ -224,7 +224,7 @@ report_warnings_and_errors() {
 
 get_latest_version() {
     local tags_json
-    tags_json=$(curl -s -f "$REGISTRY_TAGS_URL") || die "Unable to query image registry for latest version"
+    tags_json=$(curl -s -f --max-time 30 "$REGISTRY_TAGS_URL") || die "Unable to query image registry for latest version"
 
     local version
     version=$(echo "$tags_json" \

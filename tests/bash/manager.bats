@@ -47,6 +47,21 @@ last_image() {
     grep -q -- "--memory=5120m" "$DOCKER_LOG"
 }
 
+@test "start rejects an invalid MEMORY_ALLOCATION_MB in settings.sh" {
+    echo "MEMORY_ALLOCATION_MB=4GB" > "$AGENT_DIR/settings.sh"
+    run manager start
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Invalid MEMORY_ALLOCATION_MB"*"4GB"* ]]
+    [ ! -f "$DOCKER_LAST_IMAGE" ]
+}
+
+@test "start accepts a version file with a byte order mark and CRLF line ending" {
+    printf '\xEF\xBB\xBF1.2.9-ubuntu-26.04\r\n' > "$AGENT_DIR/version"
+    run manager start
+    [ "$status" -eq 0 ]
+    [ "$(last_image)" = "$IMAGE_REPO:1.2.9-ubuntu-26.04" ]
+}
+
 @test "start honors MEMORY_ALLOCATION_MB from settings.sh" {
     echo "MEMORY_ALLOCATION_MB=2048" > "$AGENT_DIR/settings.sh"
     run manager start
@@ -87,6 +102,7 @@ last_image() {
     run manager upgrade
     [ "$status" -eq 0 ]
     grep -q "https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list" "$CURL_LOG"
+    grep -q -- "--max-time 30" "$CURL_LOG"
 
     export PROXY_AGENT_REGISTRY_TAGS_URL="http://127.0.0.1:1/v2/stub/tags/list"
     run manager upgrade
@@ -111,13 +127,20 @@ last_image() {
     ! grep -q "^run" "$DOCKER_LOG"
 }
 
-@test "upgrade rolls back when the new container is unhealthy" {
+@test "upgrade rolls back and fails when the new container is unhealthy" {
     export DOCKER_UNHEALTHY_TAG="1.2.10"
     run manager upgrade
-    [ "$status" -eq 0 ]
+    [ "$status" -eq 1 ]
     [[ "$output" == *"rolling back"* ]]
     [ "$(last_image)" = "$IMAGE_REPO:1.2.9-ubuntu-26.04" ]
     [[ "$(cat "$AGENT_DIR/version")" == 1.2.9* ]]
+}
+
+@test "upgrade reports a failed rollback" {
+    export DOCKER_UNHEALTHY_TAG="1.2."
+    run manager upgrade
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Rollback to 1.2.9-ubuntu-26.04 failed"* ]]
 }
 
 @test "upgrade rejects an invalid version file entry" {

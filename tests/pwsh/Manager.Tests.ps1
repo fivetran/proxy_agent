@@ -96,9 +96,10 @@ BeforeAll {
 
     # Stand-in for the registry tag listing. Records the request.
     function Invoke-RestMethod {
-        param([string]$Uri, [string]$Method)
+        param([string]$Uri, [string]$Method, [int]$TimeoutSec)
         $global:ProxyAgentStub.RegistryUrl = $Uri
         $global:ProxyAgentStub.RegistryMethod = $Method
+        $global:ProxyAgentStub.RegistryTimeoutSec = $TimeoutSec
         return [pscustomobject]@{ tags = $global:ProxyAgentStub.Tags }
     }
 
@@ -123,6 +124,7 @@ Describe 'proxy-agent-manager.ps1' {
             DockerCalls  = @()
             RegistryUrl  = $null
             RegistryMethod = $null
+            RegistryTimeoutSec = $null
             OperatingSystem = [pscustomobject]@{ ProductType = 3; BuildNumber = 20348; Caption = 'Windows Server 2022' }
             Tags        = @('1.2.9-ubuntu-26.04', '1.2.10-ubuntu-26.04', '1.2.11', '1.2.10-windows-ltsc2022', '1.2.10-windows-ltsc2025')
         }
@@ -142,6 +144,23 @@ Describe 'proxy-agent-manager.ps1' {
             $LASTEXITCODE | Should -Be 0
             $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-ubuntu-26.04"
             Get-DockerRunArgs | Should -Contain '--memory=5120m'
+        }
+
+        It 'rejects an invalid MEMORY_ALLOCATION_MB in settings.ps1' {
+            $manager = New-AgentDir -Settings "`$MEMORY_ALLOCATION_MB = '4G'"
+            $output = Invoke-Manager $manager start
+            $LASTEXITCODE | Should -Be 1
+            $output | Should -Match 'Invalid \$MEMORY_ALLOCATION_MB .*: 4G'
+            Get-DockerRunArgs | Should -BeNullOrEmpty
+        }
+
+        It 'accepts a version file with a byte order mark and CRLF line ending' {
+            $manager = New-AgentDir
+            $path = Join-Path $script:AgentDir 'version'
+            [System.IO.File]::WriteAllText($path, "1.2.9-ubuntu-26.04`r`n", [System.Text.UTF8Encoding]::new($true))
+            $null = Invoke-Manager $manager start
+            $LASTEXITCODE | Should -Be 0
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-ubuntu-26.04"
         }
 
         It 'honors MEMORY_ALLOCATION_MB from settings.ps1' {
@@ -190,6 +209,7 @@ Describe 'proxy-agent-manager.ps1' {
             $manager = New-AgentDir
             $null = Invoke-Manager $manager upgrade
             $global:ProxyAgentStub.RegistryUrl | Should -Be "https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list"
+            $global:ProxyAgentStub.RegistryTimeoutSec | Should -Be 30
 
             $env:PROXY_AGENT_REGISTRY_TAGS_URL = 'http://127.0.0.1:1/v2/stub/tags/list'
             $null = Invoke-Manager $manager upgrade
@@ -205,10 +225,11 @@ Describe 'proxy-agent-manager.ps1' {
             Get-DockerRunArgs | Should -BeNullOrEmpty
         }
 
-        It 'rolls back when the upgraded container is unhealthy' {
+        It 'rolls back and fails when the upgraded container is unhealthy' {
             $global:ProxyAgentStub.UnhealthyTag = '1.2.10'
             $manager = New-AgentDir
             $output = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 1
             $output | Should -Match 'rolling back'
             $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-ubuntu-26.04"
             Get-VersionFile | Should -BeLike '1.2.9*'
@@ -260,10 +281,11 @@ Describe 'proxy-agent-manager.ps1' {
             Get-VersionFile | Should -BeLike '1.2.10*'
         }
 
-        It 'rolls back when the upgraded container is unhealthy' {
+        It 'rolls back and fails when the upgraded container is unhealthy' {
             $global:ProxyAgentStub.UnhealthyTag = '1.2.10'
             $manager = New-AgentDir -Version '1.2.9-windows-ltsc2022'
             $output = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 1
             $output | Should -Match 'rolling back'
             $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-windows-ltsc2022"
             Get-VersionFile | Should -Be '1.2.9-windows-ltsc2022'
@@ -276,6 +298,14 @@ Describe 'proxy-agent-manager.ps1' {
             $LASTEXITCODE | Should -Be 1
             $output | Should -Match 'No published Windows image tags found for ltsc2022'
             Get-DockerRunArgs | Should -BeNullOrEmpty
+        }
+
+        It 'starts the ltsc2019 image on Windows Server 2019' {
+            $global:ProxyAgentStub.OperatingSystem = [pscustomobject]@{ ProductType = 3; BuildNumber = 17763; Caption = 'Windows Server 2019' }
+            $manager = New-AgentDir -Version '1.2.9'
+            $null = Invoke-Manager $manager start
+            $LASTEXITCODE | Should -Be 0
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-windows-ltsc2019"
         }
 
         It 'refuses to start on an unsupported Windows Server build' {
