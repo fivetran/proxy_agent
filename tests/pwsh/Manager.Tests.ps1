@@ -102,9 +102,9 @@ BeforeAll {
         return [pscustomobject]@{ tags = $global:ProxyAgentStub.Tags }
     }
 
-    # Stand-in for the host OS lookup, reporting Windows Server 2022.
+    # Stand-in for the host OS lookup, reporting $global:ProxyAgentStub.OperatingSystem.
     function Get-CimInstance {
-        return [pscustomobject]@{ ProductType = 3; BuildNumber = 20348; Caption = 'Windows Server 2022' }
+        return $global:ProxyAgentStub.OperatingSystem
     }
 }
 
@@ -123,6 +123,7 @@ Describe 'proxy-agent-manager.ps1' {
             DockerCalls  = @()
             RegistryUrl  = $null
             RegistryMethod = $null
+            OperatingSystem = [pscustomobject]@{ ProductType = 3; BuildNumber = 20348; Caption = 'Windows Server 2022' }
             Tags        = @('1.2.9-ubuntu-26.04', '1.2.10-ubuntu-26.04', '1.2.11', '1.2.10-windows-ltsc2022', '1.2.10-windows-ltsc2025')
         }
     }
@@ -257,6 +258,38 @@ Describe 'proxy-agent-manager.ps1' {
             $LASTEXITCODE | Should -Be 0
             $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.10-windows-ltsc2022"
             Get-VersionFile | Should -BeLike '1.2.10*'
+        }
+
+        It 'rolls back when the upgraded container is unhealthy' {
+            $global:ProxyAgentStub.UnhealthyTag = '1.2.10'
+            $manager = New-AgentDir -Version '1.2.9-windows-ltsc2022'
+            $output = Invoke-Manager $manager upgrade
+            $output | Should -Match 'rolling back'
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-windows-ltsc2022"
+            Get-VersionFile | Should -Be '1.2.9-windows-ltsc2022'
+        }
+
+        It 'fails on upgrade when no tags are published for the LTSC version' {
+            $global:ProxyAgentStub.Tags = @('1.2.10-ubuntu-26.04', '1.2.10-windows-ltsc2025')
+            $manager = New-AgentDir -Version '1.2.9-windows-ltsc2022'
+            $output = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 1
+            $output | Should -Match 'No published Windows image tags found for ltsc2022'
+            Get-DockerRunArgs | Should -BeNullOrEmpty
+        }
+
+        It 'refuses to start on an unsupported Windows Server build' {
+            $global:ProxyAgentStub.OperatingSystem = [pscustomobject]@{ ProductType = 3; BuildNumber = 99999; Caption = 'Windows Server vNext' }
+            $manager = New-AgentDir -Version '1.2.9'
+            { & $manager start } | Should -Throw "*Unsupported Windows Server build '99999'*"
+            Get-DockerRunArgs | Should -BeNullOrEmpty
+        }
+
+        It 'refuses to start on a Windows client host' {
+            $global:ProxyAgentStub.OperatingSystem = [pscustomobject]@{ ProductType = 1; BuildNumber = 26100; Caption = 'Windows 11 Pro' }
+            $manager = New-AgentDir -Version '1.2.9'
+            { & $manager start } | Should -Throw '*Windows Server is required*'
+            Get-DockerRunArgs | Should -BeNullOrEmpty
         }
 
         It 'mounts the config directory and uses the Windows health check' {

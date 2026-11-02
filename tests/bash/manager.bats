@@ -102,6 +102,15 @@ last_image() {
     ! grep -q "^run" "$DOCKER_LOG"
 }
 
+@test "upgrade is a no-op when a bare version file entry matches the latest Ubuntu tag" {
+    export STUB_CURL_RESPONSE='{"tags": ["1.2.10-ubuntu-26.04","1.2.11"]}'
+    echo "1.2.10" > "$AGENT_DIR/version"
+    run manager upgrade
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Already running the latest version"* ]]
+    ! grep -q "^run" "$DOCKER_LOG"
+}
+
 @test "upgrade rolls back when the new container is unhealthy" {
     export DOCKER_UNHEALTHY_TAG="1.2.10"
     run manager upgrade
