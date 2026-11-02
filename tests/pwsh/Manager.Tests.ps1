@@ -27,7 +27,7 @@ BeforeAll {
     # file and the given version file content, and returns the manager's path.
     function New-AgentDir {
         param(
-            [string]$Version = '1.2.9-ubuntu-26.04',
+            [string]$Version = '1.2.9',
             [string]$Settings
         )
         $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("proxy-agent-test-" + [guid]::NewGuid())
@@ -44,6 +44,10 @@ BeforeAll {
 
     function Get-VersionFile {
         return (Get-Content -LiteralPath (Join-Path $script:AgentDir 'version') -Raw).Trim()
+    }
+
+    function Get-SettingsFile {
+        return Get-Content -LiteralPath (Join-Path $script:AgentDir 'settings.ps1') -Raw
     }
 
     # Runs the manager, capturing every output stream as one string. The width
@@ -146,6 +150,15 @@ Describe 'proxy-agent-manager.ps1' {
             $LASTEXITCODE | Should -Be 0
             $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-ubuntu-26.04"
             Get-DockerRunArgs | Should -Contain '--memory=5120m'
+            Get-VersionFile | Should -Be '1.2.9'
+        }
+
+        It 'accepts a legacy Ubuntu image tag and rewrites it to the plain version' {
+            $manager = New-AgentDir -Version '1.2.9-ubuntu-26.04'
+            $null = Invoke-Manager $manager start
+            $LASTEXITCODE | Should -Be 0
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-ubuntu-26.04"
+            Get-VersionFile | Should -Be '1.2.9'
         }
 
         It 'rejects MEMORY_ALLOCATION_MB = <Setting> in settings.ps1' -ForEach @(
@@ -221,6 +234,7 @@ Describe 'proxy-agent-manager.ps1' {
         It 'refuses a Windows image tag' {
             $manager = New-AgentDir -Version '1.2.9-windows-ltsc2022'
             { & $manager start } | Should -Throw '*Windows containers*'
+            Get-VersionFile | Should -Be '1.2.9-windows-ltsc2022'
         }
 
         It 'upgrades to the newest Ubuntu tag and ignores bare and Windows tags' {
@@ -228,7 +242,7 @@ Describe 'proxy-agent-manager.ps1' {
             $null = Invoke-Manager $manager upgrade
             $LASTEXITCODE | Should -Be 0
             $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.10-ubuntu-26.04"
-            Get-VersionFile | Should -BeLike '1.2.10*'
+            Get-VersionFile | Should -Be '1.2.10'
         }
 
         It 'queries the registry tag listing, or its override, on upgrade' {
@@ -251,6 +265,14 @@ Describe 'proxy-agent-manager.ps1' {
             Get-DockerRunArgs | Should -BeNullOrEmpty
         }
 
+        It 'rewrites a legacy Ubuntu image tag to the plain version on upgrade when already latest' {
+            $global:ProxyAgentStub.Tags = @('1.2.9-ubuntu-26.04', '1.2.11')
+            $manager = New-AgentDir -Version '1.2.9-ubuntu-26.04'
+            $output = Invoke-Manager $manager upgrade
+            $output | Should -Match ([regex]::Escape('Already running the latest version (1.2.9)'))
+            Get-VersionFile | Should -Be '1.2.9'
+        }
+
         It 'rolls back and fails when the upgraded container is unhealthy' {
             $global:ProxyAgentStub.UnhealthyTag = '1.2.10'
             $manager = New-AgentDir
@@ -258,12 +280,12 @@ Describe 'proxy-agent-manager.ps1' {
             $LASTEXITCODE | Should -Be 1
             $output | Should -Match 'rolling back'
             $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-ubuntu-26.04"
-            Get-VersionFile | Should -BeLike '1.2.9*'
+            Get-VersionFile | Should -Be '1.2.9'
         }
 
         It 'rejects an invalid version file entry on upgrade' {
             $manager = New-AgentDir -Version '2.0'
-            { & $manager upgrade } | Should -Throw '*Invalid*'
+            { & $manager upgrade } | Should -Throw "*Invalid proxy agent version '2.0'*"
         }
 
         It 'removes the running container on stop' {
@@ -286,17 +308,43 @@ Describe 'proxy-agent-manager.ps1' {
             $null = Invoke-Manager $manager start
             $LASTEXITCODE | Should -Be 0
             $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-windows-ltsc2022"
+            Get-VersionFile | Should -Be '1.2.9'
         }
 
-        It 'starts a pinned Windows image tag as is' {
-            $manager = New-AgentDir -Version '1.2.9-windows-ltsc2025'
+        It 'starts the LTSC version from the WINDOWS_VERSION setting over the detected one' {
+            $manager = New-AgentDir -Settings "`$WINDOWS_VERSION = 'ltsc2025'"
             $null = Invoke-Manager $manager start
             $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-windows-ltsc2025"
         }
 
-        It 'refuses an Ubuntu image tag' {
+        It 'migrates a legacy Windows image tag to the plain version and the WINDOWS_VERSION setting' {
+            $manager = New-AgentDir -Version '1.2.9-windows-ltsc2025' -Settings '$MEMORY_ALLOCATION_MB = 2048'
+            $null = Invoke-Manager $manager start
+            $LASTEXITCODE | Should -Be 0
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-windows-ltsc2025"
+            Get-VersionFile | Should -Be '1.2.9'
+            $settings = Get-SettingsFile
+            $settings | Should -Match ([regex]::Escape("`$WINDOWS_VERSION = 'ltsc2025'"))
+            $settings | Should -Match ([regex]::Escape('$MEMORY_ALLOCATION_MB = 2048'))
+
+            # The migrated variant still wins over the detected ltsc2022.
+            $null = Invoke-Manager $manager restart
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-windows-ltsc2025"
+        }
+
+        It 'migrates a legacy Windows image tag when no settings file exists' {
+            $manager = New-AgentDir -Version '1.2.9-windows-ltsc2025'
+            $null = Invoke-Manager $manager start
+            $LASTEXITCODE | Should -Be 0
+            Get-SettingsFile | Should -Match ([regex]::Escape("`$WINDOWS_VERSION = 'ltsc2025'"))
+        }
+
+        It 'treats a legacy Ubuntu image tag as its plain version' {
             $manager = New-AgentDir -Version '1.2.9-ubuntu-26.04'
-            { & $manager start } | Should -Throw '*Linux containers*'
+            $null = Invoke-Manager $manager start
+            $LASTEXITCODE | Should -Be 0
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-windows-ltsc2022"
+            Get-VersionFile | Should -Be '1.2.9'
         }
 
         It 'upgrades to the newest tag for the same LTSC version only' {
@@ -304,7 +352,15 @@ Describe 'proxy-agent-manager.ps1' {
             $null = Invoke-Manager $manager upgrade
             $LASTEXITCODE | Should -Be 0
             $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.10-windows-ltsc2022"
-            Get-VersionFile | Should -BeLike '1.2.10*'
+            Get-VersionFile | Should -Be '1.2.10'
+        }
+
+        It 'upgrades within the LTSC version from the WINDOWS_VERSION setting' {
+            $manager = New-AgentDir -Settings "`$WINDOWS_VERSION = 'ltsc2025'"
+            $null = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 0
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.10-windows-ltsc2025"
+            Get-VersionFile | Should -Be '1.2.10'
         }
 
         It 'rolls back and fails when the upgraded container is unhealthy' {
@@ -314,7 +370,7 @@ Describe 'proxy-agent-manager.ps1' {
             $LASTEXITCODE | Should -Be 1
             $output | Should -Match 'rolling back'
             $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-windows-ltsc2022"
-            Get-VersionFile | Should -Be '1.2.9-windows-ltsc2022'
+            Get-VersionFile | Should -Be '1.2.9'
         }
 
         It 'fails on upgrade when no tags are published for the LTSC version' {

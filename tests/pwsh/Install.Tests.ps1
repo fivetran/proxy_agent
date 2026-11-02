@@ -127,7 +127,7 @@ Describe 'install.ps1' {
             $output = Invoke-Installer (New-InstallArgs)
             $LASTEXITCODE | Should -Be 0
             $output | Should -Match 'Using Windows image variant ltsc2022'
-            Get-VersionFile | Should -Be '1.2.10-windows-ltsc2022'
+            Get-VersionFile | Should -Be '1.2.10'
             $global:ProxyAgentStub.ManagerArgs | Should -Be @('start')
         }
 
@@ -136,7 +136,7 @@ Describe 'install.ps1' {
             $global:ProxyAgentStub.Tags += '1.2.8-windows-ltsc2019'
             $null = Invoke-Installer (New-InstallArgs)
             $LASTEXITCODE | Should -Be 0
-            Get-VersionFile | Should -Be '1.2.8-windows-ltsc2019'
+            Get-VersionFile | Should -Be '1.2.8'
         }
 
         It 'uses -WindowsVersion instead of detecting the host, even on an unsupported build' {
@@ -145,7 +145,9 @@ Describe 'install.ps1' {
             $arguments.WindowsVersion = 'ltsc2025'
             $null = Invoke-Installer $arguments
             $LASTEXITCODE | Should -Be 0
-            Get-VersionFile | Should -Be '1.2.11-windows-ltsc2025'
+            Get-VersionFile | Should -Be '1.2.11'
+            Get-Content -LiteralPath (Join-Path $script:InstallDir 'settings.ps1') -Raw |
+                Should -Match ([regex]::Escape("`$WINDOWS_VERSION = 'ltsc2025'"))
         }
 
         It 'fails on an unsupported Windows Server build' {
@@ -230,7 +232,7 @@ Describe 'install.ps1' {
             $output = Invoke-Installer (New-InstallArgs)
             $LASTEXITCODE | Should -Be 0
             $output | Should -Match 'Using Linux container image'
-            Get-VersionFile | Should -Be '1.2.12-ubuntu-26.04'
+            Get-VersionFile | Should -Be '1.2.12'
             $global:ProxyAgentStub.ManagerArgs | Should -Be @('start')
         }
 
