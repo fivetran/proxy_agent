@@ -474,6 +474,9 @@ try {
 
     Write-Host "`nInstallation complete."
     Write-Host "Install directory: $InstallDir"
+    # Otherwise the script would exit with whatever $LASTEXITCODE a tolerated
+    # failure left, such as an unknown Docker data root.
+    exit 0
 } finally {
     Remove-Item Env:\TOKEN -ErrorAction SilentlyContinue
 }
