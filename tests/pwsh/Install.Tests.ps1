@@ -205,6 +205,20 @@ Describe 'install.ps1' {
         }
     }
 
+    It 'restricts config.json to the installing user, SYSTEM and Administrators' {
+        $null = Invoke-Installer (New-InstallArgs)
+        $LASTEXITCODE | Should -Be 0
+        $acl = Get-Acl -LiteralPath (Join-Path $script:InstallDir 'config\config.json')
+        $acl.AreAccessRulesProtected | Should -BeTrue
+        $identities = $acl.Access | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+        $expected = @(
+            [Security.Principal.WindowsIdentity]::GetCurrent().User.Value,
+            'S-1-5-18',      # SYSTEM
+            'S-1-5-32-544'   # Administrators
+        )
+        ($identities | Sort-Object) | Should -Be ($expected | Sort-Object)
+    }
+
     Context 'with Linux containers' {
         BeforeEach {
             $global:ProxyAgentStub.OsType = 'linux'

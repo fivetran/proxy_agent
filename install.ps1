@@ -410,7 +410,8 @@ try {
         'NT AUTHORITY\SYSTEM', 'Read', 'Allow')))
     $configAcl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
         (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')), 'Read', 'Allow')))
-    [System.IO.File]::SetAccessControl($configDest, $configAcl)
+    # Set-Acl rather than [System.IO.File]::SetAccessControl, which PowerShell 7 does not have.
+    Set-Acl -LiteralPath $configDest -AclObject $configAcl
 
     if ($ConfigPath) {
         [System.IO.File]::WriteAllText($configDest, $configFileContent, [System.Text.UTF8Encoding]::new($false))
