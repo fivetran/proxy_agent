@@ -30,10 +30,12 @@ BeforeAll {
         return @{ ConfigPath = $config; InstallDir = $script:InstallDir }
     }
 
-    # Runs the installer, capturing every output stream as one string.
+    # Runs the installer, capturing every output stream as one string. The width
+    # keeps Windows PowerShell 5.1 from wrapping long lines, such as paths, at
+    # the console width.
     function Invoke-Installer {
         param([hashtable]$Arguments)
-        return (& $script:Installer @Arguments *>&1 | Out-String)
+        return (& $script:Installer @Arguments *>&1 | Out-String -Width 4096)
     }
 
     function Get-VersionFile {

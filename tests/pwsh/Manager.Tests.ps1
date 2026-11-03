@@ -46,10 +46,12 @@ BeforeAll {
         return (Get-Content -LiteralPath (Join-Path $script:AgentDir 'version') -Raw).Trim()
     }
 
-    # Runs the manager, capturing every output stream as one string.
+    # Runs the manager, capturing every output stream as one string. The width
+    # keeps Windows PowerShell 5.1 from wrapping long lines, such as paths, at
+    # the console width.
     function Invoke-Manager {
         param([string]$Manager, [string]$Command)
-        return (& $Manager $Command *>&1 | Out-String)
+        return (& $Manager $Command *>&1 | Out-String -Width 4096)
     }
 
     # Returns the arguments of the first recorded docker call for the given
