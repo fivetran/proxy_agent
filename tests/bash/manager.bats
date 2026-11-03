@@ -248,7 +248,6 @@ version_file() {
     grep -q -- "$AGENT_DIR/logs:/app/logs" "$DOCKER_LOG"
     grep -q -- "--workdir /app/logs" "$DOCKER_LOG"
     grep -q -- "$IMAGE_REPO:1.2.9-ubuntu-26.04 /config/config.json --doctor$" "$DOCKER_LOG"
-    [[ "$output" == *"/app/logs in the container is $AGENT_DIR/logs on this host."* ]]
 }
 
 @test "doctor passes its options to the agent" {
@@ -258,10 +257,9 @@ version_file() {
 }
 
 @test "doctor exits with the doctor's exit code" {
-    export DOCKER_DOCTOR_EXIT_CODE=1
+    export DOCKER_DOCTOR_EXIT_CODE=3
     run manager doctor
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"on this host."* ]]
+    [ "$status" -eq 3 ]
 }
 
 @test "doctor leaves the running agent alone" {
@@ -269,10 +267,10 @@ version_file() {
     run manager doctor
     [ "$status" -eq 0 ]
     [ "$(last_image)" = "$IMAGE_REPO:1.2.9-ubuntu-26.04" ]
-    ! grep -q "^stop" "$DOCKER_LOG"
+    [ -z "$(grep -E "^(stop|rm)" "$DOCKER_LOG")" ]
 }
 
-@test "doctor saves its output, stderr included, to the log folder" {
+@test "doctor saves its output, stderr included, when the doctor saves no log" {
     run manager doctor
     [ "$status" -eq 0 ]
     local saved
@@ -281,6 +279,25 @@ version_file() {
     grep -qx "stub doctor log" "$saved"
     [[ "$output" == *"stub doctor report"* ]]
     [[ "$output" == *"output was saved to $saved"* ]]
+}
+
+@test "doctor saves its output when only an earlier run's doctor log exists" {
+    mkdir -p "$AGENT_DIR/logs"
+    touch "$AGENT_DIR/logs/doctor-2020-01-01T00-00-00.log"
+    run manager doctor
+    [ "$status" -eq 0 ]
+    ls "$AGENT_DIR"/logs/proxy-agent-manager-doctor-*.log
+}
+
+@test "doctor keeps only its own log when the doctor saves one beside an earlier run's" {
+    mkdir -p "$AGENT_DIR/logs"
+    touch "$AGENT_DIR/logs/doctor-2020-01-01T00-00-00.log"
+    export DOCKER_DOCTOR_LOG_DIR="$AGENT_DIR/logs"
+    run manager doctor
+    [ "$status" -eq 0 ]
+    [ -f "$AGENT_DIR/logs/doctor-stub.log" ]
+    [ -z "$(find "$AGENT_DIR/logs" -name 'proxy-agent-manager-doctor-*.log')" ]
+    [[ "$output" == *"/app/logs in the container is $AGENT_DIR/logs on this host."* ]]
 }
 
 @test "unknown command prints usage" {

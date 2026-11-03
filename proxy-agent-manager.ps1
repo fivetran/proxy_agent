@@ -485,9 +485,10 @@ function Invoke-Upgrade {
 
 # Runs the doctor in a throwaway container beside the agent's, passing
 # $DoctorArgs to --doctor (e.g. --region us-east-1), and exits with its exit
-# code. Its output is saved to the log folder, since older doctors (e.g. 1.2.10)
-# only print their report. Newer ones also save their log and an archive to the
-# mounted log folder, so those outlive the container too.
+# code. Newer doctors save their log and an archive to the mounted log folder,
+# so they outlive the container. Otherwise, as with older doctors (e.g.
+# 1.2.10), which only print their report, or when the doctor fails before
+# saving its log, its output is saved there instead.
 function Invoke-Doctor {
     param([string[]]$DoctorArgs)
 
@@ -503,8 +504,10 @@ function Invoke-Doctor {
     $dockerArgs += @("${IMAGE}:${imageTag}", (Get-ContainerConfigPath -ContainerOsType $containerOsType), '--doctor')
     if ($DoctorArgs) { $dockerArgs += $DoctorArgs }
 
-    $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH-mm-ss")
-    $outputFile = Join-Path (Join-Path $BASE_DIR 'logs') "proxy-agent-manager-doctor-$timestamp.log"
+    $logsDir = Join-Path $BASE_DIR 'logs'
+    $timestamp = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH-mm-ss")
+    $outputFile = Join-Path $logsDir "proxy-agent-manager-doctor-$timestamp.log"
+    $earlierDoctorLogs = @(Get-ChildItem -LiteralPath $logsDir -Filter 'doctor-*.log' | ForEach-Object Name)
     # Tee-Object can't choose the encoding on Windows PowerShell 5.1.
     $writer = [System.IO.StreamWriter]::new($outputFile, $false, [System.Text.UTF8Encoding]::new($false))
     # Under 'Stop', Windows PowerShell 5.1 throws on the first line docker
@@ -521,9 +524,14 @@ function Invoke-Doctor {
     } finally {
         $writer.Dispose()
     }
-    Write-Host "The doctor's output was saved to $outputFile"
-    # Newer doctors print paths inside the container.
-    Write-Host "$(Get-ContainerLogDir -ContainerOsType $containerOsType) in the container is $(Join-Path $BASE_DIR 'logs') on this host."
+    $newDoctorLogs = Get-ChildItem -LiteralPath $logsDir -Filter 'doctor-*.log' | Where-Object { $_.Name -notin $earlierDoctorLogs }
+    if ($newDoctorLogs) {
+        Remove-Item -LiteralPath $outputFile
+        # The doctor printed paths inside the container.
+        Write-Host "$(Get-ContainerLogDir -ContainerOsType $containerOsType) in the container is $logsDir on this host."
+    } else {
+        Write-Host "The doctor's output was saved to $outputFile"
+    }
     exit $status
 }
 

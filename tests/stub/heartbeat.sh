@@ -4,15 +4,17 @@
 #  check reads, then idles. It expects to be invoked like the real agent, with
 #  `-i <config path>` pointing at a readable file, and exits otherwise so the
 #  container never becomes healthy and the test fails. Invoked like the
-#  doctor, with `<config path> --doctor [options]`, it instead acts like one
-#  that saves an archive: it writes doctor-stub.zip to $LOG_FOLDER_PATH, prints
-#  a report naming its options, and exits 1, as a doctor whose checks failed.
+#  doctor, with `<config path> --doctor [options]`, it instead acts like a
+#  newer doctor: it saves doctor-stub.log and doctor-stub.zip to
+#  $LOG_FOLDER_PATH, prints a report naming its options and a log line on
+#  stderr, and exits 1, as a doctor whose checks failed.
 #
 set -eu
 
 if [ "${2:-}" = "--doctor" ]; then
-    echo "stub doctor log" >&2
-    echo "stub doctor archive" > "${LOG_FOLDER_PATH:?LOG_FOLDER_PATH must be set}/doctor-stub.zip"
+    echo "stub doctor stderr" >&2
+    echo "stub doctor log" > "${LOG_FOLDER_PATH:?LOG_FOLDER_PATH must be set}/doctor-stub.log"
+    echo "stub doctor archive" > "$LOG_FOLDER_PATH/doctor-stub.zip"
     shift 2
     echo "stub doctor report for options: $*"
     exit 1

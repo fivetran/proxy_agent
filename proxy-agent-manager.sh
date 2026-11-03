@@ -206,30 +206,44 @@ start_agent() {
     fi
 }
 
+# Lists the logs doctors saved in the log folder, sorted for comm.
+list_doctor_logs() {
+    find "$BASE_DIR/logs" -maxdepth 1 -name 'doctor-*.log' | LC_ALL=C sort
+}
+
 # Runs the doctor in a throwaway container beside the agent's, passing "$@" to
-# --doctor (e.g. --region us-east-1), and exits with its exit code. Its output
-# is saved to the log folder, since older doctors (e.g. 1.2.10) only print
-# their report. Newer ones also save their log and an archive to the mounted
-# log folder, so those outlive the container too.
+# --doctor (e.g. --region us-east-1), and exits with its exit code. Newer
+# doctors save their log and an archive to the mounted log folder, so they
+# outlive the container. Otherwise, as with older doctors (e.g. 1.2.10), which
+# only print their report, or when the doctor fails before saving its log, its
+# output is saved there instead.
 run_doctor() {
     mkdir -p "$BASE_DIR/logs"
-    local output_file
+    local output_file earlier_doctor_logs
     output_file="$BASE_DIR/logs/proxy-agent-manager-doctor-$(date -u +'%Y-%m-%dT%H-%M-%S').log"
+    earlier_doctor_logs=$(list_doctor_logs)
 
-    local status=0
     # No terminal (-t), which would merge the doctor's progress line into the
     # saved output. The working folder is where newer doctors save their log if
     # they can't read the config.
+    # set +e so a failing doctor doesn't exit the script, and PIPESTATUS keeps
+    # the doctor's exit code even if tee fails, e.g. on a full disk.
+    set +e
     docker run --rm \
         --workdir "$CONTAINER_LOG_DIR" \
         "${AGENT_RUN_ARGS[@]}" \
         "$(image_tag "$CURRENT_VERSION")" \
         "$CONTAINER_CONFIG_FILE" --doctor "$@" 2>&1 \
-        | tee "$output_file" \
-        || status=$?
-    echo "The doctor's output was saved to $output_file"
-    # Newer doctors print paths inside the container.
-    echo "$CONTAINER_LOG_DIR in the container is $BASE_DIR/logs on this host."
+        | tee "$output_file"
+    local status="${PIPESTATUS[0]}"
+    set -e
+    if [ -n "$(LC_ALL=C comm -13 <(echo "$earlier_doctor_logs") <(list_doctor_logs))" ]; then
+        rm -f "$output_file"
+        # The doctor printed paths inside the container.
+        echo "$CONTAINER_LOG_DIR in the container is $BASE_DIR/logs on this host."
+    else
+        echo "The doctor's output was saved to $output_file"
+    fi
     exit "$status"
 }
 

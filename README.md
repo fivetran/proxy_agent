@@ -141,7 +141,7 @@ Use `proxy-agent-manager.ps1` to control the agent:
 | `upgrade` | Pull and start the latest version, with auto-rollback on failure |
 | `status`  | Show container name, image, and health status        |
 | `logs`    | Stream live container logs                           |
-| `doctor`  | Check the installation and connectivity to Fivetran in a separate container, saving its output, logs and archive to `logs/`. Options are passed to the agent's `--doctor`, e.g. `doctor --region us-east-1` |
+| `doctor`  | Check the installation and connectivity to Fivetran in a separate container. The doctor's log and archive are saved to `logs/`, or its output if the doctor saves no log, as in 1.2.10. Options are passed to the agent's `--doctor`, e.g. `doctor --region us-east-1` |
 
 ## Troubleshooting
 
