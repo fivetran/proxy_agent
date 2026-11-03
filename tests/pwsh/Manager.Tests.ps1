@@ -224,15 +224,16 @@ Describe 'proxy-agent-manager.ps1' {
             }
         }
 
-        It 'rejects an invalid MEMORY_ALLOCATION_MB on <_> without touching the agent' -ForEach @('restart', 'upgrade') {
+        It 'rejects an invalid MEMORY_ALLOCATION_MB on <_> without touching the agent' -ForEach @('restart', 'upgrade', 'doctor') {
             $manager = New-AgentDir
             $null = Invoke-Manager $manager start
             Set-Content -LiteralPath (Join-Path $script:AgentDir 'settings.ps1') -Value "`$MEMORY_ALLOCATION_MB = '4G'" -Encoding ascii
             $version = Get-VersionFile
+            $callsBefore = $global:ProxyAgentStub.DockerCalls.Count
             $output = Invoke-Manager $manager $_
             $LASTEXITCODE | Should -Be 1
             $output | Should -Match 'Invalid \$MEMORY_ALLOCATION_MB'
-            Get-DockerCall 'stop' | Should -BeNullOrEmpty
+            $global:ProxyAgentStub.DockerCalls.Count | Should -Be $callsBefore
             Get-VersionFile | Should -Be $version
         }
 

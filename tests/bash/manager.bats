@@ -102,13 +102,13 @@ version_file() {
     [ "$(version_file)" = "2.0" ]
 }
 
-@test "restart and upgrade reject an invalid MEMORY_ALLOCATION_MB without touching the agent" {
+@test "restart, upgrade and doctor reject an invalid MEMORY_ALLOCATION_MB without touching the agent" {
     manager start
     echo "MEMORY_ALLOCATION_MB=4GB" > "$AGENT_DIR/settings.sh"
     local image version
     image=$(last_image)
     version=$(cat "$AGENT_DIR/version")
-    for command in restart upgrade; do
+    for command in restart upgrade doctor; do
         run manager "$command"
         [ "$status" -eq 1 ]
         [[ "$output" == *"Invalid MEMORY_ALLOCATION_MB"* ]]
