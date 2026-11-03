@@ -48,20 +48,24 @@ jobs:
       - run: bats tests/bash
 
   pester:
-    name: Unit tests (PowerShell 5.1, ${{ matrix.os }})
+    name: Unit tests (${{ matrix.shell }}, ${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
+        # Customers may run the scripts with Windows PowerShell 5.1
+        # (powershell) or PowerShell 7 (pwsh); the scripts under test run in
+        # the same host as Pester.
+        shell: [powershell, pwsh]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v4
       - name: Run Pester
-        # Windows PowerShell 5.1 is what customers run the scripts with, so the
-        # tests run there rather than under pwsh. Pester is pinned to 5.x since
-        # the tests use its syntax.
-        shell: powershell
+        # Pester is pinned to 5.x since the tests use its syntax.
         run: |
           $pester = Get-Module -ListAvailable Pester | Where-Object { $_.Version -ge '5.0' -and $_.Version -lt '6.0' }
           if (-not $pester) {
@@ -84,13 +88,22 @@ jobs:
       - run: tests/integration/linux.sh
 
   integration-windows:
-    name: Integration (Windows containers, ${{ matrix.os }})
+    name: Integration (Windows containers, ${{ matrix.shell }}, ${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
+        shell: [powershell]
+        # PowerShell 7 runs on one OS only, since these jobs are slow.
+        include:
+          - os: windows-2025
+            shell: pwsh
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    defaults:
+      run:
+        # The installer and manager run in the same host as the test.
+        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v4
       - name: Wait for the Docker daemon
@@ -110,5 +123,4 @@ jobs:
           docker info
           exit 1
       - name: Run integration test
-        shell: powershell
         run: tests/integration/windows.ps1
