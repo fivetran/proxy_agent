@@ -19,11 +19,8 @@ $SETTINGS_FILE = Join-Path $BASE_DIR 'settings.ps1'
 if (Test-Path -LiteralPath $SETTINGS_FILE) {
     . $SETTINGS_FILE
 }
-if (-not $MEMORY_ALLOCATION_MB) { $MEMORY_ALLOCATION_MB = 5120 }
-if ("$MEMORY_ALLOCATION_MB" -notmatch '^\d+$' -or [int64]"$MEMORY_ALLOCATION_MB" -lt 1) {
-    Write-Host "ERROR: Invalid `$MEMORY_ALLOCATION_MB in ${SETTINGS_FILE}: $MEMORY_ALLOCATION_MB (must be a positive integer, in MB)" -ForegroundColor Red
-    exit 1
-}
+# Unset or empty only, so 0 is rejected like any other invalid setting.
+if ("$MEMORY_ALLOCATION_MB" -eq '') { $MEMORY_ALLOCATION_MB = 5120 }
 
 # ── Startup validation ───────────────────────────────────────────────────────
 
@@ -218,6 +215,15 @@ function Compare-SemVer {
     return $aVer.CompareTo($bVer)
 }
 
+# Only the commands that start a container check the setting, so stop, status
+# and logs still work with an invalid one.
+function Assert-MemoryAllocation {
+    if ("$MEMORY_ALLOCATION_MB" -notmatch '^\d+$' -or [int64]"$MEMORY_ALLOCATION_MB" -lt 1) {
+        Write-Host "ERROR: Invalid `$MEMORY_ALLOCATION_MB in ${SETTINGS_FILE}: $MEMORY_ALLOCATION_MB (must be a positive integer, in MB)" -ForegroundColor Red
+        exit 1
+    }
+}
+
 function Stop-ProxyAgent {
     try { docker inspect $CONTAINER_NAME 2>&1 | Out-Null } catch {}
     if ($LASTEXITCODE -eq 0) {
@@ -400,6 +406,7 @@ function Invoke-Upgrade {
 
 switch ($Command) {
     'start' {
+        Assert-MemoryAllocation
         if (-not (Start-CurrentProxyAgent)) { exit 1 }
     }
     'stop' {
@@ -407,10 +414,12 @@ switch ($Command) {
         Stop-ProxyAgent
     }
     'restart' {
+        Assert-MemoryAllocation
         Write-Log "Restarting $CONTAINER_NAME..."
         if (-not (Start-CurrentProxyAgent)) { exit 1 }
     }
     'upgrade' {
+        Assert-MemoryAllocation
         Invoke-Upgrade
     }
     'status' {

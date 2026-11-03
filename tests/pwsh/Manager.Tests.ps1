@@ -148,12 +148,36 @@ Describe 'proxy-agent-manager.ps1' {
             Get-DockerRunArgs | Should -Contain '--memory=5120m'
         }
 
-        It 'rejects an invalid MEMORY_ALLOCATION_MB in settings.ps1' {
-            $manager = New-AgentDir -Settings "`$MEMORY_ALLOCATION_MB = '4G'"
+        It 'rejects MEMORY_ALLOCATION_MB = <Setting> in settings.ps1' -ForEach @(
+            @{ Setting = "'4G'"; Shown = '4G' }
+            @{ Setting = '0'; Shown = '0' }
+        ) {
+            $manager = New-AgentDir -Settings "`$MEMORY_ALLOCATION_MB = $Setting"
             $output = Invoke-Manager $manager start
             $LASTEXITCODE | Should -Be 1
-            $output | Should -Match 'Invalid \$MEMORY_ALLOCATION_MB .*: 4G'
+            $output | Should -Match "Invalid \`$MEMORY_ALLOCATION_MB .*: $Shown "
             Get-DockerRunArgs | Should -BeNullOrEmpty
+        }
+
+        It 'stops the agent with an invalid MEMORY_ALLOCATION_MB in settings.ps1' {
+            $manager = New-AgentDir
+            $null = Invoke-Manager $manager start
+            Set-Content -LiteralPath (Join-Path $script:AgentDir 'settings.ps1') -Value "`$MEMORY_ALLOCATION_MB = '4G'" -Encoding ascii
+            $null = Invoke-Manager $manager stop
+            $LASTEXITCODE | Should -Be 0
+            $global:ProxyAgentStub.LastImage | Should -BeNullOrEmpty
+        }
+
+        It 'rejects an invalid MEMORY_ALLOCATION_MB on <_> without touching the agent' -ForEach @('restart', 'upgrade') {
+            $manager = New-AgentDir
+            $null = Invoke-Manager $manager start
+            Set-Content -LiteralPath (Join-Path $script:AgentDir 'settings.ps1') -Value "`$MEMORY_ALLOCATION_MB = '4G'" -Encoding ascii
+            $version = Get-VersionFile
+            $output = Invoke-Manager $manager $_
+            $LASTEXITCODE | Should -Be 1
+            $output | Should -Match 'Invalid \$MEMORY_ALLOCATION_MB'
+            Get-DockerCall 'stop' | Should -BeNullOrEmpty
+            Get-VersionFile | Should -Be $version
         }
 
         It 'accepts a version file with a byte order mark and CRLF line ending' {

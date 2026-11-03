@@ -55,6 +55,29 @@ last_image() {
     [ ! -f "$DOCKER_LAST_IMAGE" ]
 }
 
+@test "stop works with an invalid MEMORY_ALLOCATION_MB in settings.sh" {
+    manager start
+    echo "MEMORY_ALLOCATION_MB=4GB" > "$AGENT_DIR/settings.sh"
+    run manager stop
+    [ "$status" -eq 0 ]
+    [ ! -f "$DOCKER_LAST_IMAGE" ]
+}
+
+@test "restart and upgrade reject an invalid MEMORY_ALLOCATION_MB without touching the agent" {
+    manager start
+    echo "MEMORY_ALLOCATION_MB=4GB" > "$AGENT_DIR/settings.sh"
+    local image version
+    image=$(last_image)
+    version=$(cat "$AGENT_DIR/version")
+    for command in restart upgrade; do
+        run manager "$command"
+        [ "$status" -eq 1 ]
+        [[ "$output" == *"Invalid MEMORY_ALLOCATION_MB"* ]]
+    done
+    [ "$(last_image)" = "$image" ]
+    [ "$(cat "$AGENT_DIR/version")" = "$version" ]
+}
+
 @test "start accepts a version file with a byte order mark and CRLF line ending" {
     printf '\xEF\xBB\xBF1.2.9-ubuntu-26.04\r\n' > "$AGENT_DIR/version"
     run manager start

@@ -61,10 +61,15 @@ if [ -f "$SETTINGS_FILE" ]; then
     source "$SETTINGS_FILE"
 fi
 MEMORY_ALLOCATION_MB="${MEMORY_ALLOCATION_MB:-5120}"
-if ! [[ "$MEMORY_ALLOCATION_MB" =~ ^[0-9]+$ ]] || [ "$MEMORY_ALLOCATION_MB" -lt 1 ]; then
-    echo "ERROR: Invalid MEMORY_ALLOCATION_MB in $SETTINGS_FILE: $MEMORY_ALLOCATION_MB (must be a positive integer, in MB)"
-    exit 1
-fi
+
+# Only the commands that start a container check the setting, so stop, status
+# and logs still work with an invalid one.
+check_memory_allocation() {
+    if ! [[ "$MEMORY_ALLOCATION_MB" =~ ^[0-9]+$ ]] || [ "$MEMORY_ALLOCATION_MB" -lt 1 ]; then
+        echo "ERROR: Invalid MEMORY_ALLOCATION_MB in $SETTINGS_FILE: $MEMORY_ALLOCATION_MB (must be a positive integer, in MB)"
+        exit 1
+    fi
+}
 
 get_latest_version() {
     local registry_host="${IMAGE%%/*}"
@@ -188,6 +193,7 @@ start_agent() {
 
 case "${1:-}" in
     start)
+        check_memory_allocation
         start_agent "$CURRENT_VERSION"
         ;;
 
@@ -201,12 +207,14 @@ case "${1:-}" in
         ;;
 
     restart)
+        check_memory_allocation
         log "Restarting ${CONTAINER_NAME}..."
         stop_agent
         start_agent "$CURRENT_VERSION"
         ;;
 
     upgrade)
+        check_memory_allocation
         upgrade_agent
         ;;
 
