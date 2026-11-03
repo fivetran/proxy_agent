@@ -2,7 +2,7 @@
 #
 #  Management script for Fivetran Proxy Agent (Docker)
 #
-#  Usage: ./proxy-agent-manager.sh {start|stop|restart|upgrade|status|logs}
+#  Usage: ./proxy-agent-manager.sh {start|stop|restart|upgrade|status|logs|doctor [options]}
 #
 set -euo pipefail
 
@@ -49,6 +49,7 @@ fi
 
 LOGFILE="$BASE_DIR/logs/proxy-agent-manager.log"
 CONTAINER_LOG_DIR="/app/logs"
+CONTAINER_CONFIG_FILE="/config/config.json"
 
 # ── Functions ────────────────────────────────────────────────────────────────
 
@@ -72,6 +73,16 @@ check_memory_allocation() {
         exit 1
     fi
 }
+
+# Shared by the agent and doctor containers, so the doctor checks the agent's
+# config, memory limit and log folder.
+AGENT_RUN_ARGS=(
+    --memory="${MEMORY_ALLOCATION_MB}m"
+    --env IS_DOCKER=true
+    --env LOG_FOLDER_PATH="$CONTAINER_LOG_DIR"
+    -v "$BASE_DIR/config/config.json:$CONTAINER_CONFIG_FILE:ro"
+    -v "$BASE_DIR/logs:$CONTAINER_LOG_DIR"
+)
 
 get_latest_version() {
     local registry_host="${IMAGE%%/*}"
@@ -155,11 +166,9 @@ start_agent() {
     docker run -d \
         --name "${CONTAINER_NAME}" \
         --restart unless-stopped \
-        --memory="${MEMORY_ALLOCATION_MB}m" \
         --label fivetran=proxy-agent \
         --label proxy_agent_id="$AGENT_ID" \
-        --env IS_DOCKER=true \
-        --env LOG_FOLDER_PATH="$CONTAINER_LOG_DIR" \
+        "${AGENT_RUN_ARGS[@]}" \
         --env HEARTBEAT_PATH=/tmp/proxy-agent-heartbeat.txt \
         --env HEARTBEAT_EXPIRY_SECONDS=30 \
         --health-cmd '[ ! -f $HEARTBEAT_PATH ] || { . $HEARTBEAT_PATH && [ $(date +%s) -lt $HEARTBEAT_EXPIRE_AT ]; }' \
@@ -167,10 +176,8 @@ start_agent() {
         --health-timeout 3s \
         --health-retries 3 \
         --health-start-period 30s \
-        -v "$BASE_DIR/config/config.json:/config/config.json:ro" \
-        -v "$BASE_DIR/logs:$CONTAINER_LOG_DIR" \
         "$(image_tag "$version")" \
-        -i /config/config.json
+        -i "$CONTAINER_CONFIG_FILE"
 
     local timeout=60
     log "Waiting for ${CONTAINER_NAME} to become healthy (timeout: ${timeout}s)..."
@@ -197,6 +204,33 @@ start_agent() {
         docker logs "${CONTAINER_NAME}"
         return 1
     fi
+}
+
+# Runs the doctor in a throwaway container beside the agent's, passing "$@" to
+# --doctor (e.g. --region us-east-1), and exits with its exit code. Its output
+# is saved to the log folder, since older doctors (e.g. 1.2.10) only print
+# their report. Newer ones also save their log and an archive to the mounted
+# log folder, so those outlive the container too.
+run_doctor() {
+    mkdir -p "$BASE_DIR/logs"
+    local output_file
+    output_file="$BASE_DIR/logs/doctor-output-$(date -u +'%Y-%m-%dT%H-%M-%S').log"
+
+    local status=0
+    # No terminal (-t), which would merge the doctor's progress line into the
+    # saved output. The working folder is where newer doctors save their log if
+    # they can't read the config.
+    docker run --rm \
+        --workdir "$CONTAINER_LOG_DIR" \
+        "${AGENT_RUN_ARGS[@]}" \
+        "$(image_tag "$CURRENT_VERSION")" \
+        "$CONTAINER_CONFIG_FILE" --doctor "$@" 2>&1 \
+        | tee "$output_file" \
+        || status=$?
+    echo "The doctor's output was saved to $output_file"
+    # Newer doctors print paths inside the container.
+    echo "$CONTAINER_LOG_DIR in the container is $BASE_DIR/logs on this host."
+    exit "$status"
 }
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -237,8 +271,15 @@ case "${1:-}" in
         docker logs -f "${CONTAINER_NAME}"
         ;;
 
+    doctor)
+        CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
+        check_memory_allocation
+        shift
+        run_doctor "$@"
+        ;;
+
     *)
-        echo "Usage: $0 {start|stop|restart|upgrade|status|logs}"
+        echo "Usage: $0 {start|stop|restart|upgrade|status|logs|doctor [options]}"
         exit 1
         ;;
 esac

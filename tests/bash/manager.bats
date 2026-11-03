@@ -238,6 +238,51 @@ version_file() {
     grep -q "^rm proxy-agent-abc123" "$DOCKER_LOG"
 }
 
+@test "doctor runs a throwaway container with the agent's config, logs and memory limit" {
+    run manager doctor
+    [ "$status" -eq 0 ]
+    grep -q -- "^run --rm " "$DOCKER_LOG"
+    grep -q -- "--memory=5120m" "$DOCKER_LOG"
+    grep -q -- "--env LOG_FOLDER_PATH=/app/logs" "$DOCKER_LOG"
+    grep -q -- "$AGENT_DIR/config/config.json:/config/config.json:ro" "$DOCKER_LOG"
+    grep -q -- "$AGENT_DIR/logs:/app/logs" "$DOCKER_LOG"
+    grep -q -- "--workdir /app/logs" "$DOCKER_LOG"
+    grep -q -- "$IMAGE_REPO:1.2.9-ubuntu-26.04 /config/config.json --doctor$" "$DOCKER_LOG"
+    [[ "$output" == *"/app/logs in the container is $AGENT_DIR/logs on this host."* ]]
+}
+
+@test "doctor passes its options to the agent" {
+    run manager doctor --region us-east-1 --tcp-attempts 3
+    [ "$status" -eq 0 ]
+    grep -q -- "/config/config.json --doctor --region us-east-1 --tcp-attempts 3$" "$DOCKER_LOG"
+}
+
+@test "doctor exits with the doctor's exit code" {
+    export DOCKER_RUN_RM_EXIT_CODE=1
+    run manager doctor
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"on this host."* ]]
+}
+
+@test "doctor leaves the running agent alone" {
+    manager start
+    run manager doctor
+    [ "$status" -eq 0 ]
+    [ "$(last_image)" = "$IMAGE_REPO:1.2.9-ubuntu-26.04" ]
+    ! grep -q "^stop" "$DOCKER_LOG"
+}
+
+@test "doctor saves its output, stderr included, to the log folder" {
+    run manager doctor
+    [ "$status" -eq 0 ]
+    local saved
+    saved=$(ls "$AGENT_DIR"/logs/doctor-output-*.log)
+    grep -qx "stub doctor report" "$saved"
+    grep -qx "stub doctor log" "$saved"
+    [[ "$output" == *"stub doctor report"* ]]
+    [[ "$output" == *"output was saved to $saved"* ]]
+}
+
 @test "unknown command prints usage" {
     run manager bogus
     [ "$status" -eq 1 ]

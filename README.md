@@ -103,7 +103,7 @@ $HOME/fivetran-proxy-agent/
 ├── proxy-agent-manager.sh   --> Management script
 ├── config/
 │   └── config.json          --> Agent configuration (permissions: 600)
-├── logs/                    --> Agent and manager logs
+├── logs/                    --> Agent, manager and doctor logs
 └── version                  --> Pinned agent version (for example 1.2.9)
 
 # Windows
@@ -111,7 +111,7 @@ $HOME/fivetran-proxy-agent/
 ├── proxy-agent-manager.ps1  --> Management script
 ├── config\
 │   └── config.json          --> Agent configuration (owner read/write; SYSTEM and Administrators read)
-├── logs\                    --> Agent and manager logs
+├── logs\                    --> Agent, manager and doctor logs
 └── version                  --> Pinned agent version (for example 1.2.9)
 ```
 
@@ -122,7 +122,7 @@ $HOME/fivetran-proxy-agent/
 Use `proxy-agent-manager.sh` to control the agent:
 
 ```bash
-./proxy-agent-manager.sh {start|stop|restart|upgrade|status|logs}
+./proxy-agent-manager.sh {start|stop|restart|upgrade|status|logs|doctor [options]}
 ```
 
 ### Windows
@@ -130,7 +130,7 @@ Use `proxy-agent-manager.sh` to control the agent:
 Use `proxy-agent-manager.ps1` to control the agent:
 
 ```powershell
-& "$env:USERPROFILE\fivetran-proxy-agent\proxy-agent-manager.ps1" {start|stop|restart|upgrade|status|logs}
+& "$env:USERPROFILE\fivetran-proxy-agent\proxy-agent-manager.ps1" {start|stop|restart|upgrade|status|logs|doctor [options]}
 ```
 
 | Command   | Description                                          |
@@ -141,6 +141,7 @@ Use `proxy-agent-manager.ps1` to control the agent:
 | `upgrade` | Pull and start the latest version, with auto-rollback on failure |
 | `status`  | Show container name, image, and health status        |
 | `logs`    | Stream live container logs                           |
+| `doctor`  | Check the installation and connectivity to Fivetran in a separate container, saving its output, logs and archive to `logs/`. Options are passed to the agent's `--doctor`, e.g. `doctor --region us-east-1` |
 
 ## Troubleshooting
 
@@ -163,7 +164,7 @@ CI (`.github/workflows/ci.yml`) runs on every pull request:
 
 - `shellcheck` on the shell scripts and PSScriptAnalyzer (settings in `PSScriptAnalyzerSettings.psd1`) on the PowerShell scripts.
 - Unit tests for the management scripts and the Windows installer: `tests/bash/manager.bats` (bats), and `tests/pwsh/Manager.Tests.ps1` and `tests/pwsh/Install.Tests.ps1` (Pester 5, under both Windows PowerShell 5.1 and PowerShell 7). They run the scripts with stubbed `docker`, registry and host calls, so they need no Docker daemon.
-- Integration tests that run the installer and management script against a real Docker daemon: `tests/integration/linux.sh` on Ubuntu (amd64 and arm64), and `tests/integration/windows.ps1` on Windows Server 2022 and 2025 with Windows containers (on 2025 also under PowerShell 7). They use a stub agent image (`tests/stub/`) that only writes the heartbeat file, and a local stand-in for the registry, the script download and the configure endpoint (`tests/integration/registry_server.py`), so they need no Fivetran credentials. They cover installing from a config file, from a `TOKEN`, and from a legacy WebSocket config, then rollback, upgrade, restart and stop.
+- Integration tests that run the installer and management script against a real Docker daemon: `tests/integration/linux.sh` on Ubuntu (amd64 and arm64), and `tests/integration/windows.ps1` on Windows Server 2022 and 2025 with Windows containers (on 2025 also under PowerShell 7). They use a stub agent image (`tests/stub/`) that only writes the heartbeat file, or stands in for the doctor, and a local stand-in for the registry, the script download and the configure endpoint (`tests/integration/registry_server.py`), so they need no Fivetran credentials. They cover installing from a config file, from a `TOKEN`, and from a legacy WebSocket config, then rollback, upgrade, doctor, restart and stop.
 
 To run them locally you need Docker for the integration tests, `python3` (`python` on Windows) for the registry stand-in, [bats-core](https://github.com/bats-core/bats-core) for the bash tests and [Pester 5](https://pester.dev) for the PowerShell tests. The stub images pull `alpine` and `servercore` base images, so the integration tests need network access for that.
 
