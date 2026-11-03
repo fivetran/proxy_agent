@@ -139,7 +139,7 @@ doctor_output=$("$MANAGER" doctor --region us-east-1) || doctor_status=$?
 [ "$doctor_status" -eq 1 ] || fail "expected the doctor's exit code 1, got $doctor_status"
 [[ "$doctor_output" == *"stub doctor report for options: --region us-east-1"* ]] || fail "doctor did not print its report: $doctor_output"
 [ -f "$INSTALL_DIR/logs/doctor-stub.zip" ] || fail "the doctor's archive is not in the host's log folder"
-grep -q "stub doctor log" "$INSTALL_DIR"/logs/doctor-output-*.log || fail "the doctor's output was not saved"
+grep -q "stub doctor log" "$INSTALL_DIR"/logs/proxy-agent-manager-doctor-*.log || fail "the doctor's output was not saved"
 assert_healthy
 
 echo "== stop"

@@ -258,7 +258,7 @@ version_file() {
 }
 
 @test "doctor exits with the doctor's exit code" {
-    export DOCKER_RUN_RM_EXIT_CODE=1
+    export DOCKER_DOCTOR_EXIT_CODE=1
     run manager doctor
     [ "$status" -eq 1 ]
     [[ "$output" == *"on this host."* ]]
@@ -276,7 +276,7 @@ version_file() {
     run manager doctor
     [ "$status" -eq 0 ]
     local saved
-    saved=$(ls "$AGENT_DIR"/logs/doctor-output-*.log)
+    saved=$(ls "$AGENT_DIR"/logs/proxy-agent-manager-doctor-*.log)
     grep -qx "stub doctor report" "$saved"
     grep -qx "stub doctor log" "$saved"
     [[ "$output" == *"stub doctor report"* ]]

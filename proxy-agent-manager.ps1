@@ -504,7 +504,7 @@ function Invoke-Doctor {
     if ($DoctorArgs) { $dockerArgs += $DoctorArgs }
 
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH-mm-ss")
-    $outputFile = Join-Path (Join-Path $BASE_DIR 'logs') "doctor-output-$timestamp.log"
+    $outputFile = Join-Path (Join-Path $BASE_DIR 'logs') "proxy-agent-manager-doctor-$timestamp.log"
     # Tee-Object can't choose the encoding on Windows PowerShell 5.1.
     $writer = [System.IO.StreamWriter]::new($outputFile, $false, [System.Text.UTF8Encoding]::new($false))
     # Under 'Stop', Windows PowerShell 5.1 throws on the first line docker

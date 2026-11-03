@@ -74,9 +74,9 @@ BeforeAll {
 
     # Stand-in for the docker CLI. Records every call and keeps one container's
     # worth of state: LastImage is $null while no container "runs" and
-    # otherwise holds the image it was started from. A `run --rm` (the doctor)
-    # leaves that state alone, outputs a line and an error, standing in for
-    # stderr, and exits with DoctorExitCode.
+    # otherwise holds the image it was started from. A `run` of the doctor (with
+    # `--doctor`) leaves that state alone, outputs a line and an error, standing
+    # in for stderr, and exits with DoctorExitCode.
     function docker {
         $stub = $global:ProxyAgentStub
         $stub.DockerCalls += ,@($args)
@@ -84,7 +84,7 @@ BeforeAll {
         switch ($args[0]) {
             'info' { return $stub.OsType }
             'run' {
-                if ($args[1] -eq '--rm') {
+                if ($args -contains '--doctor') {
                     'stub doctor report'
                     Write-Error 'stub doctor log'
                     $global:LASTEXITCODE = $stub.DoctorExitCode
@@ -368,7 +368,7 @@ Describe 'proxy-agent-manager.ps1' {
             $manager = New-AgentDir
             $output = Invoke-Manager $manager doctor
             $LASTEXITCODE | Should -Be 0
-            $saved = @(Get-ChildItem -LiteralPath (Join-Path $script:AgentDir 'logs') -Filter 'doctor-output-*.log')
+            $saved = @(Get-ChildItem -LiteralPath (Join-Path $script:AgentDir 'logs') -Filter 'proxy-agent-manager-doctor-*.log')
             $saved.Count | Should -Be 1
             Get-Content -LiteralPath $saved[0].FullName | Should -Be @('stub doctor report', 'stub doctor log')
             $output | Should -Match 'stub doctor report'

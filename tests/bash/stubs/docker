@@ -4,17 +4,17 @@
 #  $DOCKER_LOG and keeps one container's worth of state: $DOCKER_LAST_IMAGE
 #  exists while a container "runs" and holds the image it was started from.
 #  Nothing is pulled or run. If $DOCKER_UNHEALTHY_TAG is set and the running
-#  image contains it, the health check reports unhealthy. A `run --rm` (the
-#  doctor) leaves that state alone, prints a line to stdout and one to stderr,
-#  and exits with $DOCKER_RUN_RM_EXIT_CODE.
+#  image contains it, the health check reports unhealthy. A `run` of the
+#  doctor (with `--doctor`) leaves that state alone, prints a line to stdout
+#  and one to stderr, and exits with $DOCKER_DOCTOR_EXIT_CODE.
 #
 echo "$*" >> "$DOCKER_LOG"
 case "$1" in
     run)
-        if [ "$2" = "--rm" ]; then
+        if [[ " $* " == *" --doctor "* ]]; then
             echo "stub doctor report"
             echo "stub doctor log" >&2
-            exit "${DOCKER_RUN_RM_EXIT_CODE:-0}"
+            exit "${DOCKER_DOCTOR_EXIT_CODE:-0}"
         fi
         for arg in "$@"; do
             case "$arg" in *proxy-agent:*) echo "$arg" > "$DOCKER_LAST_IMAGE" ;; esac

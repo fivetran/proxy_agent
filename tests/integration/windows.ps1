@@ -176,7 +176,7 @@ try {
     if ($LASTEXITCODE -ne 1) { Fail "expected the doctor's exit code 1, got $LASTEXITCODE" }
     if ($output -notmatch 'stub doctor report for options: --region us-east-1') { Fail 'doctor did not print its report' }
     if (-not (Test-Path -LiteralPath (Join-Path $InstallDir 'logs\doctor-stub.zip'))) { Fail "the doctor's archive is not in the host's log folder" }
-    $saved = Get-ChildItem -LiteralPath (Join-Path $InstallDir 'logs') -Filter 'doctor-output-*.log'
+    $saved = Get-ChildItem -LiteralPath (Join-Path $InstallDir 'logs') -Filter 'proxy-agent-manager-doctor-*.log'
     if (-not ($saved | Select-String -SimpleMatch 'stub doctor log')) { Fail "the doctor's output was not saved" }
     Assert-Healthy
 

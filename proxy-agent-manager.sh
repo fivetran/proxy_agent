@@ -214,7 +214,7 @@ start_agent() {
 run_doctor() {
     mkdir -p "$BASE_DIR/logs"
     local output_file
-    output_file="$BASE_DIR/logs/doctor-output-$(date -u +'%Y-%m-%dT%H-%M-%S').log"
+    output_file="$BASE_DIR/logs/proxy-agent-manager-doctor-$(date -u +'%Y-%m-%dT%H-%M-%S').log"
 
     local status=0
     # No terminal (-t), which would merge the doctor's progress line into the
