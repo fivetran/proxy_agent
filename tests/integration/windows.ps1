@@ -170,6 +170,16 @@ try {
     $null = Invoke-Manager restart
     Assert-Healthy
 
+    Write-Host "== doctor saves its output and archive to the host's log folder"
+    $output = & (Join-Path $InstallDir 'proxy-agent-manager.ps1') doctor --region us-east-1 *>&1 | Out-String
+    Write-Host $output
+    if ($LASTEXITCODE -ne 1) { Fail "expected the doctor's exit code 1, got $LASTEXITCODE" }
+    if ($output -notmatch 'stub doctor report for options: --region us-east-1') { Fail 'doctor did not print its report' }
+    if (-not (Test-Path -LiteralPath (Join-Path $InstallDir 'logs\doctor-stub.zip'))) { Fail "the doctor's archive is not in the host's log folder" }
+    $saved = Get-ChildItem -LiteralPath (Join-Path $InstallDir 'logs') -Filter 'doctor-output-*.log'
+    if (-not ($saved | Select-String -SimpleMatch 'stub doctor log')) { Fail "the doctor's output was not saved" }
+    Assert-Healthy
+
     Write-Host '== stop'
     $null = Invoke-Manager stop
     $remaining = docker ps -a --filter "name=$Container" --format '{{.Names}}'
