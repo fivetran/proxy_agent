@@ -145,7 +145,7 @@ function Resolve-WindowsVersion {
     if ($pinnedWindowsVariant) {
         $legacyVariant = $pinnedWindowsVariant
         if ($WINDOWS_VERSION -ne $legacyVariant) {
-            Add-Content -Path $SETTINGS_FILE -Value "`$WINDOWS_VERSION = '$legacyVariant'" -Encoding ascii
+            Add-Content -Path $SETTINGS_FILE -Value "`n`$WINDOWS_VERSION = '$legacyVariant'" -Encoding ascii
             $script:WINDOWS_VERSION = $legacyVariant
         }
         return $legacyVariant

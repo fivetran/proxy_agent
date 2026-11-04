@@ -139,13 +139,14 @@ Describe 'install.ps1' {
             Get-VersionFile | Should -Be '1.2.8'
         }
 
-        It 'uses -WindowsVersion instead of detecting the host, even on an unsupported build' {
+        It 'normalizes -WindowsVersion and uses it instead of detecting the host, even on an unsupported build' {
             $global:ProxyAgentStub.OperatingSystem = [pscustomobject]@{ ProductType = 3; BuildNumber = 99999; Caption = 'Windows Server vNext' }
             $arguments = New-InstallArgs
-            $arguments.WindowsVersion = 'ltsc2025'
-            $null = Invoke-Installer $arguments
+            $arguments.WindowsVersion = 'LTSC2025'
+            $output = Invoke-Installer $arguments
             $LASTEXITCODE | Should -Be 0
             Get-VersionFile | Should -Be '1.2.11'
+            $output | Should -Match 'Using Windows image variant ltsc2025'
             Get-Content -LiteralPath (Join-Path $script:InstallDir 'settings.ps1') -Raw |
                 Should -Match ([regex]::Escape("`$WINDOWS_VERSION = 'ltsc2025'"))
         }

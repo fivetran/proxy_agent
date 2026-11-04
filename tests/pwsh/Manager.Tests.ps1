@@ -358,6 +358,19 @@ Describe 'proxy-agent-manager.ps1' {
             Get-SettingsFile | Should -Match ([regex]::Escape("`$WINDOWS_VERSION = 'ltsc2025'"))
         }
 
+        It 'migrates a legacy Windows image tag when settings.ps1 has no final newline' {
+            $manager = New-AgentDir -Version '1.2.9-windows-ltsc2025'
+            [System.IO.File]::WriteAllText((Join-Path $script:AgentDir 'settings.ps1'), '$MEMORY_ALLOCATION_MB = 2048')
+            $null = Invoke-Manager $manager start
+            $LASTEXITCODE | Should -Be 0
+            Get-SettingsFile | Should -Match '2048\r?\n\$WINDOWS_VERSION'
+            Get-VersionFile | Should -Be '1.2.9'
+
+            $null = Invoke-Manager $manager restart
+            $LASTEXITCODE | Should -Be 0
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-windows-ltsc2025"
+        }
+
         It 'treats a legacy Ubuntu image tag as its plain version, with a warning' {
             $manager = New-AgentDir -Version '1.2.9-ubuntu-26.04'
             $output = Invoke-Manager $manager start

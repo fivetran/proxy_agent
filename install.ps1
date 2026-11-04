@@ -15,6 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
+if ($WindowsVersion) { $WindowsVersion = $WindowsVersion.ToLowerInvariant() }
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
