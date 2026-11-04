@@ -11,6 +11,8 @@ BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 # PROXY_AGENT_IMAGE and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
 # test suite can run against a stub image and registry.
 IMAGE="${PROXY_AGENT_IMAGE:-us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent}"
+# Appended to the plain agent version to form the Linux image tag.
+IMAGE_TAG_SUFFIX="-ubuntu-26.04"
 CONFIG_FILE="$BASE_DIR/config/config.json"
 VERSION_FILE="$BASE_DIR/version"
 SETTINGS_FILE="$BASE_DIR/settings.sh"
@@ -39,8 +41,8 @@ if [ ! -f "$VERSION_FILE" ]; then
     exit 1
 fi
 # Also strips the UTF-8 byte order mark an editor on Windows may add.
-CURRENT_VERSION=$(LC_ALL=C tr -d '[:space:]\357\273\277' < "$VERSION_FILE")
-if [ -z "$CURRENT_VERSION" ]; then
+PINNED_VERSION=$(LC_ALL=C tr -d '[:space:]\357\273\277' < "$VERSION_FILE")
+if [ -z "$PINNED_VERSION" ]; then
     echo "ERROR: $VERSION_FILE is empty."
     exit 1
 fi
@@ -82,12 +84,14 @@ get_latest_version() {
     }
     echo "$tags_json" \
         | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+-ubuntu-26\.04"' \
-        | tr -d '"' \
+        | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' \
         | sort -V \
         | tail -1 \
         || true
 }
 
+# Prints the plain agent version for a version file entry. Accepts a plain
+# version (1.2.9) or a legacy image tag (1.2.9-ubuntu-26.04).
 get_release_version() {
     local tag="$1"
     if [[ "$tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-ubuntu-26\.04)?$ ]]; then
@@ -95,8 +99,16 @@ get_release_version() {
         return 0
     fi
 
-    echo "ERROR: Invalid Linux proxy-agent image tag '$tag'. Expected <version> or <version>-ubuntu-26.04." >&2
+    echo "ERROR: Invalid proxy agent version '$tag' in $VERSION_FILE. Expected <major>.<minor>.<patch>." >&2
     return 1
+}
+
+image_tag() {
+    echo "${IMAGE}:$1${IMAGE_TAG_SUFFIX}"
+}
+
+pin_version() {
+    echo "$1" > "$VERSION_FILE"
 }
 
 upgrade_agent() {
@@ -107,18 +119,16 @@ upgrade_agent() {
         echo "ERROR: Unable to determine latest version" >&2
         exit 1
     fi
-    local current_release latest_release
-    current_release=$(get_release_version "$CURRENT_VERSION") || exit 1
-    latest_release=$(get_release_version "$latest_version") || exit 1
-    if [ "$latest_release" = "$current_release" ]; then
+    if [ "$latest_version" = "$CURRENT_VERSION" ]; then
+        pin_version "$CURRENT_VERSION"
         echo "Already running the latest version ($CURRENT_VERSION)."
         exit 0
     fi
     log "Upgrading from $CURRENT_VERSION to $latest_version..."
-    echo "$latest_version" > "$VERSION_FILE"
+    pin_version "$latest_version"
     if ! start_agent "$latest_version"; then
         log "Upgrade failed, rolling back to $CURRENT_VERSION..."
-        echo "$CURRENT_VERSION" > "$VERSION_FILE"
+        pin_version "$CURRENT_VERSION"
         if ! start_agent "$CURRENT_VERSION"; then
             log "Rollback to $CURRENT_VERSION failed."
         fi
@@ -159,7 +169,7 @@ start_agent() {
         --health-start-period 30s \
         -v "$BASE_DIR/config/config.json:/config/config.json:ro" \
         -v "$BASE_DIR/logs:$CONTAINER_LOG_DIR" \
-        "${IMAGE}:${version}" \
+        "$(image_tag "$version")" \
         -i /config/config.json
 
     local timeout=60
@@ -193,7 +203,9 @@ start_agent() {
 
 case "${1:-}" in
     start)
+        CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
         check_memory_allocation
+        pin_version "$CURRENT_VERSION"
         start_agent "$CURRENT_VERSION"
         ;;
 
@@ -207,13 +219,16 @@ case "${1:-}" in
         ;;
 
     restart)
+        CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
         check_memory_allocation
         log "Restarting ${CONTAINER_NAME}..."
         stop_agent
+        pin_version "$CURRENT_VERSION"
         start_agent "$CURRENT_VERSION"
         ;;
 
     upgrade)
+        CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
         check_memory_allocation
         upgrade_agent
         ;;

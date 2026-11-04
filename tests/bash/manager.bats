@@ -16,7 +16,7 @@ setup() {
     mkdir -p "$AGENT_DIR/config"
     cp "$REPO_ROOT/proxy-agent-manager.sh" "$AGENT_DIR/"
     echo '{"agent_id": "abc123"}' > "$AGENT_DIR/config/config.json"
-    echo "1.2.9-ubuntu-26.04" > "$AGENT_DIR/version"
+    echo "1.2.9" > "$AGENT_DIR/version"
 
     # State shared with the stubs in ./stubs; see the comments there.
     export DOCKER_LOG="$AGENT_DIR/docker.log"
@@ -40,11 +40,32 @@ last_image() {
     cat "$DOCKER_LAST_IMAGE"
 }
 
+version_file() {
+    cat "$AGENT_DIR/version"
+}
+
 @test "start runs the pinned Ubuntu image with the default memory limit" {
     run manager start
     [ "$status" -eq 0 ]
     [ "$(last_image)" = "$IMAGE_REPO:1.2.9-ubuntu-26.04" ]
     grep -q -- "--memory=5120m" "$DOCKER_LOG"
+    [ "$(version_file)" = "1.2.9" ]
+}
+
+@test "start accepts a legacy Ubuntu image tag and rewrites it to the plain version" {
+    echo "1.2.9-ubuntu-26.04" > "$AGENT_DIR/version"
+    run manager start
+    [ "$status" -eq 0 ]
+    [ "$(last_image)" = "$IMAGE_REPO:1.2.9-ubuntu-26.04" ]
+    [ "$(version_file)" = "1.2.9" ]
+}
+
+@test "restart rewrites a legacy Ubuntu image tag to the plain version" {
+    echo "1.2.9-ubuntu-26.04" > "$AGENT_DIR/version"
+    run manager restart
+    [ "$status" -eq 0 ]
+    [ "$(last_image)" = "$IMAGE_REPO:1.2.9-ubuntu-26.04" ]
+    [ "$(version_file)" = "1.2.9" ]
 }
 
 @test "start rejects an invalid MEMORY_ALLOCATION_MB in settings.sh" {
@@ -61,6 +82,24 @@ last_image() {
     run manager stop
     [ "$status" -eq 0 ]
     [ ! -f "$DOCKER_LAST_IMAGE" ]
+}
+
+@test "stop, status, and logs work with a malformed version file" {
+    manager start
+    echo "2.0" > "$AGENT_DIR/version"
+
+    run manager status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"NAMES IMAGE STATUS"* ]]
+
+    run manager logs
+    [ "$status" -eq 0 ]
+    grep -q "^logs -f proxy-agent-abc123" "$DOCKER_LOG"
+
+    run manager stop
+    [ "$status" -eq 0 ]
+    [ ! -f "$DOCKER_LAST_IMAGE" ]
+    [ "$(version_file)" = "2.0" ]
 }
 
 @test "restart and upgrade reject an invalid MEMORY_ALLOCATION_MB without touching the agent" {
@@ -118,7 +157,7 @@ last_image() {
     run manager upgrade
     [ "$status" -eq 0 ]
     [ "$(last_image)" = "$IMAGE_REPO:1.2.10-ubuntu-26.04" ]
-    [[ "$(cat "$AGENT_DIR/version")" == 1.2.10* ]]
+    [ "$(version_file)" = "1.2.10" ]
 }
 
 @test "upgrade queries the registry tag listing, or its override" {
@@ -141,6 +180,15 @@ last_image() {
     ! grep -q "^run" "$DOCKER_LOG"
 }
 
+@test "upgrade from a legacy Ubuntu image tag rewrites it to the plain version when already latest" {
+    export STUB_CURL_RESPONSE='{"tags": ["1.2.9-ubuntu-26.04","1.2.11"]}'
+    echo "1.2.9-ubuntu-26.04" > "$AGENT_DIR/version"
+    run manager upgrade
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Already running the latest version (1.2.9)"* ]]
+    [ "$(version_file)" = "1.2.9" ]
+}
+
 @test "upgrade is a no-op when a bare version file entry matches the latest Ubuntu tag" {
     export STUB_CURL_RESPONSE='{"tags": ["1.2.10-ubuntu-26.04","1.2.11"]}'
     echo "1.2.10" > "$AGENT_DIR/version"
@@ -156,21 +204,29 @@ last_image() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"rolling back"* ]]
     [ "$(last_image)" = "$IMAGE_REPO:1.2.9-ubuntu-26.04" ]
-    [[ "$(cat "$AGENT_DIR/version")" == 1.2.9* ]]
+    [ "$(version_file)" = "1.2.9" ]
 }
 
 @test "upgrade reports a failed rollback" {
     export DOCKER_UNHEALTHY_TAG="1.2."
     run manager upgrade
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Rollback to 1.2.9-ubuntu-26.04 failed"* ]]
+    [[ "$output" == *"Rollback to 1.2.9 failed"* ]]
 }
 
 @test "upgrade rejects an invalid version file entry" {
     echo "2.0" > "$AGENT_DIR/version"
     run manager upgrade
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Invalid"* ]]
+    [[ "$output" == *"Invalid proxy agent version '2.0'"* ]]
+}
+
+@test "start rejects a Windows image tag" {
+    echo "1.2.9-windows-ltsc2022" > "$AGENT_DIR/version"
+    run manager start
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Invalid proxy agent version '1.2.9-windows-ltsc2022'"* ]]
+    [ ! -f "$DOCKER_LAST_IMAGE" ]
 }
 
 @test "stop removes the running container" {

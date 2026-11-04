@@ -60,16 +60,12 @@ assert_healthy() {
 assert_version_file() {
     local content
     content=$(cat "$INSTALL_DIR/version")
-    [[ "$content" == "$1"* ]] || fail "expected version file to start with $1, got '$content'"
+    [ "$content" = "$1" ] || fail "expected version file to contain $1, got '$content'"
 }
 
 echo "== Building stub image"
 docker build -q -f "$REPO_ROOT/tests/stub/Dockerfile.linux" -t "$STUB_IMAGE:$OLD_VERSION$SUFFIX" "$REPO_ROOT/tests/stub"
-# The bare tags let the rollback step work whether the management script pins
-# the plain version or the full image tag.
-for tag in "$OLD_VERSION" "$NEW_VERSION" "$NEW_VERSION$SUFFIX"; do
-    docker tag "$STUB_IMAGE:$OLD_VERSION$SUFFIX" "$STUB_IMAGE:$tag"
-done
+docker tag "$STUB_IMAGE:$OLD_VERSION$SUFFIX" "$STUB_IMAGE:$NEW_VERSION$SUFFIX"
 
 echo "== Starting stub registry on port $PORT"
 python3 "$REPO_ROOT/tests/integration/registry_server.py" --port "$PORT" --root "$REPO_ROOT" \
@@ -112,11 +108,15 @@ status_output=$("$MANAGER" status)
 echo "== Rolling back to $OLD_VERSION via the version file"
 echo "$OLD_VERSION" > "$INSTALL_DIR/version"
 "$MANAGER" start
-case "$(current_image)" in
-    "$STUB_IMAGE:$OLD_VERSION"|"$STUB_IMAGE:$OLD_VERSION$SUFFIX") ;;
-    *) fail "expected rollback to $OLD_VERSION, got $(current_image)" ;;
-esac
+assert_image "$STUB_IMAGE:$OLD_VERSION$SUFFIX"
 assert_healthy
+
+echo "== Starting from a legacy image tag in the version file"
+echo "$OLD_VERSION$SUFFIX" > "$INSTALL_DIR/version"
+"$MANAGER" start
+assert_image "$STUB_IMAGE:$OLD_VERSION$SUFFIX"
+assert_healthy
+assert_version_file "$OLD_VERSION"
 
 echo "== Upgrading"
 "$MANAGER" upgrade

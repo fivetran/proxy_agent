@@ -62,9 +62,9 @@ function Assert-Healthy {
 }
 
 function Assert-VersionFile {
-    param([string]$Prefix)
+    param([string]$Expected)
     $content = (Get-Content -LiteralPath (Join-Path $InstallDir 'version') -Raw).Trim()
-    if (-not $content.StartsWith($Prefix)) { Fail "expected version file to start with $Prefix, got '$content'" }
+    if ($content -ne $Expected) { Fail "expected version file to contain $Expected, got '$content'" }
 }
 
 function Invoke-Manager {
@@ -131,6 +131,7 @@ try {
     Assert-VersionFile $NewVersion
     $settings = Get-Content -LiteralPath (Join-Path $InstallDir 'settings.ps1') -Raw
     if ($settings -notmatch '\$MEMORY_ALLOCATION_MB = 512') { Fail 'settings.ps1 does not record the memory allocation' }
+    if ($settings -match 'WINDOWS_VERSION') { Fail 'settings.ps1 records a Windows version although none was given' }
     $memory = [int64](docker inspect -f '{{.HostConfig.Memory}}' $Container).Trim()
     if ($memory -ne 512MB) { Fail "container memory limit not applied (got $memory)" }
     Assert-ConfigMatches $InstallDir 'config.json'
@@ -144,6 +145,15 @@ try {
     $null = Invoke-Manager start
     Assert-Image "${StubImage}:$oldTag"
     Assert-Healthy
+
+    Write-Host '== Starting from a legacy image tag in the version file'
+    Set-Content -LiteralPath (Join-Path $InstallDir 'version') -Value $oldTag -Encoding ascii
+    $null = Invoke-Manager start
+    Assert-Image "${StubImage}:$oldTag"
+    Assert-Healthy
+    Assert-VersionFile $OldVersion
+    $settings = Get-Content -LiteralPath (Join-Path $InstallDir 'settings.ps1') -Raw
+    if ($settings -notmatch [regex]::Escape("`$WINDOWS_VERSION = '$ltsc'")) { Fail 'the legacy tag variant was not saved to settings.ps1' }
 
     Write-Host '== Upgrading'
     $null = Invoke-Manager upgrade
@@ -191,9 +201,12 @@ try {
 
     Write-Host '== Installing from a WebSocket config migrates it through the configure endpoint'
     $wsInstallDir = Join-Path $TempRoot 'fivetran-proxy-agent-websocket'
-    & (Join-Path $RepoRoot 'install.ps1') (Join-Path $Fixtures 'config-websocket.json') -InstallDir $wsInstallDir
+    # -WindowsVersion is given here, matching the host, to cover persisting it.
+    & (Join-Path $RepoRoot 'install.ps1') (Join-Path $Fixtures 'config-websocket.json') -InstallDir $wsInstallDir -WindowsVersion $ltsc
     if ($LASTEXITCODE -ne 0) { Fail "install.ps1 with a WebSocket config exited with $LASTEXITCODE" }
     Assert-ConfigMatches $wsInstallDir 'config.json'
+    $wsSettings = Get-Content -LiteralPath (Join-Path $wsInstallDir 'settings.ps1') -Raw
+    if ($wsSettings -notmatch [regex]::Escape("`$WINDOWS_VERSION = '$ltsc'")) { Fail 'settings.ps1 does not record -WindowsVersion' }
     Assert-Image "${StubImage}:$newTag"
     Assert-Healthy
     $null = Invoke-Manager stop -Dir $wsInstallDir
