@@ -84,6 +84,24 @@ version_file() {
     [ ! -f "$DOCKER_LAST_IMAGE" ]
 }
 
+@test "stop, status, and logs work with a malformed version file" {
+    manager start
+    echo "2.0" > "$AGENT_DIR/version"
+
+    run manager status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"NAMES IMAGE STATUS"* ]]
+
+    run manager logs
+    [ "$status" -eq 0 ]
+    grep -q "^logs -f proxy-agent-abc123" "$DOCKER_LOG"
+
+    run manager stop
+    [ "$status" -eq 0 ]
+    [ ! -f "$DOCKER_LAST_IMAGE" ]
+    [ "$(version_file)" = "2.0" ]
+}
+
 @test "restart and upgrade reject an invalid MEMORY_ALLOCATION_MB without touching the agent" {
     manager start
     echo "MEMORY_ALLOCATION_MB=4GB" > "$AGENT_DIR/settings.sh"

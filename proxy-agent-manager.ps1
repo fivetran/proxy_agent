@@ -396,10 +396,9 @@ function Invoke-Upgrade {
 
 # ── Commands ─────────────────────────────────────────────────────────────────
 
-$CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
-
 switch ($Command) {
     'start' {
+        $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
         Assert-MemoryAllocation
         if (-not (Start-CurrentProxyAgent)) { exit 1 }
     }
@@ -408,11 +407,13 @@ switch ($Command) {
         Stop-ProxyAgent
     }
     'restart' {
+        $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
         Assert-MemoryAllocation
         Write-Log "Restarting $CONTAINER_NAME..."
         if (-not (Start-CurrentProxyAgent)) { exit 1 }
     }
     'upgrade' {
+        $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
         Assert-MemoryAllocation
         Invoke-Upgrade
     }

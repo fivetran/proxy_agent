@@ -201,10 +201,9 @@ start_agent() {
 
 # ── Commands ─────────────────────────────────────────────────────────────────
 
-CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
-
 case "${1:-}" in
     start)
+        CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
         check_memory_allocation
         pin_version "$CURRENT_VERSION"
         start_agent "$CURRENT_VERSION"
@@ -220,6 +219,7 @@ case "${1:-}" in
         ;;
 
     restart)
+        CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
         check_memory_allocation
         log "Restarting ${CONTAINER_NAME}..."
         stop_agent
@@ -228,6 +228,7 @@ case "${1:-}" in
         ;;
 
     upgrade)
+        CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
         check_memory_allocation
         upgrade_agent
         ;;

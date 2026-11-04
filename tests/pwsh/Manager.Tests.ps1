@@ -181,6 +181,25 @@ Describe 'proxy-agent-manager.ps1' {
             $global:ProxyAgentStub.LastImage | Should -BeNullOrEmpty
         }
 
+        It 'runs <_> with a malformed version file' -ForEach @('stop', 'status', 'logs') {
+            $manager = New-AgentDir
+            $null = Invoke-Manager $manager start
+            Set-Content -LiteralPath (Join-Path $script:AgentDir 'version') -Value '2.0' -Encoding ascii
+
+            $null = Invoke-Manager $manager $_
+
+            $LASTEXITCODE | Should -Be 0
+            Get-VersionFile | Should -Be '2.0'
+            if ($_ -eq 'stop') {
+                $global:ProxyAgentStub.LastImage | Should -BeNullOrEmpty
+                Get-DockerCall 'rm' | Should -Contain 'proxy-agent-abc123'
+            } elseif ($_ -eq 'status') {
+                Get-DockerCall 'ps' | Should -Contain 'name=proxy-agent-abc123'
+            } else {
+                Get-DockerCall 'logs' | Should -Contain '-f'
+            }
+        }
+
         It 'rejects an invalid MEMORY_ALLOCATION_MB on <_> without touching the agent' -ForEach @('restart', 'upgrade') {
             $manager = New-AgentDir
             $null = Invoke-Manager $manager start
