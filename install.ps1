@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 #
 #  Installer for Fivetran Proxy Agent on Windows using Docker
 #
@@ -29,8 +29,10 @@ $MIN_RECOMMENDED_DISK_SPACE_MB          = 2048
 # for a new base image on upgrade. Sized from the 1.2.9 images (fivetran/engineering#330090); revisit when the image changes.
 $MIN_RECOMMENDED_WINDOWS_DISK_SPACE_MB  = 12288
 $AGENT_SCRIPT                           = 'proxy-agent-manager.ps1'
-$AGENT_SCRIPT_URL                       = 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1'
-$REGISTRY_TAGS_URL                      = 'https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list'
+# PROXY_AGENT_SCRIPT_URL and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
+# test suite can install the checked-out management script against a stub registry.
+$AGENT_SCRIPT_URL                       = if ($env:PROXY_AGENT_SCRIPT_URL) { $env:PROXY_AGENT_SCRIPT_URL } else { 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1' }
+$REGISTRY_TAGS_URL                      = if ($env:PROXY_AGENT_REGISTRY_TAGS_URL) { $env:PROXY_AGENT_REGISTRY_TAGS_URL } else { 'https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list' }
 $DEFAULT_FIVETRAN_API_URL               = 'https://api.fivetran.com'
 $SETTINGS_FILE                           = 'settings.ps1'
 
@@ -408,7 +410,8 @@ try {
         'NT AUTHORITY\SYSTEM', 'Read', 'Allow')))
     $configAcl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
         (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')), 'Read', 'Allow')))
-    [System.IO.File]::SetAccessControl($configDest, $configAcl)
+    # Set-Acl rather than [System.IO.File]::SetAccessControl, which PowerShell 7 does not have.
+    Set-Acl -LiteralPath $configDest -AclObject $configAcl
 
     if ($ConfigPath) {
         [System.IO.File]::WriteAllText($configDest, $configFileContent, [System.Text.UTF8Encoding]::new($false))
@@ -471,6 +474,9 @@ try {
 
     Write-Host "`nInstallation complete."
     Write-Host "Install directory: $InstallDir"
+    # Otherwise the script would exit with whatever $LASTEXITCODE a tolerated
+    # failure left, such as an unknown Docker data root.
+    exit 0
 } finally {
     Remove-Item Env:\TOKEN -ErrorAction SilentlyContinue
 }

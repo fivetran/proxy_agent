@@ -8,7 +8,9 @@ set -euo pipefail
 
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-IMAGE="us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent"
+# PROXY_AGENT_IMAGE and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
+# test suite can run against a stub image and registry.
+IMAGE="${PROXY_AGENT_IMAGE:-us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent}"
 CONFIG_FILE="$BASE_DIR/config/config.json"
 VERSION_FILE="$BASE_DIR/version"
 SETTINGS_FILE="$BASE_DIR/settings.sh"
@@ -36,7 +38,8 @@ if [ ! -f "$VERSION_FILE" ]; then
     echo "ERROR: $VERSION_FILE not found."
     exit 1
 fi
-CURRENT_VERSION=$(tr -d '[:space:]' < "$VERSION_FILE")
+# Also strips the UTF-8 byte order mark an editor on Windows may add.
+CURRENT_VERSION=$(LC_ALL=C tr -d '[:space:]\357\273\277' < "$VERSION_FILE")
 if [ -z "$CURRENT_VERSION" ]; then
     echo "ERROR: $VERSION_FILE is empty."
     exit 1
@@ -59,12 +62,21 @@ if [ -f "$SETTINGS_FILE" ]; then
 fi
 MEMORY_ALLOCATION_MB="${MEMORY_ALLOCATION_MB:-5120}"
 
+# Only the commands that start a container check the setting, so stop, status
+# and logs still work with an invalid one.
+check_memory_allocation() {
+    if ! [[ "$MEMORY_ALLOCATION_MB" =~ ^[0-9]+$ ]] || [ "$MEMORY_ALLOCATION_MB" -lt 1 ]; then
+        echo "ERROR: Invalid MEMORY_ALLOCATION_MB in $SETTINGS_FILE: $MEMORY_ALLOCATION_MB (must be a positive integer, in MB)"
+        exit 1
+    fi
+}
+
 get_latest_version() {
     local registry_host="${IMAGE%%/*}"
     local repository_path="${IMAGE#*/}"
-    local registry_url="https://${registry_host}/v2/${repository_path}/tags/list"
+    local registry_url="${PROXY_AGENT_REGISTRY_TAGS_URL:-https://${registry_host}/v2/${repository_path}/tags/list}"
     local tags_json
-    tags_json=$(curl -s -f "$registry_url") || {
+    tags_json=$(curl -s -f --max-time 30 "$registry_url") || {
         echo "ERROR: Unable to query image registry for latest version" >&2
         return 1
     }
@@ -107,7 +119,10 @@ upgrade_agent() {
     if ! start_agent "$latest_version"; then
         log "Upgrade failed, rolling back to $CURRENT_VERSION..."
         echo "$CURRENT_VERSION" > "$VERSION_FILE"
-        start_agent "$CURRENT_VERSION"
+        if ! start_agent "$CURRENT_VERSION"; then
+            log "Rollback to $CURRENT_VERSION failed."
+        fi
+        exit 1
     fi
 }
 
@@ -178,6 +193,7 @@ start_agent() {
 
 case "${1:-}" in
     start)
+        check_memory_allocation
         start_agent "$CURRENT_VERSION"
         ;;
 
@@ -191,12 +207,14 @@ case "${1:-}" in
         ;;
 
     restart)
+        check_memory_allocation
         log "Restarting ${CONTAINER_NAME}..."
         stop_agent
         start_agent "$CURRENT_VERSION"
         ;;
 
     upgrade)
+        check_memory_allocation
         upgrade_agent
         ;;
 

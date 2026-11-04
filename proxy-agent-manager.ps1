@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 param(
     [Parameter(Position = 0)]
     [string]$Command
@@ -7,7 +7,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $BASE_DIR           = $PSScriptRoot
-$IMAGE              = 'us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent'
+# PROXY_AGENT_IMAGE and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
+# test suite can run against a stub image and registry.
+$IMAGE              = if ($env:PROXY_AGENT_IMAGE) { $env:PROXY_AGENT_IMAGE } else { 'us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent' }
 $CONFIG_FILE        = Join-Path $BASE_DIR 'config\config.json'
 $VERSION_FILE       = Join-Path $BASE_DIR 'version'
 $LOGFILE            = Join-Path $BASE_DIR 'logs\proxy-agent-manager.log'
@@ -17,7 +19,8 @@ $SETTINGS_FILE = Join-Path $BASE_DIR 'settings.ps1'
 if (Test-Path -LiteralPath $SETTINGS_FILE) {
     . $SETTINGS_FILE
 }
-if (-not $MEMORY_ALLOCATION_MB) { $MEMORY_ALLOCATION_MB = 5120 }
+# Unset or empty only, so 0 is rejected like any other invalid setting.
+if ("$MEMORY_ALLOCATION_MB" -eq '') { $MEMORY_ALLOCATION_MB = 5120 }
 
 # ── Startup validation ───────────────────────────────────────────────────────
 
@@ -169,12 +172,16 @@ function Get-LatestVersion {
         [string]$WindowsVersion
     )
 
-    $registryHost   = $IMAGE.Split('/')[0]
-    $repositoryPath = $IMAGE.Substring($registryHost.Length + 1)
-    $registryUrl    = "https://$registryHost/v2/$repositoryPath/tags/list"
+    if ($env:PROXY_AGENT_REGISTRY_TAGS_URL) {
+        $registryUrl = $env:PROXY_AGENT_REGISTRY_TAGS_URL
+    } else {
+        $registryHost   = $IMAGE.Split('/')[0]
+        $repositoryPath = $IMAGE.Substring($registryHost.Length + 1)
+        $registryUrl    = "https://$registryHost/v2/$repositoryPath/tags/list"
+    }
 
     try {
-        $tagsJson = Invoke-RestMethod -Uri $registryUrl -Method Get
+        $tagsJson = Invoke-RestMethod -Uri $registryUrl -Method Get -TimeoutSec 30
     } catch {
         Write-Host "ERROR: Unable to query image registry for latest version: $_" -ForegroundColor Red
         exit 1
@@ -206,6 +213,15 @@ function Compare-SemVer {
     $aVer = [version](Get-ReleaseVersion -Tag $A)
     $bVer = [version](Get-ReleaseVersion -Tag $B)
     return $aVer.CompareTo($bVer)
+}
+
+# Only the commands that start a container check the setting, so stop, status
+# and logs still work with an invalid one.
+function Assert-MemoryAllocation {
+    if ("$MEMORY_ALLOCATION_MB" -notmatch '^\d+$' -or [int64]"$MEMORY_ALLOCATION_MB" -lt 1) {
+        Write-Host "ERROR: Invalid `$MEMORY_ALLOCATION_MB in ${SETTINGS_FILE}: $MEMORY_ALLOCATION_MB (must be a positive integer, in MB)" -ForegroundColor Red
+        exit 1
+    }
 }
 
 function Stop-ProxyAgent {
@@ -379,7 +395,10 @@ function Invoke-Upgrade {
     if (-not (Start-ProxyAgent -Version $latestVersion -ContainerOsType $containerOsType)) {
         Write-Log "Upgrade failed, rolling back to $currentVersion..."
         Set-Content -Path $VERSION_FILE -Value $currentVersion -Encoding ascii
-        Start-ProxyAgent -Version $currentVersion -ContainerOsType $containerOsType | Out-Null
+        if (-not (Start-ProxyAgent -Version $currentVersion -ContainerOsType $containerOsType)) {
+            Write-Log "Rollback to $currentVersion failed."
+        }
+        exit 1
     }
 }
 
@@ -387,6 +406,7 @@ function Invoke-Upgrade {
 
 switch ($Command) {
     'start' {
+        Assert-MemoryAllocation
         if (-not (Start-CurrentProxyAgent)) { exit 1 }
     }
     'stop' {
@@ -394,10 +414,12 @@ switch ($Command) {
         Stop-ProxyAgent
     }
     'restart' {
+        Assert-MemoryAllocation
         Write-Log "Restarting $CONTAINER_NAME..."
         if (-not (Start-CurrentProxyAgent)) { exit 1 }
     }
     'upgrade' {
+        Assert-MemoryAllocation
         Invoke-Upgrade
     }
     'status' {

@@ -1,0 +1,5 @@
+{
+  "agent_id": "test-agent",
+  "auth_token": "secret",
+  "proxy_server_uri": "wss://old-proxy.invalid"
+}

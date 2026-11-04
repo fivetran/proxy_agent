@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#
+#  Stub curl for tests/bash/manager.bats. Records its arguments to $CURL_LOG,
+#  answers every call with $STUB_CURL_RESPONSE and never touches the network.
+#
+echo "$*" >> "$CURL_LOG"
+echo "$STUB_CURL_RESPONSE"

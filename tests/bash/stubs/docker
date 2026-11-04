@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+#
+#  Stub docker CLI for tests/bash/manager.bats. Records every call to
+#  $DOCKER_LOG and keeps one container's worth of state: $DOCKER_LAST_IMAGE
+#  exists while a container "runs" and holds the image it was started from.
+#  Nothing is pulled or run. If $DOCKER_UNHEALTHY_TAG is set and the running
+#  image contains it, the health check reports unhealthy.
+#
+echo "$*" >> "$DOCKER_LOG"
+case "$1" in
+    run)
+        for arg in "$@"; do
+            case "$arg" in *proxy-agent:*) echo "$arg" > "$DOCKER_LAST_IMAGE" ;; esac
+        done
+        ;;
+    inspect)
+        [ -f "$DOCKER_LAST_IMAGE" ] || exit 1
+        if [ "$2" = "-f" ]; then
+            case "$(cat "$DOCKER_LAST_IMAGE")" in
+                *"${DOCKER_UNHEALTHY_TAG:-__none__}"*) echo unhealthy ;;
+                *) echo healthy ;;
+            esac
+        fi
+        ;;
+    stop|rm)
+        rm -f "$DOCKER_LAST_IMAGE"
+        ;;
+    ps)
+        echo "NAMES IMAGE STATUS"
+        ;;
+esac
