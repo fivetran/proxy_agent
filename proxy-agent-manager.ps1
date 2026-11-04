@@ -72,8 +72,7 @@ function Write-Log {
 }
 
 # Windows PowerShell 5.1 ignores HTTP_PROXY/HTTPS_PROXY/NO_PROXY, so apply them to this
-# script's web requests during upgrade. curl honors the same variables, so install.sh and install.ps1
-# behave alike behind a proxy. Without them, .NET's default proxy is the user's Internet
+# script's web requests during upgrade. Without them, .NET's default proxy is the user's Internet
 # Options proxy, which is kept. Either way the proxy may answer NTLM/Kerberos challenges
 # with the current Windows identity, which .NET doesn't do on its own. Docker itself reads
 # its own proxy settings; see the README.
@@ -97,7 +96,7 @@ function Set-WebProxyFromEnvironment {
     try {
         $proxyUri = [Uri]$proxyUrl
     } catch {
-        Write-Host "ERROR: Invalid proxy URL in HTTPS_PROXY/HTTP_PROXY: $proxyUrl" -ForegroundColor Red
+        Write-Host "ERROR: Invalid proxy URL in HTTPS_PROXY/HTTP_PROXY" -ForegroundColor Red
         exit 1
     }
 

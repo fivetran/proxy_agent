@@ -70,7 +70,11 @@ Linux releases continue to use `proxy-agent:<version>` for backward compatibilit
 
 ### Installing behind a network proxy
 
-Both installers and the `upgrade` command honor `HTTPS_PROXY` (or `HTTP_PROXY`) and `NO_PROXY` for the web requests they make: downloading the management script, listing image tags, and fetching the agent configuration from Fivetran. On Linux, `curl` reads these variables natively. On Windows, Windows PowerShell 5.1 does not, so `install.ps1` and `proxy-agent-manager.ps1` apply them themselves. The URL may include credentials: `http://user:pass@proxy.example.com:3128`.
+The installers and the `upgrade` command use a proxy for their web requests: downloading the management script, listing image tags, and fetching the agent configuration from Fivetran.
+
+On Linux, the shell scripts use `curl`. Set `HTTPS_PROXY` or `https_proxy` for HTTPS URLs, which the scripts use by default. Set lowercase `http_proxy` for HTTP URLs; curl ignores uppercase `HTTP_PROXY`. `NO_PROXY` or `no_proxy` excludes hosts.
+
+On Windows, the PowerShell scripts use `Invoke-WebRequest` and `Invoke-RestMethod`. They apply `HTTPS_PROXY` (or `HTTP_PROXY` as a fallback) and `NO_PROXY` themselves because Windows PowerShell 5.1 does not read these variables for web requests. The proxy URL may include credentials: `http://user:pass@proxy.example.com:3128`.
 
 ```powershell
 $env:HTTPS_PROXY = 'http://proxy.example.com:3128'

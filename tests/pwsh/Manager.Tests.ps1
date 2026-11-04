@@ -418,11 +418,12 @@ Describe 'proxy-agent-manager.ps1' {
         }
 
         It 'rejects an invalid proxy URL before contacting the registry' {
-            $env:HTTPS_PROXY = 'http://bad host:'
+            $env:HTTPS_PROXY = 'http://user:secret@bad host:'
             $manager = New-AgentDir
             $output = Invoke-Manager $manager upgrade
             $LASTEXITCODE | Should -Be 1
             $output | Should -Match 'Invalid proxy URL'
+            $output | Should -Not -Match 'secret'
             $global:ProxyAgentStub.RegistryUrl | Should -BeNullOrEmpty
         }
 
