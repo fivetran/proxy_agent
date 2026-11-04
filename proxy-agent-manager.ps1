@@ -71,19 +71,24 @@ function Write-Log {
     Add-Content -Path $LOGFILE -Value "$timestamp UTC - $Message" -Encoding ascii
 }
 
-# Windows PowerShell 5.1 ignores HTTP_PROXY/HTTPS_PROXY/NO_PROXY, so apply them to this
-# script's web requests during upgrade. Without them, .NET's default proxy is the user's Internet
-# Options proxy, which is kept. Either way the proxy may answer NTLM/Kerberos challenges
-# with the current Windows identity, which .NET doesn't do on its own. Docker itself reads
-# its own proxy settings; see the README.
+# Windows PowerShell 5.1 uses WebRequest.DefaultWebProxy; PowerShell 7 uses
+# HttpClient.DefaultProxy. Apply proxy settings to the one used by each version.
+# Without environment variables, keep the system proxy and its credentials.
+# Docker has separate proxy settings; see the README.
 function Set-WebProxyFromEnvironment {
     param([Parameter(Mandatory)][Uri]$ProbeUri)
 
     $proxyUrl = if ($env:HTTPS_PROXY) { $env:HTTPS_PROXY } elseif ($env:HTTP_PROXY) { $env:HTTP_PROXY } else { $null }
     if (-not $proxyUrl) {
-        $systemProxy = [System.Net.WebRequest]::DefaultWebProxy
+        $systemProxy = if ($PSVersionTable.PSVersion.Major -ge 7) {
+            [System.Net.Http.HttpClient]::DefaultProxy
+        } else {
+            [System.Net.WebRequest]::DefaultWebProxy
+        }
         if ($systemProxy) {
-            $systemProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
+            if (-not $systemProxy.Credentials) {
+                $systemProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
+            }
             $effectiveProxy = $systemProxy.GetProxy($ProbeUri)
             # Direct connections come back as the probe URI on .NET Framework and as null on .NET Core.
             if ($effectiveProxy -and $effectiveProxy -ne $ProbeUri) {
@@ -107,6 +112,10 @@ function Set-WebProxyFromEnvironment {
         foreach ($entry in ($env:NO_PROXY -split ',')) {
             $bypassHost = $entry.Trim().TrimStart('.')
             if (-not $bypassHost) { continue }
+            if ($bypassHost -eq '*') {
+                $bypassList = @('.*')
+                break
+            }
             $bypassList += '^https?://([^/]+\.)?' + [regex]::Escape($bypassHost) + '(:\d+)?(/|$)'
         }
     }
@@ -123,6 +132,9 @@ function Set-WebProxyFromEnvironment {
         $webProxy.UseDefaultCredentials = $true
     }
     [System.Net.WebRequest]::DefaultWebProxy = $webProxy
+    if ($PSVersionTable.PSVersion.Major -ge 7) {
+        [System.Net.Http.HttpClient]::DefaultProxy = $webProxy
+    }
     Write-Log "Using proxy $proxyAddress from the environment"
 }
 
