@@ -406,7 +406,16 @@ Describe 'proxy-agent-manager.ps1' {
             $LASTEXITCODE | Should -Be 0
             [object]::ReferenceEquals($systemProxy, [System.Net.WebRequest]::DefaultWebProxy) | Should -BeTrue
             $systemProxy.Credentials | Should -Be ([System.Net.CredentialCache]::DefaultCredentials)
-            $output | Should -Match 'Using system proxy http://system-proxy.example.com:8080/'
+            $output | Should -Match 'Using system proxy http://system-proxy.example.com:8080'
+        }
+
+        It 'does not print credentials embedded in the system proxy URL' {
+            [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy('http://user:secret@system-proxy.example.com:8080')
+            $manager = New-AgentDir
+            $output = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 0
+            $output | Should -Match 'Using system proxy http://system-proxy.example.com:8080'
+            $output | Should -Not -Match 'secret'
         }
 
         It 'reports nothing when the system proxy is a direct connection' {

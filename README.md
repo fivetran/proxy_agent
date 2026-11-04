@@ -86,7 +86,7 @@ On Windows, the variables take precedence over the proxy in Internet Options; wi
 
 On Windows, download `install.ps1` first, as shown above, rather than fetching it inline with `Invoke-RestMethod`: the download itself runs before the script can apply the proxy settings.
 
-These variables do not configure Docker. The Docker daemon needs its own proxy settings to pull the agent image, and the agent needs `proxy_host` and `proxy_port` in `config.json` to reach Fivetran through a proxy at runtime. See the [Proxy Agent documentation](https://fivetran.com/docs/destinations/connection-options/proxy-agent) for both.
+These variables configure the installer and management scripts, not Docker. Configure [Docker's daemon proxy](https://docs.docker.com/engine/daemon/proxy/) for image pulls. For the running agent on either platform, set `proxy_host` and `proxy_port` in `config.json` as described in the [Linux](https://fivetran.com/docs/destinations/connection-options/proxy-agent/setup-guide-docker#optionalconfigureproxyagenttouseproxyserver) and [Windows](https://fivetran.com/docs/destinations/connection-options/proxy-agent/setup-guide-docker#optionalconfigureproxyagentonwindowstouseproxyserver) setup guides. Docker client proxy settings containing credentials are stored in the container's environment and can be seen with `docker inspect`.
 
 The installer will:
 - Check prerequisites

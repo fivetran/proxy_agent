@@ -74,7 +74,7 @@ function Set-WebProxyFromEnvironment {
             $effectiveProxy = $systemProxy.GetProxy($ProbeUri)
             # Direct connections come back as the probe URI on .NET Framework and as null on .NET Core.
             if ($effectiveProxy -and $effectiveProxy -ne $ProbeUri) {
-                Write-Host "Using system proxy $effectiveProxy"
+                Write-Host "Using system proxy $($effectiveProxy.Scheme)://$($effectiveProxy.Authority)"
             }
         }
         return
