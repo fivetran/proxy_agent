@@ -68,6 +68,26 @@ Windows Server hosts use an exact LTSC mapping: Server 2019 selects `ltsc2019`, 
 
 Linux releases continue to use `proxy-agent:<version>` for backward compatibility and are also published as `proxy-agent:<version>-ubuntu-26.04`. Both tags reference the same Linux multi-architecture image. Windows releases use the explicit `proxy-agent:<version>-windows-ltsc2019`, `proxy-agent:<version>-windows-ltsc2022`, or `proxy-agent:<version>-windows-ltsc2025` tags.
 
+### Installing behind a network proxy
+
+The installers and the `upgrade` command use a proxy for their web requests: downloading the management script, listing image tags, and fetching the agent configuration from Fivetran.
+
+On Linux, the shell scripts use `curl`. Set `HTTPS_PROXY` or `https_proxy` for HTTPS URLs, which the scripts use by default. Set lowercase `http_proxy` for HTTP URLs; curl ignores uppercase `HTTP_PROXY`. `NO_PROXY` or `no_proxy` excludes hosts.
+
+On Windows, the PowerShell scripts use `Invoke-WebRequest` and `Invoke-RestMethod`. They apply `HTTPS_PROXY` (or `HTTP_PROXY` as a fallback) and `NO_PROXY` themselves because Windows PowerShell 5.1 does not read these variables for web requests. The proxy URL may include credentials: `http://user:pass@proxy.example.com:3128`.
+
+```powershell
+$env:HTTPS_PROXY = 'http://proxy.example.com:3128'
+$env:NO_PROXY    = 'localhost,127.0.0.1,.example.com'
+$env:RUNTIME = 'docker'; $env:TOKEN = 'YOUR_AGENT_TOKEN'; & .\install.ps1
+```
+
+On Windows, the variables take precedence over the proxy in Internet Options; without them, the scripts use the Internet Options proxy as any PowerShell web request would, and print it when one is in effect. In both cases a proxy that asks for NTLM or Kerberos authentication is answered with the current Windows identity, unless the URL carries its own credentials.
+
+On Windows, download `install.ps1` first, as shown above, rather than fetching it inline with `Invoke-RestMethod`: the download itself runs before the script can apply the proxy settings.
+
+These variables configure the installer and management scripts, not Docker. Configure [Docker's daemon proxy](https://docs.docker.com/engine/daemon/proxy/) for image pulls. For the running agent on either platform, set `proxy_host` and `proxy_port` in `config.json` as described in the [Linux](https://fivetran.com/docs/destinations/connection-options/proxy-agent/setup-guide-docker#optionalconfigureproxyagenttouseproxyserver) and [Windows](https://fivetran.com/docs/destinations/connection-options/proxy-agent/setup-guide-docker#optionalconfigureproxyagentonwindowstouseproxyserver) setup guides. Docker client proxy settings containing credentials are stored in the container's environment and can be seen with `docker inspect`.
+
 The installer will:
 - Check prerequisites
 - Create the installation directory

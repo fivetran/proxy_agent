@@ -121,8 +121,14 @@ AfterAll {
 
 Describe 'proxy-agent-manager.ps1' {
     BeforeEach {
-        # A developer's environment must not leak into the default-URL assertion.
-        Remove-Item Env:\PROXY_AGENT_REGISTRY_TAGS_URL -ErrorAction SilentlyContinue
+        # A developer's environment must not leak into the default-URL or proxy assertions.
+        Remove-Item Env:\PROXY_AGENT_REGISTRY_TAGS_URL, Env:\HTTPS_PROXY, Env:\HTTP_PROXY, Env:\NO_PROXY -ErrorAction SilentlyContinue
+        $script:OriginalWebProxy = [System.Net.WebRequest]::DefaultWebProxy
+        [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy
+        if ($PSVersionTable.PSVersion.Major -ge 7) {
+            $script:OriginalHttpClientProxy = [System.Net.Http.HttpClient]::DefaultProxy
+            [System.Net.Http.HttpClient]::DefaultProxy = New-Object System.Net.WebProxy
+        }
         $global:ProxyAgentStub = @{
             OsType       = 'linux'
             LastImage    = $null
@@ -137,7 +143,11 @@ Describe 'proxy-agent-manager.ps1' {
     }
 
     AfterEach {
-        Remove-Item Env:\PROXY_AGENT_REGISTRY_TAGS_URL -ErrorAction SilentlyContinue
+        Remove-Item Env:\PROXY_AGENT_REGISTRY_TAGS_URL, Env:\HTTPS_PROXY, Env:\HTTP_PROXY, Env:\NO_PROXY -ErrorAction SilentlyContinue
+        [System.Net.WebRequest]::DefaultWebProxy = $script:OriginalWebProxy
+        if ($PSVersionTable.PSVersion.Major -ge 7) {
+            [System.Net.Http.HttpClient]::DefaultProxy = $script:OriginalHttpClientProxy
+        }
         if ($script:AgentDir -and (Test-Path -LiteralPath $script:AgentDir)) {
             Remove-Item -LiteralPath $script:AgentDir -Recurse -Force
         }
@@ -447,6 +457,136 @@ Describe 'proxy-agent-manager.ps1' {
             $encoded = ($healthCmd -split ' ')[-1]
             $decoded = [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encoded))
             $decoded | Should -Match 'HEARTBEAT_EXPIRE_AT'
+        }
+    }
+
+    # The manager applies HTTPS_PROXY/HTTP_PROXY/NO_PROXY to the process-wide
+    # proxy used by the current PowerShell version before the registry lookup.
+    # The script runs in this process, so the result is observable here.
+    Context 'behind a network proxy' {
+        It 'applies HTTPS_PROXY with credentials and NO_PROXY on upgrade' {
+            $env:HTTPS_PROXY = 'http://us%40er:p%3Ass@proxy.example.com:3128'
+            $env:NO_PROXY = 'localhost, .corp.example.com'
+            $manager = New-AgentDir
+            $output = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 0
+            $output | Should -Match 'Using proxy http://proxy.example.com:3128/'
+
+            $proxy = [System.Net.WebRequest]::DefaultWebProxy
+            $proxy.Address | Should -Be 'http://proxy.example.com:3128/'
+            $proxy.Credentials.UserName | Should -Be 'us@er'
+            $proxy.Credentials.Password | Should -Be 'p:ss'
+            if ($PSVersionTable.PSVersion.Major -ge 7) {
+                [object]::ReferenceEquals($proxy, [System.Net.Http.HttpClient]::DefaultProxy) | Should -BeTrue
+            }
+            $proxy.IsBypassed([Uri]'https://us-docker.pkg.dev/v2/tags/list') | Should -BeFalse
+            $proxy.IsBypassed([Uri]'http://localhost:8080/') | Should -BeTrue
+            $proxy.IsBypassed([Uri]'https://corp.example.com/') | Should -BeTrue
+            $proxy.IsBypassed([Uri]'https://db.corp.example.com:5432/') | Should -BeTrue
+            $proxy.IsBypassed([Uri]'https://notcorp.example.com/') | Should -BeFalse
+        }
+
+        It 'falls back to HTTP_PROXY and uses Windows credentials when the URL has none' {
+            $env:HTTP_PROXY = 'http://proxy.example.com:8080'
+            $manager = New-AgentDir
+            $null = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 0
+            $proxy = [System.Net.WebRequest]::DefaultWebProxy
+            $proxy.Address | Should -Be 'http://proxy.example.com:8080/'
+            $proxy.UseDefaultCredentials | Should -BeTrue
+        }
+
+        It 'bypasses every destination when NO_PROXY is an asterisk' {
+            $env:HTTPS_PROXY = 'http://proxy.example.com:3128'
+            $env:NO_PROXY = '*'
+            $manager = New-AgentDir
+            $null = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 0
+            $proxy = [System.Net.WebRequest]::DefaultWebProxy
+            $proxy.IsBypassed([Uri]'https://us-docker.pkg.dev/v2/tags/list') | Should -BeTrue
+            if ($PSVersionTable.PSVersion.Major -ge 7) {
+                [object]::ReferenceEquals($proxy, [System.Net.Http.HttpClient]::DefaultProxy) | Should -BeTrue
+            }
+        }
+
+        It 'keeps the system proxy, reports it and lets it use Windows credentials when no variables are set' {
+            # Stands in for an Internet Options proxy, which .NET exposes as the default.
+            $systemProxy = New-Object System.Net.WebProxy('http://system-proxy.example.com:8080')
+            [System.Net.WebRequest]::DefaultWebProxy = $systemProxy
+            if ($PSVersionTable.PSVersion.Major -ge 7) {
+                [System.Net.Http.HttpClient]::DefaultProxy = $systemProxy
+            }
+            $manager = New-AgentDir
+            $output = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 0
+            [object]::ReferenceEquals($systemProxy, [System.Net.WebRequest]::DefaultWebProxy) | Should -BeTrue
+            if ($PSVersionTable.PSVersion.Major -ge 7) {
+                [object]::ReferenceEquals($systemProxy, [System.Net.Http.HttpClient]::DefaultProxy) | Should -BeTrue
+            }
+            $systemProxy.Credentials | Should -Be ([System.Net.CredentialCache]::DefaultCredentials)
+            $output | Should -Match 'Using system proxy http://system-proxy.example.com:8080'
+        }
+
+        It 'preserves credentials already configured on the system proxy' {
+            $systemProxy = New-Object System.Net.WebProxy('http://system-proxy.example.com:8080')
+            $credentials = New-Object System.Net.NetworkCredential('proxy-user', 'proxy-password')
+            $systemProxy.Credentials = $credentials
+            [System.Net.WebRequest]::DefaultWebProxy = $systemProxy
+            if ($PSVersionTable.PSVersion.Major -ge 7) {
+                [System.Net.Http.HttpClient]::DefaultProxy = $systemProxy
+            }
+            $manager = New-AgentDir
+            $null = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 0
+            [object]::ReferenceEquals($credentials, $systemProxy.Credentials) | Should -BeTrue
+        }
+
+        It 'does not print credentials embedded in the system proxy URL' {
+            [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy('http://user:secret@system-proxy.example.com:8080')
+            if ($PSVersionTable.PSVersion.Major -ge 7) {
+                [System.Net.Http.HttpClient]::DefaultProxy = [System.Net.WebRequest]::DefaultWebProxy
+            }
+            $manager = New-AgentDir
+            $output = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 0
+            $output | Should -Match 'Using system proxy http://system-proxy.example.com:8080'
+            $output | Should -Not -Match 'secret'
+        }
+
+        It 'reports nothing when the system proxy is a direct connection' {
+            [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy
+            if ($PSVersionTable.PSVersion.Major -ge 7) {
+                [System.Net.Http.HttpClient]::DefaultProxy = [System.Net.WebRequest]::DefaultWebProxy
+            }
+            $manager = New-AgentDir
+            $output = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 0
+            $output | Should -Not -Match 'Using (system )?proxy'
+        }
+
+        It 'rejects an invalid proxy URL before contacting the registry' {
+            $env:HTTPS_PROXY = 'http://user:secret@bad host:'
+            $manager = New-AgentDir
+            $output = Invoke-Manager $manager upgrade
+            $LASTEXITCODE | Should -Be 1
+            $output | Should -Match 'Invalid proxy URL'
+            $output | Should -Not -Match 'secret'
+            $global:ProxyAgentStub.RegistryUrl | Should -BeNullOrEmpty
+        }
+
+        It 'shares its proxy handling with install.ps1' {
+            # The two scripts are downloaded separately, so the function is duplicated
+            # rather than shared. This keeps the copies from drifting apart; the only
+            # allowed difference is that the manager logs through Write-Log.
+            function Get-ProxyFunctionBody {
+                param([string]$ScriptName)
+                $tokens = $null; $errors = $null
+                $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $script:RepoRoot $ScriptName), [ref]$tokens, [ref]$errors)
+                $function = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Set-WebProxyFromEnvironment' }, $false)
+                $function | Should -Not -BeNullOrEmpty -Because "$ScriptName must define Set-WebProxyFromEnvironment"
+                return $function.Body.Extent.Text -replace 'Write-Log ', 'Write-Host '
+            }
+            Get-ProxyFunctionBody 'proxy-agent-manager.ps1' | Should -Be (Get-ProxyFunctionBody 'install.ps1')
         }
     }
 }
