@@ -361,6 +361,15 @@ Describe 'proxy-agent-manager.ps1' {
             (Get-DockerRunArgs)[-5..-1] | Should -Be @('--doctor', '--region', 'us-east-1', '--tcp-attempts', '3')
         }
 
+        It 'consumes PowerShell flags while forwarding doctor options' {
+            $manager = New-AgentDir
+            $null = & $manager doctor -Verbose --region us-east-1 --tcp-attempts 3 *>&1
+            $LASTEXITCODE | Should -Be 0
+            $runArgs = Get-DockerRunArgs
+            $runArgs | Should -Not -Contain '-Verbose'
+            $runArgs[-5..-1] | Should -Be @('--doctor', '--region', 'us-east-1', '--tcp-attempts', '3')
+        }
+
         It "exits with the doctor's exit code" {
             $global:ProxyAgentStub.DoctorExitCode = 1
             $manager = New-AgentDir
