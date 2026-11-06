@@ -281,6 +281,29 @@ version_file() {
     [[ "$output" == *"output was saved to $saved"* ]]
 }
 
+@test "doctor preserves fallback reports from runs in the same second" {
+    mkdir -p "$AGENT_DIR/bin"
+    cat > "$AGENT_DIR/bin/date" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' '2020-01-02T03-04-05'
+EOF
+    chmod +x "$AGENT_DIR/bin/date"
+    export PATH="$AGENT_DIR/bin:$PATH"
+
+    export DOCKER_DOCTOR_REPORT="first doctor report"
+    run manager doctor
+    [ "$status" -eq 0 ]
+
+    export DOCKER_DOCTOR_REPORT="second doctor report"
+    run manager doctor
+    [ "$status" -eq 0 ]
+
+    local saved_reports=("$AGENT_DIR"/logs/proxy-agent-manager-doctor-*.log)
+    [ "${#saved_reports[@]}" -eq 2 ]
+    grep -qx "first doctor report" "${saved_reports[@]}"
+    grep -qx "second doctor report" "${saved_reports[@]}"
+}
+
 @test "doctor saves its output when only an earlier run's doctor log exists" {
     mkdir -p "$AGENT_DIR/logs"
     touch "$AGENT_DIR/logs/doctor-2020-01-01T00-00-00.log"

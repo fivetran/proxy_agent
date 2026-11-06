@@ -86,7 +86,7 @@ BeforeAll {
             'info' { return $stub.OsType }
             'run' {
                 if ($args -contains '--doctor') {
-                    'stub doctor report'
+                    if ($stub.DoctorReport) { $stub.DoctorReport } else { 'stub doctor report' }
                     Write-Error 'stub doctor log'
                     if ($stub.DoctorLogDir) {
                         Set-Content -LiteralPath (Join-Path $stub.DoctorLogDir 'doctor-stub.log') -Value 'stub doctor log' -Encoding ascii
@@ -146,6 +146,7 @@ Describe 'proxy-agent-manager.ps1' {
             LastImage    = $null
             UnhealthyTag = $null
             DoctorExitCode = 0
+            DoctorReport = $null
             DoctorLogDir   = $null
             DockerCalls  = @()
             RegistryUrl  = $null
@@ -386,6 +387,21 @@ Describe 'proxy-agent-manager.ps1' {
             Get-Content -LiteralPath $saved[0].FullName | Should -Be @('stub doctor report', 'stub doctor log')
             $output | Should -Match 'stub doctor report'
             $output | Should -Match ([regex]::Escape("output was saved to $($saved[0].FullName)"))
+        }
+
+        It 'preserves fallback reports from repeated doctor runs' {
+            $manager = New-AgentDir
+            $global:ProxyAgentStub.DoctorReport = 'first doctor report'
+            $null = Invoke-Manager $manager doctor
+            $global:ProxyAgentStub.DoctorReport = 'second doctor report'
+            $null = Invoke-Manager $manager doctor
+            $LASTEXITCODE | Should -Be 0
+
+            $saved = @(Get-ChildItem -LiteralPath (Join-Path $script:AgentDir 'logs') -Filter 'proxy-agent-manager-doctor-*.log')
+            $saved.Count | Should -Be 2
+            $contents = @($saved | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+            $contents | Should -Match 'first doctor report'
+            $contents | Should -Match 'second doctor report'
         }
 
         It "saves the doctor's output when only an earlier run's doctor log exists" {

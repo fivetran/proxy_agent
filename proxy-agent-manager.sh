@@ -219,8 +219,17 @@ list_doctor_logs() {
 # output is saved there instead.
 run_doctor() {
     mkdir -p "$BASE_DIR/logs"
-    local output_file earlier_doctor_logs
-    output_file="$BASE_DIR/logs/proxy-agent-manager-doctor-$(date -u +'%Y-%m-%dT%H-%M-%S').log"
+    local output_file temporary_output_file earlier_doctor_logs timestamp
+    timestamp=$(date -u +'%Y-%m-%dT%H-%M-%S')
+    temporary_output_file=$(mktemp "$BASE_DIR/logs/proxy-agent-manager-doctor-${timestamp}.XXXXXXXXXX")
+    output_file="${temporary_output_file}.log"
+    # macOS mktemp requires Xs at the end, so add the discoverable .log suffix
+    # with a hard link. ln creates it atomically and won't overwrite a report.
+    if ! ln "$temporary_output_file" "$output_file"; then
+        rm -f "$temporary_output_file"
+        return 1
+    fi
+    rm -f "$temporary_output_file"
     earlier_doctor_logs=$(list_doctor_logs)
 
     # No terminal (-t), which would merge the doctor's progress line into the

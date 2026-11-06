@@ -14,7 +14,7 @@ echo "$*" >> "$DOCKER_LOG"
 case "$1" in
     run)
         if [[ " $* " == *" --doctor "* ]]; then
-            echo "stub doctor report"
+            echo "${DOCKER_DOCTOR_REPORT:-stub doctor report}"
             echo "stub doctor log" >&2
             if [ -n "${DOCKER_DOCTOR_LOG_DIR:-}" ]; then
                 echo "stub doctor log" > "$DOCKER_DOCTOR_LOG_DIR/doctor-stub.log"

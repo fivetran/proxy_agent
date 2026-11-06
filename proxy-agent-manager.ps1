@@ -506,10 +506,11 @@ function Invoke-Doctor {
 
     $logsDir = Join-Path $BASE_DIR 'logs'
     $timestamp = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH-mm-ss")
-    $outputFile = Join-Path $logsDir "proxy-agent-manager-doctor-$timestamp.log"
+    $outputFile = Join-Path $logsDir "proxy-agent-manager-doctor-$timestamp-$([Guid]::NewGuid().ToString('N')).log"
     $earlierDoctorLogs = @(Get-ChildItem -LiteralPath $logsDir -Filter 'doctor-*.log' | ForEach-Object Name)
     # Tee-Object can't choose the encoding on Windows PowerShell 5.1.
-    $writer = [System.IO.StreamWriter]::new($outputFile, $false, [System.Text.UTF8Encoding]::new($false))
+    $outputStream = [System.IO.File]::Open($outputFile, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    $writer = [System.IO.StreamWriter]::new($outputStream, [System.Text.UTF8Encoding]::new($false))
     # Under 'Stop', Windows PowerShell 5.1 throws on the first line docker
     # writes to stderr once it is redirected.
     $ErrorActionPreference = 'Continue'
