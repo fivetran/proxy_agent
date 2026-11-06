@@ -1,7 +1,10 @@
 ﻿#Requires -Version 5.1
 param(
     [Parameter(Position = 0)]
-    [string]$Command
+    [string]$Command,
+    # Passed to --doctor by the doctor command, e.g. --region us-east-1
+    [Parameter(ValueFromRemainingArguments)]
+    [string[]]$DoctorArgs
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,9 +32,9 @@ if (-not $WINDOWS_VERSION) { $WINDOWS_VERSION = $null }
 
 # ── Startup validation ───────────────────────────────────────────────────────
 
-$validCommands = @('start', 'stop', 'restart', 'upgrade', 'status', 'logs')
+$validCommands = @('start', 'stop', 'restart', 'upgrade', 'status', 'logs', 'doctor')
 if (-not $Command -or $Command -notin $validCommands) {
-    Write-Host "Usage: $($MyInvocation.MyCommand.Name) {start|stop|restart|upgrade|status|logs}"
+    Write-Host "Usage: $($MyInvocation.MyCommand.Name) {start|stop|restart|upgrade|status|logs|doctor [options]}"
     exit 1
 }
 
@@ -299,6 +302,46 @@ function Assert-MemoryAllocation {
     }
 }
 
+# Returns the config path inside the container.
+function Get-ContainerConfigPath {
+    param([Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType)
+    if ($ContainerOsType -eq 'windows') { return 'C:/config/config.json' }
+    return '/config/config.json'
+}
+
+# Returns the log folder inside the container.
+function Get-ContainerLogDir {
+    param([Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType)
+    if ($ContainerOsType -eq 'windows') { return 'C:/app/logs' }
+    return $CONTAINER_LOG_DIR
+}
+
+# Returns the docker run arguments shared by the agent and doctor containers,
+# so the doctor checks the agent's config, memory limit and log folder.
+function Get-AgentRunArgs {
+    param([Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType)
+
+    $null = New-Item -ItemType Directory -Force -Path (Join-Path $BASE_DIR 'logs')
+
+    # Docker Desktop for Windows requires forward-slash paths in volume mounts.
+    $logsMount = (Join-Path $BASE_DIR 'logs') -replace '\\', '/'
+    if ($ContainerOsType -eq 'windows') {
+        # Windows containers can only mount folders.
+        $configMount = "$((Join-Path $BASE_DIR 'config') -replace '\\', '/'):C:/config:ro"
+    } else {
+        $configMount = "$((Join-Path $BASE_DIR 'config\config.json') -replace '\\', '/'):/config/config.json:ro"
+    }
+    $containerLogDir = Get-ContainerLogDir -ContainerOsType $ContainerOsType
+
+    return @(
+        "--memory=${MEMORY_ALLOCATION_MB}m",
+        '--env', 'IS_DOCKER=true',
+        '--env', "LOG_FOLDER_PATH=$containerLogDir",
+        '-v', $configMount,
+        '-v', "${logsMount}:$containerLogDir"
+    )
+}
+
 function Stop-ProxyAgent {
     try { docker inspect $CONTAINER_NAME 2>&1 | Out-Null } catch {}
     if ($LASTEXITCODE -eq 0) {
@@ -317,22 +360,13 @@ function Start-ProxyAgent {
 
     Stop-ProxyAgent
 
-    $null = New-Item -ItemType Directory -Force -Path (Join-Path $BASE_DIR 'logs')
-
-    # Docker Desktop for Windows requires forward-slash paths in volume mounts.
-    $configFileMount = (Join-Path $BASE_DIR 'config\config.json') -replace '\\', '/'
-    $configDirectoryMount = (Join-Path $BASE_DIR 'config') -replace '\\', '/'
-    $logsMount   = (Join-Path $BASE_DIR 'logs') -replace '\\', '/'
-
     # Build argument list to avoid PowerShell variable expansion inside the health check.
     $dockerArgs = @(
         'run', '-d',
         '--name', $CONTAINER_NAME,
         '--restart', 'unless-stopped',
-        "--memory=${MEMORY_ALLOCATION_MB}m",
         '--label', 'fivetran=proxy-agent',
         '--label', "proxy_agent_id=$AGENT_ID",
-        '--env', 'IS_DOCKER=true',
         '--env', 'HEARTBEAT_EXPIRY_SECONDS=30',
         '--health-interval', '10s',
         '--health-retries', '3',
@@ -340,8 +374,6 @@ function Start-ProxyAgent {
     )
 
     if ($ContainerOsType -eq 'windows') {
-        $containerConfigPath = 'C:/config/config.json'
-        $containerLogDir = 'C:/app/logs'
         $containerHeartbeatPath = 'C:/app/logs/proxy-agent-heartbeat.txt'
         $windowsHealthCheckScript = @(
             '$path = $env:HEARTBEAT_PATH'
@@ -352,29 +384,19 @@ function Start-ProxyAgent {
         $windowsHealthCheckEncoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($windowsHealthCheckScript))
         $windowsHealthCheck = "powershell.exe -NoProfile -EncodedCommand $windowsHealthCheckEncoded"
         $dockerArgs += @(
-            '--env', "LOG_FOLDER_PATH=$containerLogDir",
             '--env', "HEARTBEAT_PATH=$containerHeartbeatPath",
             '--health-cmd', $windowsHealthCheck,
-            '--health-timeout', '15s',
-            '-v', "${configDirectoryMount}:C:/config:ro",
-            '-v', "${logsMount}:$containerLogDir",
-            "${IMAGE}:${ImageTag}",
-            '-i', $containerConfigPath
+            '--health-timeout', '15s'
         )
     } else {
-        $containerConfigPath = '/config/config.json'
-        $containerLogDir = $CONTAINER_LOG_DIR
         $dockerArgs += @(
-            '--env', "LOG_FOLDER_PATH=$containerLogDir",
             '--env', 'HEARTBEAT_PATH=/tmp/proxy-agent-heartbeat.txt',
             '--health-cmd', '[ ! -f $HEARTBEAT_PATH ] || { . $HEARTBEAT_PATH && [ $(date +%s) -lt $HEARTBEAT_EXPIRE_AT ]; }',
-            '--health-timeout', '3s',
-            '-v', "${configFileMount}:/config/config.json:ro",
-            '-v', "${logsMount}:$containerLogDir",
-            "${IMAGE}:${ImageTag}",
-            '-i', $containerConfigPath
+            '--health-timeout', '3s'
         )
     }
+    $dockerArgs += Get-AgentRunArgs -ContainerOsType $ContainerOsType
+    $dockerArgs += @("${IMAGE}:${ImageTag}", '-i', (Get-ContainerConfigPath -ContainerOsType $ContainerOsType))
 
     & docker @dockerArgs | Out-Host
     if ($LASTEXITCODE -ne 0) {
@@ -461,6 +483,59 @@ function Invoke-Upgrade {
     }
 }
 
+# Runs the doctor in a throwaway container beside the agent's, passing
+# $DoctorArgs to --doctor (e.g. --region us-east-1), and exits with its exit
+# code. Newer doctors save their log and an archive to the mounted log folder,
+# so they outlive the container. Otherwise, as with older doctors (e.g.
+# 1.2.10), which only print their report, or when the doctor fails before
+# saving its log, its output is saved there instead.
+function Invoke-Doctor {
+    param([string[]]$DoctorArgs)
+
+    $containerOsType = Get-ContainerOsType
+    $windowsVersion = Resolve-WindowsVersion -ContainerOsType $containerOsType
+    $imageTag = Get-ImageTag -Version $CURRENT_VERSION -ContainerOsType $containerOsType -WindowsVersion $windowsVersion
+
+    # No terminal (-t), which would merge the doctor's progress line into the
+    # saved output. The working folder is where newer doctors save their log if
+    # they can't read the config.
+    $dockerArgs = @('run', '--rm', '--workdir', (Get-ContainerLogDir -ContainerOsType $containerOsType))
+    $dockerArgs += Get-AgentRunArgs -ContainerOsType $containerOsType
+    $dockerArgs += @("${IMAGE}:${imageTag}", (Get-ContainerConfigPath -ContainerOsType $containerOsType), '--doctor')
+    if ($DoctorArgs) { $dockerArgs += $DoctorArgs }
+
+    $logsDir = Join-Path $BASE_DIR 'logs'
+    $timestamp = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH-mm-ss")
+    $outputFile = Join-Path $logsDir "proxy-agent-manager-doctor-$timestamp-$([Guid]::NewGuid().ToString('N')).log"
+    $earlierDoctorLogs = @(Get-ChildItem -LiteralPath $logsDir -Filter 'doctor-*.log' | ForEach-Object Name)
+    # Tee-Object can't choose the encoding on Windows PowerShell 5.1.
+    $outputStream = [System.IO.File]::Open($outputFile, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    $writer = [System.IO.StreamWriter]::new($outputStream, [System.Text.UTF8Encoding]::new($false))
+    # Under 'Stop', Windows PowerShell 5.1 throws on the first line docker
+    # writes to stderr once it is redirected.
+    $ErrorActionPreference = 'Continue'
+    try {
+        # Stderr lines arrive as error records; "$_" is their text.
+        & docker @dockerArgs 2>&1 | ForEach-Object {
+            $line = "$_"
+            Write-Host $line
+            $writer.WriteLine($line)
+        }
+        $status = $LASTEXITCODE
+    } finally {
+        $writer.Dispose()
+    }
+    $newDoctorLogs = Get-ChildItem -LiteralPath $logsDir -Filter 'doctor-*.log' | Where-Object { $_.Name -notin $earlierDoctorLogs }
+    if ($newDoctorLogs) {
+        Remove-Item -LiteralPath $outputFile
+        # The doctor printed paths inside the container.
+        Write-Host "$(Get-ContainerLogDir -ContainerOsType $containerOsType) in the container is $logsDir on this host."
+    } else {
+        Write-Host "The doctor's output was saved to $outputFile"
+    }
+    exit $status
+}
+
 # ── Commands ─────────────────────────────────────────────────────────────────
 
 switch ($Command) {
@@ -490,5 +565,10 @@ switch ($Command) {
     }
     'logs' {
         docker logs -f $CONTAINER_NAME
+    }
+    'doctor' {
+        $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
+        Assert-MemoryAllocation
+        Invoke-Doctor -DoctorArgs $DoctorArgs
     }
 }

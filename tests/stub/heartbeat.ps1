@@ -1,7 +1,19 @@
 # Stub proxy agent: writes the heartbeat file the management script's health
 # check reads, then idles. It expects to be invoked like the real agent, with
 # `-i <config path>` pointing at a readable file, and exits otherwise so the
-# container never becomes healthy and the test fails.
+# container never becomes healthy and the test fails. Invoked like the doctor,
+# with `<config path> --doctor [options]`, it instead acts like a newer doctor:
+# it saves doctor-stub.log and doctor-stub.zip to $env:LOG_FOLDER_PATH, prints
+# a report naming its options and a log line on stderr, and exits 1, as a
+# doctor whose checks failed.
+if ($args.Count -ge 2 -and $args[1] -eq '--doctor') {
+    if (-not $env:LOG_FOLDER_PATH) { throw 'LOG_FOLDER_PATH must be set' }
+    [Console]::Error.WriteLine('stub doctor stderr')
+    Set-Content -LiteralPath (Join-Path $env:LOG_FOLDER_PATH 'doctor-stub.log') -Value 'stub doctor log' -Encoding ascii
+    Set-Content -LiteralPath (Join-Path $env:LOG_FOLDER_PATH 'doctor-stub.zip') -Value 'stub doctor archive' -Encoding ascii
+    Write-Host "stub doctor report for options: $($args[2..($args.Count - 1)] -join ' ')"
+    exit 1
+}
 if ($args.Count -lt 2 -or $args[0] -ne '-i') {
     Write-Error "stub proxy agent: expected '-i <config path>', got: $args"
     exit 1

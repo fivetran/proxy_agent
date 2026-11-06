@@ -74,7 +74,10 @@ BeforeAll {
 
     # Stand-in for the docker CLI. Records every call and keeps one container's
     # worth of state: LastImage is $null while no container "runs" and
-    # otherwise holds the image it was started from.
+    # otherwise holds the image it was started from. A `run` of the doctor (with
+    # `--doctor`) leaves that state alone, outputs a line and an error, standing
+    # in for stderr, and exits with DoctorExitCode. If DoctorLogDir is set, it
+    # also saves a log there, like newer doctors.
     function docker {
         $stub = $global:ProxyAgentStub
         $stub.DockerCalls += ,@($args)
@@ -82,6 +85,15 @@ BeforeAll {
         switch ($args[0]) {
             'info' { return $stub.OsType }
             'run' {
+                if ($args -contains '--doctor') {
+                    if ($stub.DoctorReport) { $stub.DoctorReport } else { 'stub doctor report' }
+                    Write-Error 'stub doctor log'
+                    if ($stub.DoctorLogDir) {
+                        Set-Content -LiteralPath (Join-Path $stub.DoctorLogDir 'doctor-stub.log') -Value 'stub doctor log' -Encoding ascii
+                    }
+                    $global:LASTEXITCODE = $stub.DoctorExitCode
+                    return
+                }
                 $stub.LastImage = $args | Where-Object { $_ -like "*proxy-agent:*" } | Select-Object -First 1
                 return 'container-id'
             }
@@ -133,6 +145,9 @@ Describe 'proxy-agent-manager.ps1' {
             OsType       = 'linux'
             LastImage    = $null
             UnhealthyTag = $null
+            DoctorExitCode = 0
+            DoctorReport = $null
+            DoctorLogDir   = $null
             DockerCalls  = @()
             RegistryUrl  = $null
             RegistryMethod = $null
@@ -210,15 +225,16 @@ Describe 'proxy-agent-manager.ps1' {
             }
         }
 
-        It 'rejects an invalid MEMORY_ALLOCATION_MB on <_> without touching the agent' -ForEach @('restart', 'upgrade') {
+        It 'rejects an invalid MEMORY_ALLOCATION_MB on <_> without touching the agent' -ForEach @('restart', 'upgrade', 'doctor') {
             $manager = New-AgentDir
             $null = Invoke-Manager $manager start
             Set-Content -LiteralPath (Join-Path $script:AgentDir 'settings.ps1') -Value "`$MEMORY_ALLOCATION_MB = '4G'" -Encoding ascii
             $version = Get-VersionFile
+            $callsBefore = $global:ProxyAgentStub.DockerCalls.Count
             $output = Invoke-Manager $manager $_
             $LASTEXITCODE | Should -Be 1
             $output | Should -Match 'Invalid \$MEMORY_ALLOCATION_MB'
-            Get-DockerCall 'stop' | Should -BeNullOrEmpty
+            $global:ProxyAgentStub.DockerCalls.Count | Should -Be $callsBefore
             Get-VersionFile | Should -Be $version
         }
 
@@ -324,6 +340,99 @@ Describe 'proxy-agent-manager.ps1' {
             $LASTEXITCODE | Should -Be 0
             $global:ProxyAgentStub.LastImage | Should -BeNullOrEmpty
             Get-DockerCall 'rm' | Should -Contain 'proxy-agent-abc123'
+        }
+
+        It "runs the doctor in a throwaway container with the agent's config, logs and memory limit" {
+            $manager = New-AgentDir
+            $null = Invoke-Manager $manager doctor
+            $LASTEXITCODE | Should -Be 0
+            $runArgs = Get-DockerRunArgs
+            $runArgs[1] | Should -Be '--rm'
+            $runArgs | Should -Contain '--memory=5120m'
+            $runArgs | Should -Contain 'LOG_FOLDER_PATH=/app/logs'
+            ($runArgs | Where-Object { $_ -like '*/config/config.json:/config/config.json:ro' }) | Should -Not -BeNullOrEmpty
+            ($runArgs | Where-Object { $_ -like '*/logs:/app/logs' }) | Should -Not -BeNullOrEmpty
+            $runArgs[2..3] | Should -Be @('--workdir', '/app/logs')
+            $runArgs[-3..-1] | Should -Be @("$($script:ImageRepo):1.2.9-ubuntu-26.04", '/config/config.json', '--doctor')
+        }
+
+        It 'passes the doctor its options' {
+            $manager = New-AgentDir
+            $null = & $manager doctor --region us-east-1 --tcp-attempts 3 *>&1
+            (Get-DockerRunArgs)[-5..-1] | Should -Be @('--doctor', '--region', 'us-east-1', '--tcp-attempts', '3')
+        }
+
+        It 'consumes PowerShell flags while forwarding doctor options' {
+            $manager = New-AgentDir
+            $null = & $manager doctor -Verbose --region us-east-1 --tcp-attempts 3 *>&1
+            $LASTEXITCODE | Should -Be 0
+            $runArgs = Get-DockerRunArgs
+            $runArgs | Should -Not -Contain '-Verbose'
+            $runArgs[-5..-1] | Should -Be @('--doctor', '--region', 'us-east-1', '--tcp-attempts', '3')
+        }
+
+        It "exits with the doctor's exit code" {
+            $global:ProxyAgentStub.DoctorExitCode = 1
+            $manager = New-AgentDir
+            $null = Invoke-Manager $manager doctor
+            $LASTEXITCODE | Should -Be 1
+        }
+
+        It "saves the doctor's output, errors included, when the doctor saves no log" {
+            $manager = New-AgentDir
+            $output = Invoke-Manager $manager doctor
+            $LASTEXITCODE | Should -Be 0
+            $saved = @(Get-ChildItem -LiteralPath (Join-Path $script:AgentDir 'logs') -Filter 'proxy-agent-manager-doctor-*.log')
+            $saved.Count | Should -Be 1
+            Get-Content -LiteralPath $saved[0].FullName | Should -Be @('stub doctor report', 'stub doctor log')
+            $output | Should -Match 'stub doctor report'
+            $output | Should -Match ([regex]::Escape("output was saved to $($saved[0].FullName)"))
+        }
+
+        It 'preserves fallback reports from repeated doctor runs' {
+            $manager = New-AgentDir
+            $global:ProxyAgentStub.DoctorReport = 'first doctor report'
+            $null = Invoke-Manager $manager doctor
+            $global:ProxyAgentStub.DoctorReport = 'second doctor report'
+            $null = Invoke-Manager $manager doctor
+            $LASTEXITCODE | Should -Be 0
+
+            $saved = @(Get-ChildItem -LiteralPath (Join-Path $script:AgentDir 'logs') -Filter 'proxy-agent-manager-doctor-*.log')
+            $saved.Count | Should -Be 2
+            $contents = @($saved | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+            $contents | Should -Match 'first doctor report'
+            $contents | Should -Match 'second doctor report'
+        }
+
+        It "saves the doctor's output when only an earlier run's doctor log exists" {
+            $manager = New-AgentDir
+            $logsDir = Join-Path $script:AgentDir 'logs'
+            $null = New-Item -ItemType Directory -Force -Path $logsDir
+            $null = New-Item -ItemType File -Path (Join-Path $logsDir 'doctor-2020-01-01T00-00-00.log')
+            $null = Invoke-Manager $manager doctor
+            Get-ChildItem -LiteralPath $logsDir -Filter 'proxy-agent-manager-doctor-*.log' | Should -Not -BeNullOrEmpty
+        }
+
+        It "keeps only its own log when the doctor saves one beside an earlier run's" {
+            $manager = New-AgentDir
+            $logsDir = Join-Path $script:AgentDir 'logs'
+            $null = New-Item -ItemType Directory -Force -Path $logsDir
+            $null = New-Item -ItemType File -Path (Join-Path $logsDir 'doctor-2020-01-01T00-00-00.log')
+            $global:ProxyAgentStub.DoctorLogDir = $logsDir
+            $output = Invoke-Manager $manager doctor
+            $LASTEXITCODE | Should -Be 0
+            Join-Path $logsDir 'doctor-stub.log' | Should -Exist
+            Get-ChildItem -LiteralPath $logsDir -Filter 'proxy-agent-manager-doctor-*.log' | Should -BeNullOrEmpty
+            $output | Should -Match ([regex]::Escape("/app/logs in the container is $logsDir on this host."))
+        }
+
+        It 'leaves the running agent alone when running the doctor' {
+            $manager = New-AgentDir
+            $null = Invoke-Manager $manager start
+            $null = Invoke-Manager $manager doctor
+            $global:ProxyAgentStub.LastImage | Should -Be "$($script:ImageRepo):1.2.9-ubuntu-26.04"
+            Get-DockerCall 'stop' | Should -BeNullOrEmpty
+            Get-DockerCall 'rm' | Should -BeNullOrEmpty
         }
     }
 
@@ -457,6 +566,18 @@ Describe 'proxy-agent-manager.ps1' {
             $encoded = ($healthCmd -split ' ')[-1]
             $decoded = [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encoded))
             $decoded | Should -Match 'HEARTBEAT_EXPIRE_AT'
+        }
+
+        It 'runs the doctor with the Windows image, config folder and log folder' {
+            $manager = New-AgentDir -Version '1.2.9'
+            $null = Invoke-Manager $manager doctor
+            $LASTEXITCODE | Should -Be 0
+            $runArgs = Get-DockerRunArgs
+            ($runArgs | Where-Object { $_ -like '*:C:/config:ro' }) | Should -Not -BeNullOrEmpty
+            $runArgs | Should -Contain 'LOG_FOLDER_PATH=C:/app/logs'
+            $runArgs[2..3] | Should -Be @('--workdir', 'C:/app/logs')
+            $runArgs[-3..-1] | Should -Be @("$($script:ImageRepo):1.2.9-windows-ltsc2022", 'C:/config/config.json', '--doctor')
+            Get-VersionFile | Should -Be '1.2.9'
         }
     }
 

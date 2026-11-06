@@ -4,11 +4,23 @@
 #  $DOCKER_LOG and keeps one container's worth of state: $DOCKER_LAST_IMAGE
 #  exists while a container "runs" and holds the image it was started from.
 #  Nothing is pulled or run. If $DOCKER_UNHEALTHY_TAG is set and the running
-#  image contains it, the health check reports unhealthy.
+#  image contains it, the health check reports unhealthy. A `run` of the
+#  doctor (with `--doctor`) leaves that state alone, prints a line to stdout
+#  and one to stderr, and exits with $DOCKER_DOCTOR_EXIT_CODE. If
+#  $DOCKER_DOCTOR_LOG_DIR is set, it also saves a log there, like newer
+#  doctors.
 #
 echo "$*" >> "$DOCKER_LOG"
 case "$1" in
     run)
+        if [[ " $* " == *" --doctor "* ]]; then
+            echo "${DOCKER_DOCTOR_REPORT:-stub doctor report}"
+            echo "stub doctor log" >&2
+            if [ -n "${DOCKER_DOCTOR_LOG_DIR:-}" ]; then
+                echo "stub doctor log" > "$DOCKER_DOCTOR_LOG_DIR/doctor-stub.log"
+            fi
+            exit "${DOCKER_DOCTOR_EXIT_CODE:-0}"
+        fi
         for arg in "$@"; do
             case "$arg" in *proxy-agent:*) echo "$arg" > "$DOCKER_LAST_IMAGE" ;; esac
         done

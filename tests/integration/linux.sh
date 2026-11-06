@@ -133,6 +133,17 @@ echo "== restart"
 "$MANAGER" restart
 assert_healthy
 
+echo "== doctor saves its log and archive to the host's log folder"
+doctor_status=0
+doctor_output=$("$MANAGER" doctor --region us-east-1) || doctor_status=$?
+[[ "$doctor_output" == *"stub doctor stderr"* ]] || fail "doctor did not show the doctor's stderr: $doctor_output"
+[ "$doctor_status" -eq 1 ] || fail "expected the doctor's exit code 1, got $doctor_status"
+[[ "$doctor_output" == *"stub doctor report for options: --region us-east-1"* ]] || fail "doctor did not print its report: $doctor_output"
+[ -f "$INSTALL_DIR/logs/doctor-stub.log" ] || fail "the doctor's log is not in the host's log folder"
+[ -f "$INSTALL_DIR/logs/doctor-stub.zip" ] || fail "the doctor's archive is not in the host's log folder"
+[ -z "$(find "$INSTALL_DIR/logs" -name 'proxy-agent-manager-doctor-*.log')" ] || fail "the manager kept a copy of the output of a doctor that saved its own log"
+assert_healthy
+
 echo "== stop"
 "$MANAGER" stop
 if docker inspect "$CONTAINER" >/dev/null 2>&1; then
