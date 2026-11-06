@@ -109,6 +109,17 @@ BeforeAll {
         return [pscustomobject]@{ tags = $global:ProxyAgentStub.Tags }
     }
 
+    # Write even on failure to simulate a partially downloaded script.
+    function Invoke-WebRequest {
+        param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing, [int]$TimeoutSec)
+        $global:ProxyAgentStub.DownloadUrl = $Uri
+        $global:ProxyAgentStub.DownloadTimeoutSec = $TimeoutSec
+        $global:ProxyAgentStub.DownloadUseBasicParsing = $UseBasicParsing.IsPresent
+        $global:ProxyAgentStub.DownloadProxy = [System.Net.WebRequest]::DefaultWebProxy.GetProxy([Uri]$Uri)
+        [System.IO.File]::WriteAllText($OutFile, $global:ProxyAgentStub.ScriptContent, [System.Text.UTF8Encoding]::new($true))
+        if ($global:ProxyAgentStub.DownloadFails) { throw 'Download interrupted' }
+    }
+
     # Stand-in for the host OS lookup, reporting $global:ProxyAgentStub.OperatingSystem.
     function Get-CimInstance {
         return $global:ProxyAgentStub.OperatingSystem
@@ -122,7 +133,7 @@ AfterAll {
 Describe 'proxy-agent-manager.ps1' {
     BeforeEach {
         # A developer's environment must not leak into the default-URL or proxy assertions.
-        Remove-Item Env:\PROXY_AGENT_REGISTRY_TAGS_URL, Env:\HTTPS_PROXY, Env:\HTTP_PROXY, Env:\NO_PROXY -ErrorAction SilentlyContinue
+        Remove-Item Env:\PROXY_AGENT_REGISTRY_TAGS_URL, Env:\PROXY_AGENT_SCRIPT_URL, Env:\HTTPS_PROXY, Env:\HTTP_PROXY, Env:\NO_PROXY -ErrorAction SilentlyContinue
         $script:OriginalWebProxy = [System.Net.WebRequest]::DefaultWebProxy
         [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy
         if ($PSVersionTable.PSVersion.Major -ge 7) {
@@ -137,19 +148,96 @@ Describe 'proxy-agent-manager.ps1' {
             RegistryUrl  = $null
             RegistryMethod = $null
             RegistryTimeoutSec = $null
+            DownloadUrl = $null
+            DownloadTimeoutSec = $null
+            DownloadUseBasicParsing = $false
+            DownloadProxy = $null
+            DownloadFails = $false
+            ScriptContent = (Get-Content -LiteralPath (Join-Path $script:RepoRoot 'proxy-agent-manager.ps1') -Raw) + "`n# Updated manager`n"
             OperatingSystem = [pscustomobject]@{ ProductType = 3; BuildNumber = 20348; Caption = 'Windows Server 2022' }
             Tags        = @('1.2.9-ubuntu-26.04', '1.2.10-ubuntu-26.04', '1.2.11', '1.2.10-windows-ltsc2022', '1.2.10-windows-ltsc2025')
         }
     }
 
     AfterEach {
-        Remove-Item Env:\PROXY_AGENT_REGISTRY_TAGS_URL, Env:\HTTPS_PROXY, Env:\HTTP_PROXY, Env:\NO_PROXY -ErrorAction SilentlyContinue
+        Remove-Item Env:\PROXY_AGENT_REGISTRY_TAGS_URL, Env:\PROXY_AGENT_SCRIPT_URL, Env:\HTTPS_PROXY, Env:\HTTP_PROXY, Env:\NO_PROXY -ErrorAction SilentlyContinue
         [System.Net.WebRequest]::DefaultWebProxy = $script:OriginalWebProxy
         if ($PSVersionTable.PSVersion.Major -ge 7) {
             [System.Net.Http.HttpClient]::DefaultProxy = $script:OriginalHttpClientProxy
         }
         if ($script:AgentDir -and (Test-Path -LiteralPath $script:AgentDir)) {
             Remove-Item -LiteralPath $script:AgentDir -Recurse -Force
+        }
+    }
+
+    Context 'updating the manager' {
+        It 'replaces the script without changing the agent or its files' {
+            $manager = New-AgentDir -Settings '$MEMORY_ALLOCATION_MB = 2048'
+            $null = Invoke-Manager $manager start
+            $callsBefore = $global:ProxyAgentStub.DockerCalls.Count
+            $configBefore = Get-Content -LiteralPath (Join-Path $script:AgentDir 'config\config.json') -Raw
+            $settingsBefore = Get-SettingsFile
+
+            $output = Invoke-Manager $manager update-manager
+
+            $LASTEXITCODE | Should -Be 0 -Because $output
+            $output | Should -Match 'Management script updated'
+            Get-Content -LiteralPath $manager -Raw | Should -Be $global:ProxyAgentStub.ScriptContent
+            $global:ProxyAgentStub.DockerCalls.Count | Should -Be $callsBefore
+            $global:ProxyAgentStub.RegistryUrl | Should -BeNullOrEmpty
+            Get-VersionFile | Should -Be '1.2.9'
+            Get-SettingsFile | Should -Be $settingsBefore
+            Get-Content -LiteralPath (Join-Path $script:AgentDir 'config\config.json') -Raw | Should -Be $configBefore
+            $global:ProxyAgentStub.DownloadUrl | Should -Be 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1'
+            $global:ProxyAgentStub.DownloadTimeoutSec | Should -Be 30
+            $global:ProxyAgentStub.DownloadUseBasicParsing | Should -BeTrue
+            Get-ChildItem -LiteralPath $script:AgentDir -Force -Filter '.proxy-agent-manager.*' | Should -BeNullOrEmpty
+
+            Invoke-Manager $manager status | Should -Match 'NAMES IMAGE STATUS'
+            $LASTEXITCODE | Should -Be 0 -Because $output
+        }
+
+        It 'works without config, version, or valid settings and does not execute the download' {
+            $manager = New-AgentDir -Settings 'throw "Settings must not be loaded"'
+            Remove-Item -LiteralPath (Join-Path $script:AgentDir 'config\config.json'), (Join-Path $script:AgentDir 'version')
+            $global:ProxyAgentStub.ScriptContent = 'throw "Download must not execute"'
+
+            $output = Invoke-Manager $manager update-manager
+
+            $LASTEXITCODE | Should -Be 0 -Because $output
+            $global:ProxyAgentStub.DockerCalls | Should -BeNullOrEmpty
+            Get-Content -LiteralPath $manager -Raw | Should -Be $global:ProxyAgentStub.ScriptContent
+        }
+
+        It 'uses the script URL override and configured web proxy for the download' {
+            $manager = New-AgentDir
+            $env:PROXY_AGENT_SCRIPT_URL = 'https://downloads.example.com/manager.ps1'
+            $env:HTTPS_PROXY = 'http://proxy.example.com:3128'
+
+            $output = Invoke-Manager $manager update-manager
+
+            $LASTEXITCODE | Should -Be 0 -Because $output
+            $global:ProxyAgentStub.DownloadUrl | Should -Be $env:PROXY_AGENT_SCRIPT_URL
+            $global:ProxyAgentStub.DownloadProxy.AbsoluteUri | Should -Be 'http://proxy.example.com:3128/'
+        }
+
+        It 'preserves the old script and cleans up after <Failure>' -ForEach @(
+            @{ Failure = 'a partial failed download'; Content = '# Partial download'; DownloadFails = $true }
+            @{ Failure = 'an empty download'; Content = ''; DownloadFails = $false }
+            @{ Failure = 'a syntax error'; Content = 'function Broken {'; DownloadFails = $false }
+        ) {
+            $manager = New-AgentDir
+            $original = Get-Content -LiteralPath $manager -Raw
+            $global:ProxyAgentStub.ScriptContent = $Content
+            $global:ProxyAgentStub.DownloadFails = $DownloadFails
+
+            $output = Invoke-Manager $manager update-manager
+
+            $LASTEXITCODE | Should -Be 1
+            $output | Should -Match 'Failed to update management script'
+            Get-Content -LiteralPath $manager -Raw | Should -Be $original
+            Get-ChildItem -LiteralPath $script:AgentDir -Force -Filter '.proxy-agent-manager.*' | Should -BeNullOrEmpty
+            $global:ProxyAgentStub.DockerCalls | Should -BeNullOrEmpty
         }
     }
 

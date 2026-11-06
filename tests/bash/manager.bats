@@ -12,6 +12,7 @@ REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 IMAGE_REPO="us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent"
 
 setup() {
+    unset PROXY_AGENT_SCRIPT_URL STUB_CURL_EXIT_CODE
     AGENT_DIR="$(mktemp -d)"
     mkdir -p "$AGENT_DIR/config"
     cp "$REPO_ROOT/proxy-agent-manager.sh" "$AGENT_DIR/"
@@ -42,6 +43,70 @@ last_image() {
 
 version_file() {
     cat "$AGENT_DIR/version"
+}
+
+@test "update-manager replaces the script without changing the agent or its files" {
+    manager start
+    cp "$DOCKER_LOG" "$AGENT_DIR/docker.before"
+    echo 'MEMORY_ALLOCATION_MB=2048' > "$AGENT_DIR/settings.sh"
+    export STUB_CURL_RESPONSE
+    STUB_CURL_RESPONSE="$(cat "$REPO_ROOT/proxy-agent-manager.sh")"$'\n# Updated manager\n'
+
+    run manager update-manager
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Management script updated"* ]]
+    [ "$(cat "$AGENT_DIR/proxy-agent-manager.sh")" = "${STUB_CURL_RESPONSE%$'\n'}" ]
+    [ -x "$AGENT_DIR/proxy-agent-manager.sh" ]
+    cmp "$DOCKER_LOG" "$AGENT_DIR/docker.before"
+    [ "$(version_file)" = "1.2.9" ]
+    [ "$(cat "$AGENT_DIR/settings.sh")" = 'MEMORY_ALLOCATION_MB=2048' ]
+    [ "$(cat "$AGENT_DIR/config/config.json")" = '{"agent_id": "abc123"}' ]
+    grep -q 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh' "$CURL_LOG"
+    grep -q -- '--max-time 30' "$CURL_LOG"
+    [ -z "$(find "$AGENT_DIR" -name '.proxy-agent-manager.*' -print)" ]
+
+    run manager status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"NAMES IMAGE STATUS"* ]]
+}
+
+@test "update-manager supports a custom URL without config, version, or valid settings" {
+    rm "$AGENT_DIR/config/config.json" "$AGENT_DIR/version"
+    echo 'exit 99' > "$AGENT_DIR/settings.sh"
+    export PROXY_AGENT_SCRIPT_URL='http://127.0.0.1:8080/manager.sh'
+    export STUB_CURL_RESPONSE=$'#!/usr/bin/env bash\nexit 99\n'
+
+    run manager update-manager
+
+    [ "$status" -eq 0 ]
+    [ ! -f "$DOCKER_LOG" ]
+    grep -q "$PROXY_AGENT_SCRIPT_URL" "$CURL_LOG"
+}
+
+@test "update-manager preserves the old script and cleans up after a partial failed download" {
+    export STUB_CURL_RESPONSE=$'#!/usr/bin/env bash\n# Partial download'
+    export STUB_CURL_EXIT_CODE=18
+
+    run manager update-manager
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Failed to download management script"* ]]
+    cmp "$REPO_ROOT/proxy-agent-manager.sh" "$AGENT_DIR/proxy-agent-manager.sh"
+    [ -z "$(find "$AGENT_DIR" -name '.proxy-agent-manager.*' -print)" ]
+    [ ! -f "$DOCKER_LOG" ]
+}
+
+@test "update-manager rejects empty and syntactically invalid downloads" {
+    for response in '' $'#!/usr/bin/env bash\nif then'; do
+        export STUB_CURL_RESPONSE="$response"
+        run manager update-manager
+        [ "$status" -eq 1 ]
+        [[ "$output" == *"empty or has invalid syntax"* ]]
+        cmp "$REPO_ROOT/proxy-agent-manager.sh" "$AGENT_DIR/proxy-agent-manager.sh"
+        [ -z "$(find "$AGENT_DIR" -name '.proxy-agent-manager.*' -print)" ]
+        [ ! -f "$DOCKER_LOG" ]
+    done
 }
 
 @test "start runs the pinned Ubuntu image with the default memory limit" {

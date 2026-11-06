@@ -4,4 +4,12 @@
 #  answers every call with $STUB_CURL_RESPONSE and never touches the network.
 #
 echo "$*" >> "$CURL_LOG"
-echo "$STUB_CURL_RESPONSE"
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-o" ]; then
+        printf '%s' "$STUB_CURL_RESPONSE" > "$2"
+        exit "${STUB_CURL_EXIT_CODE:-0}"
+    fi
+    shift
+done
+printf '%s\n' "$STUB_CURL_RESPONSE"
+exit "${STUB_CURL_EXIT_CODE:-0}"
