@@ -21,54 +21,13 @@ $SETTINGS_FILE = Join-Path $BASE_DIR 'settings.ps1'
 # Appended to the plain agent version to form the Linux image tag.
 $LINUX_IMAGE_TAG_SUFFIX = '-ubuntu-26.04'
 
-# settings.ps1 may set $MEMORY_ALLOCATION_MB and, for Windows containers,
-# $WINDOWS_VERSION (an LTSC variant that overrides host detection).
-if (Test-Path -LiteralPath $SETTINGS_FILE) {
-    . $SETTINGS_FILE
-}
-# Unset or empty only, so 0 is rejected like any other invalid setting.
-if ("$MEMORY_ALLOCATION_MB" -eq '') { $MEMORY_ALLOCATION_MB = 5120 }
-if (-not $WINDOWS_VERSION) { $WINDOWS_VERSION = $null }
-
 # ── Startup validation ───────────────────────────────────────────────────────
 
-$validCommands = @('start', 'stop', 'restart', 'upgrade', 'status', 'logs', 'doctor')
+$validCommands = @('start', 'stop', 'restart', 'upgrade', 'update-manager', 'status', 'logs', 'doctor')
 if (-not $Command -or $Command -notin $validCommands) {
-    Write-Host "Usage: $($MyInvocation.MyCommand.Name) {start|stop|restart|upgrade|status|logs|doctor [options]}"
+    Write-Host "Usage: $($MyInvocation.MyCommand.Name) {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}"
     exit 1
 }
-
-if (-not (Test-Path $CONFIG_FILE)) {
-    Write-Host "ERROR: Config file not found: $CONFIG_FILE" -ForegroundColor Red
-    exit 1
-}
-
-try {
-    $configJson = Get-Content $CONFIG_FILE -Raw | ConvertFrom-Json
-} catch {
-    Write-Host "ERROR: Failed to parse config file: $_" -ForegroundColor Red
-    exit 1
-}
-
-$AGENT_ID = $configJson.agent_id
-if (-not $AGENT_ID -or $AGENT_ID -eq 'null') {
-    Write-Host "ERROR: 'agent_id' missing in $CONFIG_FILE" -ForegroundColor Red
-    exit 1
-}
-
-$CONTAINER_NAME = "proxy-agent-$AGENT_ID"
-
-if (-not (Test-Path $VERSION_FILE)) {
-    Write-Host "ERROR: $VERSION_FILE not found." -ForegroundColor Red
-    exit 1
-}
-
-$PINNED_VERSION = Get-Content $VERSION_FILE -Raw
-if ([string]::IsNullOrWhiteSpace($PINNED_VERSION)) {
-    Write-Host "ERROR: $VERSION_FILE is empty." -ForegroundColor Red
-    exit 1
-}
-$PINNED_VERSION = $PINNED_VERSION.Trim()
 
 # ── Functions ────────────────────────────────────────────────────────────────
 
@@ -145,6 +104,34 @@ function Set-WebProxyFromEnvironment {
         [System.Net.Http.HttpClient]::DefaultProxy = $webProxy
     }
     Write-Log "Using proxy $proxyAddress from the environment"
+}
+
+# Validate the download before atomically replacing the installed script.
+function Update-Manager {
+    $scriptUrl = if ($env:PROXY_AGENT_SCRIPT_URL) { $env:PROXY_AGENT_SCRIPT_URL } else { 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1' }
+    $tmpScript = Join-Path $BASE_DIR ('.proxy-agent-manager.' + [guid]::NewGuid() + '.ps1')
+    try {
+        Set-WebProxyFromEnvironment -ProbeUri ([Uri]$scriptUrl)
+        Write-Host "Downloading management script..."
+        Invoke-WebRequest -Uri $scriptUrl -OutFile $tmpScript -UseBasicParsing -TimeoutSec 30
+        if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $tmpScript -Raw))) {
+            throw 'Downloaded management script is empty.'
+        }
+        $parseErrors = $null
+        $null = [System.Management.Automation.Language.Parser]::ParseFile($tmpScript, [ref]$null, [ref]$parseErrors)
+        if ($parseErrors.Count -gt 0) {
+            throw 'Downloaded management script has invalid syntax.'
+        }
+        Unblock-File -LiteralPath $tmpScript
+        # $null binds to an empty string here; Replace requires a null backup path.
+        [System.IO.File]::Replace($tmpScript, $PSCommandPath, [NullString]::Value)
+        Write-Host "Management script updated. The agent has not been restarted."
+    } catch {
+        Write-Host "ERROR: Failed to update management script: $_" -ForegroundColor Red
+        exit 1
+    } finally {
+        Remove-Item -LiteralPath $tmpScript -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Get-ContainerOsType {
@@ -538,6 +525,53 @@ function Invoke-Doctor {
 }
 
 # ── Commands ─────────────────────────────────────────────────────────────────
+
+# Updating the manager does not require agent configuration or Docker.
+if ($Command -eq 'update-manager') {
+    Update-Manager
+    exit 0
+}
+
+# settings.ps1 may set $MEMORY_ALLOCATION_MB and, for Windows containers,
+# $WINDOWS_VERSION (an LTSC variant that overrides host detection).
+if (Test-Path -LiteralPath $SETTINGS_FILE) {
+    . $SETTINGS_FILE
+}
+# Unset or empty only, so 0 is rejected like any other invalid setting.
+if ("$MEMORY_ALLOCATION_MB" -eq '') { $MEMORY_ALLOCATION_MB = 5120 }
+if (-not $WINDOWS_VERSION) { $WINDOWS_VERSION = $null }
+
+if (-not (Test-Path $CONFIG_FILE)) {
+    Write-Host "ERROR: Config file not found: $CONFIG_FILE" -ForegroundColor Red
+    exit 1
+}
+
+try {
+    $configJson = Get-Content $CONFIG_FILE -Raw | ConvertFrom-Json
+} catch {
+    Write-Host "ERROR: Failed to parse config file: $_" -ForegroundColor Red
+    exit 1
+}
+
+$AGENT_ID = $configJson.agent_id
+if (-not $AGENT_ID -or $AGENT_ID -eq 'null') {
+    Write-Host "ERROR: 'agent_id' missing in $CONFIG_FILE" -ForegroundColor Red
+    exit 1
+}
+
+$CONTAINER_NAME = "proxy-agent-$AGENT_ID"
+
+if (-not (Test-Path $VERSION_FILE)) {
+    Write-Host "ERROR: $VERSION_FILE not found." -ForegroundColor Red
+    exit 1
+}
+
+$PINNED_VERSION = Get-Content $VERSION_FILE -Raw
+if ([string]::IsNullOrWhiteSpace($PINNED_VERSION)) {
+    Write-Host "ERROR: $VERSION_FILE is empty." -ForegroundColor Red
+    exit 1
+}
+$PINNED_VERSION = $PINNED_VERSION.Trim()
 
 switch ($Command) {
     'start' {

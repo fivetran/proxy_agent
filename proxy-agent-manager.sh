@@ -2,7 +2,7 @@
 #
 #  Management script for Fivetran Proxy Agent (Docker)
 #
-#  Usage: ./proxy-agent-manager.sh {start|stop|restart|upgrade|status|logs|doctor [options]}
+#  Usage: ./proxy-agent-manager.sh {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}
 #
 set -euo pipefail
 
@@ -23,30 +23,6 @@ get_agent_id() {
         || true
 }
 
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "ERROR: Config file not found: $CONFIG_FILE"
-    exit 1
-fi
-
-AGENT_ID=$(get_agent_id)
-if [ -z "$AGENT_ID" ] || [ "$AGENT_ID" = "null" ]; then
-    echo "ERROR: 'agent_id' missing in $CONFIG_FILE"
-    exit 1
-fi
-
-CONTAINER_NAME="proxy-agent-${AGENT_ID}"
-
-if [ ! -f "$VERSION_FILE" ]; then
-    echo "ERROR: $VERSION_FILE not found."
-    exit 1
-fi
-# Also strips the UTF-8 byte order mark an editor on Windows may add.
-PINNED_VERSION=$(LC_ALL=C tr -d '[:space:]\357\273\277' < "$VERSION_FILE")
-if [ -z "$PINNED_VERSION" ]; then
-    echo "ERROR: $VERSION_FILE is empty."
-    exit 1
-fi
-
 LOGFILE="$BASE_DIR/logs/proxy-agent-manager.log"
 CONTAINER_LOG_DIR="/app/logs"
 CONTAINER_CONFIG_FILE="/config/config.json"
@@ -59,12 +35,6 @@ log() {
     echo "$(date -u +'%Y-%m-%d %H:%M:%S') UTC - $1" >> "$LOGFILE"
 }
 
-if [ -f "$SETTINGS_FILE" ]; then
-    # shellcheck disable=SC1090
-    source "$SETTINGS_FILE"
-fi
-MEMORY_ALLOCATION_MB="${MEMORY_ALLOCATION_MB:-5120}"
-
 # Only the commands that start a container check the setting, so stop, status
 # and logs still work with an invalid one.
 check_memory_allocation() {
@@ -74,14 +44,26 @@ check_memory_allocation() {
     fi
 }
 
-# Shared by the agent and doctor containers, so the doctor checks the agent's
-# config, memory limit and log folder.
-AGENT_RUN_ARGS=(
-    --memory="${MEMORY_ALLOCATION_MB}m"
-    --env IS_DOCKER=true
-    --env LOG_FOLDER_PATH="$CONTAINER_LOG_DIR"
-    -v "$BASE_DIR/config/config.json:$CONTAINER_CONFIG_FILE:ro"
-    -v "$BASE_DIR/logs:$CONTAINER_LOG_DIR"
+# Download beside the installed script so rename replaces it atomically.
+# The subshell confines the cleanup trap to this command.
+update_manager() (
+    local script_url="${PROXY_AGENT_SCRIPT_URL:-https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh}"
+    local tmp_script
+    tmp_script=$(mktemp "$BASE_DIR/.proxy-agent-manager.XXXXXX")
+    trap 'rm -f "$tmp_script"' EXIT
+
+    echo "Downloading management script..."
+    if ! curl -fSsL --max-time 30 "$script_url" -o "$tmp_script"; then
+        echo "ERROR: Failed to download management script" >&2
+        exit 1
+    fi
+    if [ ! -s "$tmp_script" ] || ! bash -n "$tmp_script"; then
+        echo "ERROR: Downloaded management script is empty or has invalid syntax" >&2
+        exit 1
+    fi
+    chmod u+x "$tmp_script"
+    mv -f "$tmp_script" "$0"
+    echo "Management script updated. The agent has not been restarted."
 )
 
 get_latest_version() {
@@ -258,6 +240,53 @@ run_doctor() {
 
 # ── Commands ─────────────────────────────────────────────────────────────────
 
+# Updating the manager does not require agent configuration or Docker. Exit in
+# this parsed block so Bash never resumes reading the replaced script.
+if [ "${1:-}" = "update-manager" ]; then
+    update_manager
+    exit 0
+fi
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "ERROR: Config file not found: $CONFIG_FILE"
+    exit 1
+fi
+
+AGENT_ID=$(get_agent_id)
+if [ -z "$AGENT_ID" ] || [ "$AGENT_ID" = "null" ]; then
+    echo "ERROR: 'agent_id' missing in $CONFIG_FILE"
+    exit 1
+fi
+
+CONTAINER_NAME="proxy-agent-${AGENT_ID}"
+
+if [ ! -f "$VERSION_FILE" ]; then
+    echo "ERROR: $VERSION_FILE not found."
+    exit 1
+fi
+# Also strips the UTF-8 byte order mark an editor on Windows may add.
+PINNED_VERSION=$(LC_ALL=C tr -d '[:space:]\357\273\277' < "$VERSION_FILE")
+if [ -z "$PINNED_VERSION" ]; then
+    echo "ERROR: $VERSION_FILE is empty."
+    exit 1
+fi
+
+if [ -f "$SETTINGS_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$SETTINGS_FILE"
+fi
+MEMORY_ALLOCATION_MB="${MEMORY_ALLOCATION_MB:-5120}"
+
+# Shared by the agent and doctor containers, so the doctor checks the agent's
+# config, memory limit and log folder.
+AGENT_RUN_ARGS=(
+    --memory="${MEMORY_ALLOCATION_MB}m"
+    --env IS_DOCKER=true
+    --env LOG_FOLDER_PATH="$CONTAINER_LOG_DIR"
+    -v "$BASE_DIR/config/config.json:$CONTAINER_CONFIG_FILE:ro"
+    -v "$BASE_DIR/logs:$CONTAINER_LOG_DIR"
+)
+
 case "${1:-}" in
     start)
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
@@ -302,7 +331,7 @@ case "${1:-}" in
         ;;
 
     *)
-        echo "Usage: $0 {start|stop|restart|upgrade|status|logs|doctor [options]}"
+        echo "Usage: $0 {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}"
         exit 1
         ;;
 esac
