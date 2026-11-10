@@ -14,7 +14,7 @@ and 7. Broken mocks fail the test even if the script catches their exceptions;
 intentional Docker failures retain their exit codes.
 [conftest.py](../conftest.py) owns the Windows runner fixture, spawned process,
 and cleanup. Python selects mocks and observations; native object access stays
-inside that child. [pythonnet-review.md](pythonnet-review.md) records the pinned dependency review.
+inside that child.
 
 ## Configuration
 
