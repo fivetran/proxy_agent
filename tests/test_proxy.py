@@ -127,9 +127,20 @@ class TestProxyContract:
         # curl deliberately ignores uppercase HTTP_PROXY for HTTP URLs.
         sandbox.env['HTTP_PROXY' if WINDOWS else 'http_proxy'] = proxy_url
 
-        expected_urls = {web_endpoints.registry_url}
+        # .NET Framework always bypasses loopback destinations. A reserved name
+        # tests proxy routing without DNS: our proxy serves it without forwarding.
+        origin_url = web_endpoints.origin_url
+        if not no_proxy:
+            origin_url = origin_url.replace('127.0.0.1', 'proxy-agent-test.invalid')
+        registry_url = origin_url + '/v2/stub/tags/list'
+        script_url = origin_url + f'/proxy-agent-manager.{EXT}'
+        sandbox.env.update(
+            PROXY_AGENT_REGISTRY_TAGS_URL=registry_url,
+            PROXY_AGENT_SCRIPT_URL=script_url,
+        )
+        expected_urls = {registry_url}
         if operation == 'install':
-            expected_urls.add(web_endpoints.script_url)
+            expected_urls.add(script_url)
             result = sandbox.install()
             installation = sandbox.installed
         else:
