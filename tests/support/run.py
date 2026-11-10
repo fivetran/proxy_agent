@@ -14,6 +14,18 @@ import subprocess
 import sys
 
 
+def quote(text: str) -> str:
+    """Quote a string for PowerShell source, leaving whitespace and `$` literal.
+
+    Single-quoted strings escape quotes by doubling them. PowerShell also treats
+    U+2018 through U+201B as single quotes, so escape those without normalizing
+    their Unicode characters. This quotes source expressions, not native argv.
+    """
+    for character in "'\u2018\u2019\u201a\u201b":
+        text = text.replace(character, character * 2)
+    return "'" + text + "'"
+
+
 def literal(value):
     """Bind scalar values without interpolation, preserving switch booleans."""
     if value is None:
@@ -22,7 +34,7 @@ def literal(value):
         return '$true' if value else '$false'
     if isinstance(value, (int, float)):
         return str(value)
-    return "'" + str(value).replace("'", "''") + "'"
+    return quote(str(value))
 
 
 def array(values):
@@ -136,7 +148,7 @@ def invoke(request, *, shell, env, timeout=30):
     failure = root / 'stub-error.txt'
     failure.unlink(missing_ok=True)
     script = root / 'powershell-host.ps1'
-    script.write_text(program(request, shell_major(shell)), encoding='utf-8-sig')
+    script.write_text(program(request, shell_major(shell)), encoding='utf-8-sig', newline='\n')
     env = {key: value for key, value in env.items() if key.upper() != 'PSMODULEPATH'}
     env['PYTHONIOENCODING'] = 'utf-8'
     result = subprocess.run(

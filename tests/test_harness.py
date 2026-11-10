@@ -12,6 +12,7 @@ import sys
 
 import pytest
 from support.harness import REPO, WINDOWS
+from support.run import quote
 
 
 @pytest.fixture
@@ -23,6 +24,25 @@ def probe(sandbox):
         return sandbox.run(*arguments)
 
     return run
+
+
+class TestPowerShellQuoting:
+    """Keep data inside literal strings, including PowerShell's Unicode delimiters."""
+
+    @pytest.mark.parametrize(
+        'value,expected',
+        [
+            ('', "''"),
+            ("O'Brien", "'O''Brien'"),
+            ('‘’‚‛', "'‘‘’’‚‚‛‛'"),
+            ('"“”„', "'\"“”„'"),
+            ('$env:TOKEN; $(throw "expanded"); `n', '\'$env:TOKEN; $(throw "expanded"); `n\''),
+            ('雪\tline one\r\nline two\n', "'雪\tline one\r\nline two\n'"),
+        ],
+        ids=['empty', 'apostrophe', 'smart-single-quotes', 'double-quotes', 'interpolation', 'whitespace'],
+    )
+    def test_quotes_preserve_data_without_expansion(self, value, expected):
+        assert quote(value) == expected
 
 
 class TestStubProtocol:
@@ -87,7 +107,18 @@ class TestPowerShellBridge:
     """
 
     def test_native_arguments_preserve_quotes_empty_strings_spaces_and_unicode(self, sandbox, probe):
-        arguments = ['', 'two words', 'a"b', "O'Brien", '雪', '--region']
+        arguments = [
+            '',
+            'two words',
+            'a"b',
+            "O'Brien",
+            '雪',
+            '--region',
+            '‘’‚‛',
+            '"“”„',
+            '$env:TOKEN; $(throw "expanded"); `n',
+            'line one\r\nline two\n',
+        ]
         result = probe('docker logs @args', *arguments)
         assert result.returncode == 0, result.stdout
         assert sandbox.calls('docker') == [['logs', *arguments]]
