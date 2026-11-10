@@ -219,7 +219,13 @@ class _PowerShellEngine:
         }
         commands = ['Get-CimInstance', 'Get-PSDrive']
         if request['stub_http']:
-            commands += ['Invoke-RestMethod', 'Invoke-WebRequest']
+            commands += ['Invoke-RestMethod']
+            # Intentional download failures are cmdlet exceptions, not broken mocks.
+            functions['Invoke-WebRequest'] = (
+                '$response = Invoke-TestStub -Name Invoke-WebRequest -Arguments $args; '
+                'if ($response.download_error) { throw $response.download_error }; '
+                'return $response'
+            )
         for name in commands:
             functions[name] = f'Invoke-TestStub -Name {name} -Arguments $args'
         for name, body in functions.items():

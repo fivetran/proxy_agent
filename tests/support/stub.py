@@ -89,6 +89,7 @@ def powershell_parameters(command, args):
 def powershell_command(root, options, command, args):
     """PowerShell mocks return JSON, which the bridge converts to native objects."""
     parameters = powershell_parameters(command, args)
+    record(root, command, args)
     if command in ('Invoke-RestMethod', 'Invoke-WebRequest'):
         record(root, 'request', [parameters['uri'], parameters.get('method', ''),
                                  str(parameters.get('timeoutsec', 0))])
@@ -100,12 +101,17 @@ def powershell_command(root, options, command, args):
             if options.get('download_failure'):
                 Path(parameters['outfile']).write_text('partial download')
                 return {'test_exception': 'stub download interrupted'}
-            Path(parameters['outfile']).write_text(
-                # Use the same JSON bridge for the downloaded manager's arguments.
+            # Use the same JSON bridge for the downloaded manager's arguments.
+            default_script = (
                 '$OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n'
                 'ConvertTo-Json -InputObject @($args) -Compress | '
                 '& $env:AGENT_TEST_PYTHON $env:AGENT_TEST_STUB manager-json\n'
-                'exit $LASTEXITCODE\n', encoding='ascii')
+                'exit $LASTEXITCODE\n'
+            )
+            Path(parameters['outfile']).write_text(
+                options.get('script_content', default_script), encoding='utf-8-sig')
+            if options.get('download_exit'):
+                return {'download_error': 'Download interrupted'}
             return None
         if options.get('configure_failure'):
             return {'test_exception': 'configure endpoint unavailable'}
@@ -194,9 +200,10 @@ def main():
                 print('stub download interrupted', file=sys.stderr)
                 return 22
             # The installer downloads a manager that only records its arguments.
+            default_script = '#!/usr/bin/env bash\nexec "$AGENT_TEST_PYTHON" "$AGENT_TEST_STUB" manager "$@"\n'
             Path(args[args.index("-o") + 1]).write_text(
-                '#!/usr/bin/env bash\nexec "$AGENT_TEST_PYTHON" "$AGENT_TEST_STUB" manager "$@"\n'
-            )
+                options.get('script_content', default_script))
+            return options.get('download_exit', 0)
         elif any("/proxy-agent/configure" in arg for arg in args):
             if options.get('configure_failure'):
                 print('configure endpoint unavailable', file=sys.stderr)

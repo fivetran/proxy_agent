@@ -121,7 +121,7 @@ class TestProxyContract:
 
     @pytest.mark.parametrize('credentials', [None, ('us@er', 'p:ss')], ids=['anonymous', 'basic-auth'])
     @pytest.mark.parametrize('no_proxy', ['', 'host', '*'], ids=['proxied', 'bypass-host', 'bypass-all'])
-    @pytest.mark.parametrize('operation', ['install', 'upgrade'])
+    @pytest.mark.parametrize('operation', ['install', 'upgrade', 'update-manager'])
     def test_routing_and_credentials(
         self, native_web_sandbox, web_endpoints, credentials, no_proxy, operation
     ):
@@ -147,18 +147,23 @@ class TestProxyContract:
             PROXY_AGENT_REGISTRY_TAGS_URL=registry_url,
             PROXY_AGENT_SCRIPT_URL=script_url,
         )
-        expected_urls = {registry_url}
+        expected_urls = {script_url} if operation == 'update-manager' else {registry_url}
         if operation == 'install':
             expected_urls.add(script_url)
             result = sandbox.install()
             installation = sandbox.installed
         else:
-            result = sandbox.run('upgrade')
+            result = sandbox.run(operation)
             installation = sandbox.agent
 
         assert result.returncode == 0, result.stdout
-        assert (installation / 'version').read_text().strip() == '1.2.10'
-        assert sandbox.image.endswith(':1.2.10-ubuntu-26.04')
+        if operation == 'update-manager':
+            assert (installation / 'version').read_text().strip() == '1.2.9'
+            assert not sandbox.calls('docker')
+            assert sandbox.manager.read_bytes() == (REPO / f'proxy-agent-manager.{EXT}').read_bytes()
+        else:
+            assert (installation / 'version').read_text().strip() == '1.2.10'
+            assert sandbox.image.endswith(':1.2.10-ubuntu-26.04')
         if no_proxy:
             assert not web_endpoints.requests['proxy']
             assert web_endpoints.requests['origin']
@@ -271,6 +276,18 @@ class TestWindowsProxy:
     Requested snapshots expose credentials and object identity without leaking
     process-wide proxy changes into another test or making network requests.
     """
+
+    def test_update_manager_uses_override_url_and_https_proxy(self, proxy_sandbox):
+        url = 'https://downloads.example.com/manager.ps1'
+        proxy_sandbox.env.update(PROXY_AGENT_SCRIPT_URL=url, HTTPS_PROXY='http://proxy.example.com:3128')
+
+        result = proxy_sandbox.run('update-manager')
+
+        assert result.returncode == 0, result.stdout
+        assert proxy_sandbox.calls('request') == [[url, '', '30']]
+        assert proxy_sandbox.snapshot['proxy_address'] == 'http://proxy.example.com:3128/'
+        if 'http_client_proxy' in proxy_sandbox.snapshot:
+            assert proxy_sandbox.snapshot['http_client_proxy']
 
     def test_credentials_and_no_proxy_host_boundaries(self, proxy_sandbox, upgrade):
         proxy_sandbox.env.update(
