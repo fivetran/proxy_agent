@@ -1,4 +1,12 @@
-"""The same management contract runs against each supported shell and container OS."""
+"""Exercise the real manager scripts through their command-line interface.
+
+Sandbox selects Bash or PowerShell for the host and supplies Python stubs for
+Docker and registry requests. Tests inspect recorded arguments, fake container
+state, and real installation files without requiring Docker or network access.
+The shared contract runs in Linux-container mode on every host and is inherited
+for Windows-container mode on Windows. Deliberate platform differences have
+separate cases below.
+"""
 import base64
 import unittest
 
@@ -6,6 +14,13 @@ from support.harness import IMAGE, REGISTRY, WINDOWS, Sandbox
 
 
 class ManagerTests(unittest.TestCase):
+    """Verify lifecycle, version, resource, and doctor behavior shared by both scripts.
+
+    Each test starts with an isolated installation pinned to 1.2.9. Helpers derive
+    image tags and mount paths from the simulated container OS so subclasses can
+    reuse the assertions with different container conventions.
+    """
+
     container_os = 'linux'
 
     def setUp(self):
@@ -219,8 +234,12 @@ class ManagerTests(unittest.TestCase):
 
 @unittest.skipUnless(WINDOWS, 'Windows containers require the PowerShell manager')
 class WindowsContainerTests(ManagerTests):
-    # Inherited contract tests also run in Windows-container mode, including
-    # rollback and doctor behavior; only the image and mount expectations differ.
+    """Rerun the shared contract for Windows containers and cover LTSC migration.
+
+    Host builds and image tags are fixtures, so server selection, overrides, and
+    legacy settings migration can be checked on either Windows CI runner.
+    """
+
     container_os = 'windows'
 
     def test_ltsc_detection_and_unsupported_hosts(self):
@@ -268,6 +287,12 @@ class WindowsContainerTests(ManagerTests):
 
 
 class PlatformDifferencesTests(unittest.TestCase):
+    """Document intentional differences in tag errors and PowerShell argument binding.
+
+    These cases preserve each script's expected interface while checking common
+    outcomes, such as refusing an incompatible tag without starting an agent.
+    """
+
     def test_linux_container_mode_rejects_windows_tag(self):
         s = Sandbox()
         self.addCleanup(s.close)

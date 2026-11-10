@@ -1,4 +1,10 @@
-"""Windows configures .NET proxies explicitly; Bash delegates this to curl."""
+"""Verify the PowerShell scripts' explicit .NET proxy configuration.
+
+Windows PowerShell 5.1 and PowerShell 7 use different default proxy APIs. The
+bridge observes their real objects inside the script's process while web calls
+are stubbed. Bash delegates proxy handling to curl, so these runtime checks are
+Windows-only; the source-consistency check runs on every host.
+"""
 import re
 import unittest
 
@@ -6,6 +12,12 @@ from support.harness import REPO, WINDOWS, Sandbox
 
 
 class ProxySourceTests(unittest.TestCase):
+    """Keep proxy handling consistent in two independently downloaded scripts.
+
+    The function is duplicated so each production script works on its own.
+    Only their logging calls are allowed to differ.
+    """
+
     def test_installer_and_manager_proxy_functions_match(self):
         def body(name):
             text = (REPO / name).read_text(encoding='utf-8-sig')
@@ -17,6 +29,13 @@ class ProxySourceTests(unittest.TestCase):
 
 @unittest.skipUnless(WINDOWS, 'PowerShell applies environment variables to .NET proxies')
 class ProxyTests(unittest.TestCase):
+    """Inspect environment overrides, system credentials, and URL bypass decisions.
+
+    Each invocation uses a fresh PowerShell child with a controlled system proxy.
+    Requested snapshots expose credentials and object identity without leaking
+    process-wide proxy changes into another test or making network requests.
+    """
+
     def setUp(self):
         self.s = Sandbox(observe_proxy=True)
         self.s.proxy_probes = [

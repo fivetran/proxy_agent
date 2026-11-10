@@ -1,4 +1,11 @@
-"""Shared installer outcomes and intentional Windows host differences."""
+"""Check installer results with controlled Docker, web, and host responses.
+
+The real installer writes files and applies real config permissions. Its
+downloaded manager is replaced with a launcher that only records the start
+request; manager lifecycle behavior is tested in test_manager.py. Sandbox
+selects the host's script and translates installation arguments, allowing shared
+assertions for both platforms without Docker or network access.
+"""
 import stat
 import unittest
 
@@ -6,6 +13,12 @@ from support.harness import EXT, WINDOWS, Sandbox
 
 
 class InstallTests(unittest.TestCase):
+    """Check version selection, config protection, settings, and startup delegation.
+
+    Linux-container fixtures run on every host. WindowsInstallTests inherits
+    these cases with Windows-container fixtures and the corresponding defaults.
+    """
+
     container_os = 'linux'
     latest = '1.2.10'
 
@@ -71,6 +84,12 @@ class InstallTests(unittest.TestCase):
 
 @unittest.skipUnless(WINDOWS, 'Windows host and container selection')
 class WindowsInstallTests(InstallTests):
+    """Apply the installer contract to Windows containers and server requirements.
+
+    Fake OS and disk responses cover LTSC selection and Docker's storage drive,
+    including unsupported hosts and the fallback to the installation drive.
+    """
+
     container_os = 'windows'
 
     def test_ltsc2019_detection(self):
@@ -117,6 +136,8 @@ class WindowsInstallTests(InstallTests):
 
 
 class InstallerDifferencesTests(unittest.TestCase):
+    """Check deliberate platform restrictions: Bash root installs and Windows overrides."""
+
     @unittest.skipUnless(WINDOWS, 'WindowsVersion parameter')
     def test_linux_containers_reject_windows_override(self):
         s = Sandbox()

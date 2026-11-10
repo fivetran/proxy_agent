@@ -1,4 +1,10 @@
-"""Regression checks for the boundary between Python and the PowerShell child."""
+"""Check the test infrastructure that the script suites rely on.
+
+Direct Python protocol checks run on every host. Windows checks replace the
+copied manager with small PowerShell probes to isolate argument transport,
+mock failures, and state observation from production behavior. These safeguards
+prevent a broken bridge from making the script tests pass incorrectly.
+"""
 import json
 import subprocess
 import sys
@@ -8,6 +14,8 @@ from support.harness import REPO, WINDOWS, Sandbox
 
 
 class StubProtocolTests(unittest.TestCase):
+    """Ensure invalid cmdlet inputs fail in Python without consulting the real host."""
+
     def test_unsupported_host_queries_and_malformed_arguments_fail_closed(self):
         sandbox = Sandbox()
         self.addCleanup(sandbox.close)
@@ -29,6 +37,12 @@ class StubProtocolTests(unittest.TestCase):
 
 @unittest.skipUnless(WINDOWS, 'requires the PowerShell child process')
 class PowerShellBridgeTests(unittest.TestCase):
+    """Verify the actual PowerShell-to-Python boundary under the selected shell.
+
+    Probes exercise UTF-8 JSON forwarding, errors caught by the called script,
+    and snapshots after exceptions. They require Windows, but no Docker daemon.
+    """
+
     def setUp(self):
         self.s = Sandbox()
         self.addCleanup(self.s.close)

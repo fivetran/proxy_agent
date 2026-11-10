@@ -1,4 +1,11 @@
-"""Real Docker lifecycle contract, enabled with PROXY_AGENT_INTEGRATION=1."""
+"""Exercise installation and management against a real Docker daemon.
+
+Enabled with PROXY_AGENT_INTEGRATION=1. The suite builds a minimal heartbeat/
+doctor image and serves the checked-out manager, registry tags, and config from
+a local HTTP server. This checks actual HTTP and container behavior without
+Fivetran credentials; network access is needed to pull the image's base layers.
+Windows runs require Windows-container mode and build an image for the host's LTSC.
+"""
 import base64
 import os
 from pathlib import Path
@@ -14,6 +21,13 @@ from support.harness import EXT, REPO, SHELL, WINDOWS, invoke
 
 @unittest.skipUnless(os.environ.get('PROXY_AGENT_INTEGRATION') == '1', 'requires Docker; set PROXY_AGENT_INTEGRATION=1')
 class IntegrationTests(unittest.TestCase):
+    """Run a complete lifecycle, then verify TOKEN and legacy WebSocket installation.
+
+    Steps share one daemon and fixture container, so run one integration suite
+    at a time per daemon. Cleanup removes the container and stops the local
+    server even when an assertion fails. Unit-test command stubs are not used.
+    """
+
     def docker(self, *arguments, check=True):
         result = subprocess.run(['docker', *arguments], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, timeout=600)
