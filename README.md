@@ -178,6 +178,15 @@ Invoke-Pester -Path tests/pwsh
 tests\integration\windows.ps1          # needs Docker in Windows-containers mode
 ```
 
+The shared Python suite is also run alongside the existing suites during migration. It detects the host platform, invokes the appropriate installer or manager, and shares assertions across Bash and PowerShell. Windows-only expectations cover LTSC selection, Windows container paths, ACLs, and .NET proxies. No Python packages are required; use Python 3.10 or later:
+
+```bash
+python3 -m unittest discover -s tests -v
+PROXY_AGENT_INTEGRATION=1 python3 -m unittest discover -s tests -p test_integration.py -v
+```
+
+On Windows use `python`; set `PROXY_AGENT_TEST_SHELL` to `powershell` (the default) or `pwsh`. On Unix it defaults to `bash`. Integration tests need Docker and network access for base images. Run only one integration suite at a time per Docker daemon.
+
 The scripts read these environment variables so the tests can point them at the stub image and local server. They are not meant for production use:
 
 | Variable | Read by | Replaces |

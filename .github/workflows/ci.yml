@@ -124,3 +124,94 @@ jobs:
           exit 1
       - name: Run integration test
         run: tests/integration/windows.ps1
+
+  unit:
+    name: Python unit tests (${{ matrix.shell }}, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Bash 5.1, the current Ubuntu Bash, and Bash 3.2 compatibility.
+          - os: ubuntu-22.04
+            shell: bash
+          - os: ubuntu-latest
+            shell: bash
+          - os: macos-15
+            shell: /bin/bash
+          - os: windows-2022
+            shell: powershell
+          - os: windows-2022
+            shell: pwsh
+          - os: windows-2025
+            shell: powershell
+          - os: windows-2025
+            shell: pwsh
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      PROXY_AGENT_TEST_SHELL: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -v
+
+  python-integration-linux:
+    name: Python integration (Linux containers, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # The published Linux image is multi-architecture (amd64 and arm64).
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -p test_integration.py -v
+        env:
+          PROXY_AGENT_INTEGRATION: '1'
+          PROXY_AGENT_TEST_SHELL: bash
+
+  python-integration-windows:
+    name: Python integration (Windows containers, ${{ matrix.shell }}, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+        shell: [powershell, pwsh]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        # Python launches the selected PowerShell executable for each script.
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Wait for the Docker daemon
+        # The Docker service is not always running when a Windows job starts.
+        shell: powershell
+        run: |
+          # The default 'Stop' preference would turn docker's stderr into a
+          # terminating error on the first failed attempt.
+          $ErrorActionPreference = 'Continue'
+          $service = Get-Service docker -ErrorAction SilentlyContinue
+          if ($service -and $service.Status -ne 'Running') { Start-Service docker }
+          foreach ($attempt in 1..30) {
+            docker info *> $null
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Start-Sleep -Seconds 2
+          }
+          docker info
+          exit 1
+      - name: Run integration test
+        run: python -m unittest discover -s tests -p test_integration.py -v
+        env:
+          PROXY_AGENT_INTEGRATION: '1'
+          PROXY_AGENT_TEST_SHELL: ${{ matrix.shell }}
