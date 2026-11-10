@@ -1,6 +1,6 @@
 # Tests
 
-Python's `unittest` discovers the suites below; there is no single entry-point file.
+`pytest` discovers the suites below; there is no single entry-point file.
 Start with `test_manager.py` for the shared script behavior.
 
 | File | Coverage |
@@ -11,6 +11,7 @@ Start with `test_manager.py` for the shared script behavior.
 | [test_harness.py](test_harness.py) | Stub failures and Python/PowerShell argument and observation handling. |
 | [test_integration.py](test_integration.py) | Installation and lifecycle against real Docker and a local HTTP server. |
 
+[conftest.py](conftest.py) provides the sandbox fixture and its cleanup.
 [support/](support/README.md) contains the harness, Python command stubs, and
 PowerShell bridge. [integration/](integration/) contains the HTTP server and
 config fixtures; [stub/](stub/) contains the minimal Docker images used in integration tests.
@@ -20,8 +21,9 @@ config fixtures; [stub/](stub/) contains the minimal Docker images used in integ
 From the repository root, using Python 3.10+ (`python3` if needed):
 
 ```sh
-python -m unittest discover -s tests -v
-python -m unittest discover -s tests -p test_manager.py -v
+python -m pip install -r tests/requirements.txt
+python -m pytest -v
+python -m pytest tests/test_manager.py -v
 ```
 
 Unit tests need no Docker or network. The host selects Bash or PowerShell;

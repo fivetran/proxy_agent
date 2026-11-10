@@ -19,10 +19,11 @@ exit codes.
 Set `PROXY_AGENT_TEST_SHELL` before starting Python: defaults to `bash` on Unix
 and `powershell` on Windows; use `pwsh` for PowerShell 7.
 
-Create `Sandbox(container_os='linux', observe_proxy=False, observe_acl=False)`
-and register `sandbox.close` with `self.addCleanup`. The host selects the script;
-`container_os` controls the fake Docker daemon's mode. Windows observers export
-state through `sandbox.snapshot`; `sandbox.proxy_probes` supplies URLs to check.
+Request the `sandbox` fixture from [conftest.py](../conftest.py); pytest handles
+cleanup. The host selects the script; indirect fixture parameters select the fake
+Docker daemon's `container_os` (default `linux`). Set `sandbox.observe_proxy` or
+`sandbox.observe_acl` to capture Windows state in `sandbox.snapshot`;
+`sandbox.proxy_probes` supplies URLs to check.
 
 Change `sandbox.options` before an invocation:
 

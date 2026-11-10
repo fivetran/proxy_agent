@@ -163,26 +163,28 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 CI (`.github/workflows/ci.yml`) runs on every pull request:
 
 - `shellcheck` on the shell scripts and PSScriptAnalyzer (settings in `PSScriptAnalyzerSettings.psd1`) on the PowerShell scripts.
-- A shared Python `unittest` suite for both installers and management scripts (`tests/test_*.py`). It detects the host platform and invokes Bash or PowerShell with equivalent arguments. Commands and host lookups are stubbed, so unit tests need no Docker daemon or network. Common assertions also run in both Linux-container and Windows-container modes on Windows. Explicit Windows expectations cover LTSC selection, container paths and health checks, config ACLs, and .NET proxy handling; Linux checks mode 600 and rejection of root installs.
+- A shared Python `pytest` suite for both installers and management scripts (`tests/test_*.py`). It detects the host platform and invokes Bash or PowerShell with equivalent arguments. Commands and host lookups are stubbed, so unit tests need no Docker daemon or network. Common assertions also run in both Linux-container and Windows-container modes on Windows. Explicit Windows expectations cover LTSC selection, container paths and health checks, config ACLs, and .NET proxy handling; Linux checks mode 600 and rejection of root installs.
 - The unit matrix covers Bash 3.2 on macOS, Bash on Ubuntu 22.04 and the current Ubuntu runner, and Windows PowerShell 5.1 and PowerShell 7 on Windows Server 2022 and 2025. `PROXY_AGENT_TEST_SHELL` selects the executable under test; it defaults to `bash` on Unix and `powershell` on Windows.
 - Shared Docker integration tests (`tests/test_integration.py`) run on Ubuntu (amd64 and arm64), and Windows Server 2022 and 2025 with Windows containers under both PowerShell 5.1 and 7. They build a stub agent image (`tests/stub/`) and use a local HTTP server (`tests/integration/registry_server.py`) for the registry, script download, and configure endpoint. They cover config-file, TOKEN, and legacy WebSocket installation, invalid credentials, version rollback, upgrade, doctor, restart and stop.
 
 Fixtures and mock behavior live in `tests/support/stub.py`; invocation and fixture setup live in `tests/support/harness.py`. The Windows-only `tests/support/run.ps1` bridge converts JSON to PowerShell objects, invokes the real script, and exports requested proxy or ACL observations. Stub arguments use UTF-8 JSON over stdin to preserve quotes, empty strings, and Unicode under both PowerShell versions. The bridge treats failed mocks as test failures even if the script catches their exceptions.
 
-Python 3.10 or later is sufficient for the unit suite; no Python packages, bats, or Pester are required. Run from the repository root:
+Use Python 3.10 or later and install the test dependency from `tests/requirements.txt`. Run from the repository root:
 
 ```bash
-python3 -m unittest discover -s tests -v
-PROXY_AGENT_TEST_SHELL=/bin/bash python3 -m unittest discover -s tests -v
-PROXY_AGENT_INTEGRATION=1 python3 -m unittest discover -s tests -p test_integration.py -v
+python3 -m pip install -r tests/requirements.txt
+python3 -m pytest -v
+PROXY_AGENT_TEST_SHELL=/bin/bash python3 -m pytest -v
+PROXY_AGENT_INTEGRATION=1 python3 -m pytest tests/test_integration.py -v
 ```
 
 ```powershell
-python -m unittest discover -s tests -v
+python -m pip install -r tests/requirements.txt
+python -m pytest -v
 $env:PROXY_AGENT_TEST_SHELL = 'pwsh' # defaults to Windows PowerShell 5.1
-python -m unittest discover -s tests -v
+python -m pytest -v
 $env:PROXY_AGENT_INTEGRATION = '1'
-python -m unittest discover -s tests -p test_integration.py -v
+python -m pytest tests/test_integration.py -v
 ```
 
 Integration tests need a running Docker daemon (Windows-container mode on Windows Server) and network access to pull the stub's `alpine` or `servercore` base image. Run Linux integration tests as a regular user, as required by the installer. They use the fixed fixture container name `proxy-agent-test-agent`, so run one integration suite at a time per Docker daemon. Unit tests use isolated temporary directories, including paths with spaces.
