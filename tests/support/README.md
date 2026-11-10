@@ -7,14 +7,14 @@ These helpers run the real scripts with fake dependencies. Assertions stay in
 | --- | --- |
 | [harness.py](harness.py) | Creates a temporary installation and invokes Bash or PowerShell, letting tests share inputs and assertions. |
 | [stub.py](stub.py) | Implements fake Docker, HTTP, and host commands in Python. Records calls and tracks a fake running container. |
-| [run.py](run.py) | Drives a local PowerShell process through pypsrp, validates mock responses, and collects .NET proxy/Windows permission state. |
+| [run.py](run.py) | Hosts the selected PowerShell engine through pythonnet, validates mock responses, and collects .NET proxy/Windows permission state. |
 
-PSRP binds arguments as structured values. Mocked commands send UTF-8 JSON to
-Python to preserve quotes, empty arguments, and Unicode under PowerShell 5.1 and 7. Broken mocks fail the test even
-if the script catches their exceptions; intentional Docker failures retain their
-exit codes.
+The PowerShell SDK binds arguments as .NET values. Mocked commands send UTF-8 JSON
+to Python to preserve quotes, empty arguments, and Unicode under PowerShell 5.1
+and 7. Broken mocks fail the test even if the script catches their exceptions;
+intentional Docker failures retain their exit codes.
 Python selects mocks and observations; native object access stays inside the
-tested process. [pypsrp-review.md](pypsrp-review.md) records the pinned dependency review.
+tested process. [pythonnet-review.md](pythonnet-review.md) records the pinned dependency review.
 
 ## Configuration
 

@@ -107,7 +107,7 @@ class TestPowerShellBridge:
 
     @pytest.mark.parametrize('code', [0, 3])
     def test_script_exit_status_preserves_native_observations(self, sandbox, probe, code):
-        """A completed PSRP pipeline can still represent a failed script command."""
+        """SDK pipeline completion must preserve the nested script's exit status."""
         sandbox.observe_proxy = True
         result = probe(f'exit {code}')
         assert result.returncode == code, result.stdout
@@ -119,7 +119,7 @@ class TestPowerShellBridge:
         assert sandbox.calls('docker') == [['logs', 'Continue']]
 
     def test_timeout_terminates_the_native_process(self, sandbox):
-        """A hung shell must not leave the PSRP listener or test waiting forever."""
+        """A hung hosted engine must not leave the test waiting forever."""
         from support.harness import SHELL
 
         sandbox.manager.write_text('Start-Sleep -Seconds 10', encoding='utf-8-sig')

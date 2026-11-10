@@ -162,14 +162,15 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 CI (`.github/workflows/ci.yml`) runs on every pull request:
 
+- A dependency audit rejects known vulnerabilities in the locked Python test dependencies.
 - `shellcheck` on the shell scripts and PSScriptAnalyzer (settings in `PSScriptAnalyzerSettings.psd1`) on the PowerShell scripts.
 - A shared Python `pytest` suite for both installers and management scripts (`tests/test_*.py`). It detects the host platform and invokes Bash or PowerShell with equivalent arguments. Most cases stub external commands; proxy contracts use real curl or PowerShell web requests against local HTTP servers. Unit tests need no Docker daemon or external network. Common assertions also run in both Linux-container and Windows-container modes on Windows. Explicit Windows expectations cover LTSC selection, container paths and health checks, config ACLs, and .NET proxy handling; Linux checks mode 600 and rejection of root installs.
 - The unit matrix covers Bash 3.2 on macOS, Bash on Ubuntu 22.04 and the current Ubuntu runner, and Windows PowerShell 5.1 and PowerShell 7 on Windows Server 2022 and 2025. `PROXY_AGENT_TEST_SHELL` selects the executable under test; it defaults to `bash` on Unix and `powershell` on Windows.
 - Shared Docker integration tests (`tests/test_integration.py`) run on Ubuntu (amd64 and arm64), and Windows Server 2022 and 2025 with Windows containers under both PowerShell 5.1 and 7. They build a stub agent image (`tests/stub/`) and use a local HTTP server (`tests/integration/registry_server.py`) for the registry, script download, and configure endpoint. They cover config-file, TOKEN, and legacy WebSocket installation, invalid credentials, version rollback, upgrade, doctor, restart and stop.
 
-Fixtures and mock behavior live in `tests/support/stub.py`; invocation and fixture setup live in `tests/support/harness.py`. `tests/support/run.py` uses pypsrp to drive a local Windows PowerShell process, binding arguments as structured values and reading native proxy or ACL observations. Mock commands use UTF-8 JSON over stdin to preserve quotes, empty strings, and Unicode under both PowerShell versions. Python tracks failed mocks independently, so they fail the test even if the script catches their exceptions.
+Fixtures and mock behavior live in `tests/support/stub.py`; invocation and fixture setup live in `tests/support/harness.py`. `tests/support/run.py` uses pythonnet to host the selected PowerShell engine in a disposable Python process, binding arguments as .NET values and reading native proxy or ACL observations. PowerShell 5.1 uses .NET Framework; PowerShell 7 uses its bundled CoreCLR. Mock commands use UTF-8 JSON over stdin to preserve quotes, empty strings, and Unicode under both PowerShell versions. Python tracks failed mocks independently, so they fail the test even if the script catches their exceptions.
 
-Use Python 3.10 or later and install the test dependency from `tests/requirements.txt`. Unix proxy tests also require curl. Run from the repository root:
+Use Python 3.11 or later and install the test dependency from `tests/requirements.txt`. Unix proxy tests also require curl. Run from the repository root:
 
 ```bash
 python3 -m pip install -r tests/requirements.txt

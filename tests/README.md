@@ -11,6 +11,9 @@ Start with `test_manager.py` for the shared script behavior.
 | [test_harness.py](test_harness.py) | Stub failures and Python/PowerShell argument and observation handling. |
 | [test_integration.py](test_integration.py) | Installation and lifecycle against real Docker and a local HTTP server. |
 
+[requirements.in](requirements.in) pins direct dependencies; [requirements.txt](requirements.txt)
+locks the full dependency set with artifact hashes. CI audits this lock for known vulnerabilities.
+
 [conftest.py](conftest.py) provides the sandbox fixture and its cleanup.
 [support/](support/README.md) contains the harness, Python command stubs, and
 PowerShell bridge. [integration/](integration/) contains the HTTP server and
@@ -18,7 +21,7 @@ config fixtures; [stub/](stub/) contains the minimal Docker images used in integ
 
 ## Running
 
-From the repository root, using Python 3.10+ (`python3` if needed):
+From the repository root, using Python 3.11+ (`python3` if needed):
 
 ```sh
 python -m pip install -r tests/requirements.txt
