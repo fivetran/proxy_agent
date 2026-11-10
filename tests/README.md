@@ -5,7 +5,7 @@ Start with `test_manager.py` for the shared script behavior.
 
 | File | Coverage |
 | --- | --- |
-| [test_manager.py](test_manager.py) | Lifecycle, rollback, dependency failures, heartbeat health checks, versions, and doctor reports. |
+| [test_manager.py](test_manager.py) | Lifecycle, rollback, manager updates, dependency failures, heartbeat health checks, versions, and doctor reports. |
 | [test_install.py](test_install.py) | Installation, dependency failures, version selection, settings, permissions, and host checks. |
 | [test_proxy.py](test_proxy.py) | Shared HTTP proxy routing, authentication, and bypasses; Windows .NET proxy setup. |
 | [test_harness.py](test_harness.py) | Stub failures and Python/PowerShell argument and observation handling. |
