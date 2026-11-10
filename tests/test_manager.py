@@ -103,14 +103,17 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual(self.docker_calls(command)[-1], [command, 'proxy-agent-abc123'])
         self.assertEqual(self.s.version.read_text(), '2.0')
 
-    def test_missing_config_and_empty_version(self):
-        contents = self.s.config.read_text()
+    def test_missing_config(self):
         self.s.config.unlink()
         self.assertIn('Config file not found', self.run_manager('start', code=1))
-        self.s.config.write_text(contents)
-        self.s.version.write_text('\n')
-        self.assertIn('is empty', self.run_manager('start', code=1))
         self.assertFalse(self.docker_calls('run'))
+
+    def test_empty_version(self):
+        for contents in ('', '\n', ' \t\r\n'):
+            with self.subTest(contents=repr(contents)):
+                self.s.version.write_bytes(contents.encode())
+                self.assertIn('is empty', self.run_manager('start', code=1))
+                self.assertFalse(self.s.calls('docker'))
 
     def test_invalid_version_rejected(self):
         self.s.version.write_text('2.0')
