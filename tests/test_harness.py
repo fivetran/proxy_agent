@@ -12,7 +12,6 @@ import sys
 
 import pytest
 from support.harness import REPO, WINDOWS
-from support.win_run import invoke as invoke_powershell
 
 
 @pytest.fixture
@@ -67,7 +66,7 @@ class TestStubProtocol:
         sandbox.env['AGENT_TEST_STUB'] = str(helper)
 
         result = subprocess.run(
-            [sys.executable, str(REPO / 'tests/support/win_run.py'), 'stub'],
+            [sys.executable, str(REPO / 'tests/support/stub.py'), 'native'],
             input=json.dumps(['Invoke-RestMethod', '-Uri', 'https://unused.example.com']).encode(),
             capture_output=True,
             env=sandbox.env,
@@ -118,14 +117,14 @@ class TestPowerShellBridge:
         assert result.returncode == 0, result.stdout
         assert sandbox.calls('docker') == [['logs', 'Continue']]
 
-    def test_timeout_terminates_the_native_process(self, sandbox):
+    def test_timeout_terminates_the_native_process(self, sandbox, windows_runner):
         """A hung hosted engine must not leave the test waiting forever."""
         from support.harness import SHELL
 
         sandbox.manager.write_text('Start-Sleep -Seconds 10', encoding='utf-8-sig')
         request = sandbox.windows_request(sandbox.manager, [], {})
         with pytest.raises(subprocess.TimeoutExpired):
-            invoke_powershell(request, shell=SHELL, env=sandbox.env, timeout=1)
+            windows_runner(request, shell=SHELL, env=sandbox.env, timeout=1)
 
     @pytest.mark.parametrize('swallowed', [False, True], ids=['unhandled', 'caught'])
     def test_failed_python_helper_cannot_return_a_successful_fixture(self, sandbox, probe, swallowed):

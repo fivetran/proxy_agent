@@ -28,8 +28,10 @@ identify accepted artifacts; they do not prove their correspondence to source.
 - PowerShell 5.1 loads .NET Framework and the discovered automation assembly.
   PowerShell 7 loads CoreCLR through its installation's `pwsh.dll` and hostfxr.
   No separate .NET SDK installation is needed.
-- A fresh Python child owns each CLR/runspace. The normal subprocess timeout
-  kills a hung hosted engine; disposal and process exit isolate proxy state.
+- Fixtures in `tests/conftest.py` own the Windows runner. Each invocation spawns
+  a Python child with its own CLR/runspace; fixture cleanup kills timed-out
+  children and joins/closes every process. Runspace disposal and process exit
+  isolate proxy state. The spawn target stays at module scope for Windows.
 - Public PowerShell SDK methods bind .NET arrays, hashtables, and booleans.
   Native .NET APIs read proxy identity, credentials, bypasses, and Windows ACLs.
   The bridge has no private transport APIs or custom quoting algorithm.

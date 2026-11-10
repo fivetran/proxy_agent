@@ -3,10 +3,44 @@
 Every invocation records an argument array, preserving spaces and quoting.
 State lives in files so separate script processes see the same container.
 """
+import base64
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
+
+
+def native_command():
+    """Validate mock JSON and bind its value; helper failures persist outside the shell.
+
+    This callback runs during a pipeline, when a second pipeline cannot run
+    in that runspace. Base64 carries response data in a fixed native expression without
+    interpolating it into PowerShell source or implementing a quoting algorithm.
+    """
+    payload = sys.stdin.buffer.read()
+    name = 'unknown'
+    action = 'ConvertFrom-Json -InputObject'
+    try:
+        name = json.loads(payload.decode('utf-8-sig'))[0]
+        result = subprocess.run(
+            [os.environ['AGENT_TEST_PYTHON'], os.environ['AGENT_TEST_STUB'], 'powershell-json'],
+            input=payload,
+            capture_output=True,
+            timeout=10,
+        )
+        response = result.stdout.decode('utf-8-sig')
+        if result.returncode:
+            raise ValueError(f'Test stub {name} failed (exit {result.returncode}): {response}')
+        if not response:
+            raise ValueError(f'Test stub {name} returned no JSON.')
+        value = json.dumps(json.loads(response))
+    except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+        value = str(error)
+        (Path(os.environ['AGENT_TEST_ROOT']) / 'stub-error.txt').write_text(value, encoding='utf-8')
+        action = 'throw'
+    encoded = base64.b64encode(value.encode('utf-8')).decode('ascii')
+    print(f"{action} ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}')))")
 
 
 def record(root, command, args):
@@ -78,6 +112,9 @@ def powershell_command(root, options, command, args):
 
 def main():
     command, *args = sys.argv[1:]
+    if command == 'native':
+        native_command()
+        return 0
     root = Path(os.environ["AGENT_TEST_ROOT"])
     options = json.loads((root / "options.json").read_text())
     # PowerShell sends UTF-8 JSON instead of native arguments: Windows

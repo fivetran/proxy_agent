@@ -8,8 +8,6 @@ import subprocess
 import sys
 import tempfile
 
-from support.win_run import invoke as invoke_powershell
-
 REPO = Path(__file__).resolve().parents[2]
 WINDOWS = sys.platform == 'win32'
 SHELL = os.environ.get('PROXY_AGENT_TEST_SHELL', 'powershell' if WINDOWS else 'bash')
@@ -41,7 +39,11 @@ def invoke(script, arguments=(), *, parameters=None, env=None, timeout=30):
 
 
 class Sandbox:
-    def __init__(self, container_os='linux', *, observe_proxy=False, observe_acl=False, stub_http=True):
+    def __init__(self, container_os='linux', *, observe_proxy=False, observe_acl=False, stub_http=True,
+                 windows_runner=None):
+        if WINDOWS and windows_runner is None:
+            raise ValueError('Windows sandboxes require the windows_runner fixture')
+        self.windows_runner = windows_runner
         self.temp = tempfile.TemporaryDirectory(prefix='proxy agent tests ')
         # Windows TEMP can use an 8.3 alias; PowerShell expands PSScriptRoot
         # to the long path, so use that same canonical path in expectations.
@@ -93,8 +95,8 @@ class Sandbox:
         (self.root / 'options.json').write_text(json.dumps(self.options))
         script = REPO / f'install.{EXT}' if install else self.manager
         if WINDOWS:
-            return invoke_powershell(self.windows_request(script, arguments, parameters or {}),
-                                     shell=SHELL, env=self.env)
+            return self.windows_runner(self.windows_request(script, arguments, parameters or {}),
+                                       shell=SHELL, env=self.env)
         return invoke(script, arguments, parameters=parameters, env=self.env)
 
     def windows_request(self, script, arguments, parameters):

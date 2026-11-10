@@ -7,14 +7,14 @@ These helpers run the real scripts with fake dependencies. Assertions stay in
 | --- | --- |
 | [harness.py](harness.py) | Creates a temporary installation and invokes Bash or PowerShell, letting tests share inputs and assertions. |
 | [stub.py](stub.py) | Implements fake Docker, HTTP, and host commands in Python. Records calls and tracks a fake running container. |
-| [win_run.py](win_run.py) | Windows adapter: hosts the selected PowerShell engine through pythonnet, validates mock responses, and collects .NET proxy/Windows permission state. |
 
 The PowerShell SDK binds arguments as .NET values. Mocked commands send UTF-8 JSON
 to Python to preserve quotes, empty arguments, and Unicode under PowerShell 5.1
 and 7. Broken mocks fail the test even if the script catches their exceptions;
 intentional Docker failures retain their exit codes.
-Python selects mocks and observations; native object access stays inside the
-tested process. [pythonnet-review.md](pythonnet-review.md) records the pinned dependency review.
+[conftest.py](../conftest.py) owns the Windows runner fixture, spawned process,
+and cleanup. Python selects mocks and observations; native object access stays
+inside that child. [pythonnet-review.md](pythonnet-review.md) records the pinned dependency review.
 
 ## Configuration
 
@@ -26,7 +26,8 @@ cleanup. The host selects the script; indirect fixture parameters select the fak
 Docker daemon's `container_os` (default `linux`). Set `sandbox.observe_proxy` or
 `sandbox.observe_acl` to capture Windows state in `sandbox.snapshot`;
 `sandbox.proxy_probes` supplies URLs to check.
-Proxy contracts use `Sandbox(stub_http=False)` to retain real web clients;
+Proxy contracts use `Sandbox(stub_http=False, windows_runner=windows_runner)`
+to retain real web clients;
 Docker and host commands remain fake. Other cases stub HTTP by default.
 
 Change `sandbox.options` before an invocation:

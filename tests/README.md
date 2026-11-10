@@ -14,9 +14,10 @@ Start with `test_manager.py` for the shared script behavior.
 [requirements.in](requirements.in) pins direct dependencies; [requirements.txt](requirements.txt)
 locks the full dependency set with artifact hashes. CI audits this lock for known vulnerabilities.
 
-[conftest.py](conftest.py) provides the sandbox fixture and its cleanup.
-[support/](support/README.md) contains the harness, Python command stubs, and
-PowerShell bridge. [integration/](integration/) contains the HTTP server and
+[conftest.py](conftest.py) provides the sandbox and Windows runner fixtures,
+including spawned CLR processes, timeouts, and cleanup.
+[support/](support/README.md) contains the harness and Python command stubs.
+[integration/](integration/) contains the HTTP server and
 config fixtures; [stub/](stub/) contains the minimal Docker images used in integration tests.
 
 ## Running

@@ -21,9 +21,9 @@ from support.harness import EXT, REPO, TAGS, WINDOWS, Sandbox
 
 
 @pytest.fixture
-def native_web_sandbox(web_endpoints):
+def native_web_sandbox(web_endpoints, windows_runner):
     """Use real web clients, retaining fake Docker and an isolated curl config."""
-    installation = Sandbox(stub_http=False)
+    installation = Sandbox(stub_http=False, windows_runner=windows_runner)
     installation.env['CURL_HOME'] = str(installation.root)
     (installation.root / '.curlrc').write_text('')
     installation.env.update(
