@@ -50,6 +50,33 @@ class TestStubProtocol:
         assert message in json.loads(result.stdout)['error']
         assert not sandbox.calls('docker')
 
+    @pytest.mark.parametrize(
+        'source,message',
+        [
+            ('raise SystemExit(7)', 'failed (exit 7)'),
+            ('pass', 'returned no JSON'),
+            ("print('invalid JSON')", 'Expecting value'),
+        ],
+        ids=['failed-helper', 'empty-response', 'invalid-json'],
+    )
+    def test_python_bridge_persists_failures_outside_the_shell(self, sandbox, source, message):
+        """A script catching the emitted exception cannot erase a helper failure."""
+        helper = sandbox.root / "broken helper's response.py"
+        helper.write_text(source)
+        sandbox.env['AGENT_TEST_STUB'] = str(helper)
+
+        result = subprocess.run(
+            [sys.executable, str(REPO / 'tests/support/run.py'), 'stub'],
+            input=json.dumps(['Invoke-RestMethod', '-Uri', 'https://unused.example.com']).encode(),
+            capture_output=True,
+            env=sandbox.env,
+            timeout=5,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.startswith(b'throw ')
+        assert message in (sandbox.root / 'stub-error.txt').read_text(encoding='utf-8')
+
 
 @pytest.mark.skipif(not WINDOWS, reason='requires the PowerShell child process')
 class TestPowerShellBridge:

@@ -7,12 +7,15 @@ These helpers run the real scripts with fake dependencies. Assertions stay in
 | --- | --- |
 | [harness.py](harness.py) | Creates a temporary installation and invokes Bash or PowerShell, letting tests share inputs and assertions. |
 | [stub.py](stub.py) | Implements fake Docker, HTTP, and host commands in Python. Records calls and tracks a fake running container. |
-| [run.ps1](run.ps1) | Replaces PowerShell cmdlets and exports .NET proxy/Windows permission state, which Python cannot access inside another process. Fixture behavior stays in Python. |
+| [run.py](run.py) | Prepares and runs a disposable PowerShell host, validates mock responses, and collects .NET proxy/Windows permission state. |
 
-The PowerShell bridge sends UTF-8 JSON to Python to preserve quotes, empty
+The generated PowerShell host sends UTF-8 JSON to Python to preserve quotes, empty
 arguments, and Unicode under PowerShell 5.1 and 7. Broken mocks fail the test even
 if the script catches their exceptions; intentional Docker failures retain their
 exit codes.
+`powershell-host.ps1` in each sandbox contains the generated native commands;
+Python selects mocks and observations. PowerShell retains its exception boundary
+and the native object access that must run inside the script's process.
 
 ## Configuration
 

@@ -8,6 +8,8 @@ import subprocess
 import sys
 import tempfile
 
+from support.run import invoke as invoke_powershell
+
 REPO = Path(__file__).resolve().parents[2]
 WINDOWS = sys.platform == 'win32'
 SHELL = os.environ.get('PROXY_AGENT_TEST_SHELL', 'powershell' if WINDOWS else 'bash')
@@ -91,13 +93,12 @@ class Sandbox:
         (self.root / 'options.json').write_text(json.dumps(self.options))
         script = REPO / f'install.{EXT}' if install else self.manager
         if WINDOWS:
-            path = self.root / 'request.json'
-            path.write_text(json.dumps(self.windows_request(script, arguments, parameters or {})))
-            return invoke(REPO / 'tests/support/run.ps1', [path], env=self.env)
+            return invoke_powershell(self.windows_request(script, arguments, parameters or {}),
+                                     shell=SHELL, env=self.env)
         return invoke(script, arguments, parameters=parameters, env=self.env)
 
     def windows_request(self, script, arguments, parameters):
-        """Prepare fixtures in Python; run.ps1 only binds and observes Windows objects."""
+        """Prepare the native host's arguments and requested Windows observations."""
         arguments = list(arguments)
         parameters = parameters.copy()
         # Array splatting passes strings positionally. Named PowerShell common
