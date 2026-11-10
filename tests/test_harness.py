@@ -12,7 +12,7 @@ import sys
 
 import pytest
 from support.harness import REPO, WINDOWS
-from support.run import invoke as invoke_powershell
+from support.win_run import invoke as invoke_powershell
 
 
 @pytest.fixture
@@ -67,7 +67,7 @@ class TestStubProtocol:
         sandbox.env['AGENT_TEST_STUB'] = str(helper)
 
         result = subprocess.run(
-            [sys.executable, str(REPO / 'tests/support/run.py'), 'stub'],
+            [sys.executable, str(REPO / 'tests/support/win_run.py'), 'stub'],
             input=json.dumps(['Invoke-RestMethod', '-Uri', 'https://unused.example.com']).encode(),
             capture_output=True,
             env=sandbox.env,

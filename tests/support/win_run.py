@@ -331,4 +331,4 @@ if __name__ == '__main__':
     elif len(sys.argv) == 3 and sys.argv[1] == 'host':
         host(sys.argv[2])
     else:
-        raise SystemExit('Usage: run.py stub | host REQUEST_JSON')
+        raise SystemExit('Usage: win_run.py stub | host REQUEST_JSON')

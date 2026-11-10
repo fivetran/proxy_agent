@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 
-from support.run import invoke as invoke_powershell
+from support.win_run import invoke as invoke_powershell
 
 REPO = Path(__file__).resolve().parents[2]
 WINDOWS = sys.platform == 'win32'

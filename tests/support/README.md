@@ -7,7 +7,7 @@ These helpers run the real scripts with fake dependencies. Assertions stay in
 | --- | --- |
 | [harness.py](harness.py) | Creates a temporary installation and invokes Bash or PowerShell, letting tests share inputs and assertions. |
 | [stub.py](stub.py) | Implements fake Docker, HTTP, and host commands in Python. Records calls and tracks a fake running container. |
-| [run.py](run.py) | Hosts the selected PowerShell engine through pythonnet, validates mock responses, and collects .NET proxy/Windows permission state. |
+| [win_run.py](win_run.py) | Windows adapter: hosts the selected PowerShell engine through pythonnet, validates mock responses, and collects .NET proxy/Windows permission state. |
 
 The PowerShell SDK binds arguments as .NET values. Mocked commands send UTF-8 JSON
 to Python to preserve quotes, empty arguments, and Unicode under PowerShell 5.1
