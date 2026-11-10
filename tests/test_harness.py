@@ -12,7 +12,7 @@ import sys
 
 import pytest
 from support.harness import REPO, WINDOWS
-from support.run import quote
+from support.run import invoke as invoke_powershell
 
 
 @pytest.fixture
@@ -24,25 +24,6 @@ def probe(sandbox):
         return sandbox.run(*arguments)
 
     return run
-
-
-class TestPowerShellQuoting:
-    """Keep data inside literal strings, including PowerShell's Unicode delimiters."""
-
-    @pytest.mark.parametrize(
-        'value,expected',
-        [
-            ('', "''"),
-            ("O'Brien", "'O''Brien'"),
-            ('‘’‚‛', "'‘‘’’‚‚‛‛'"),
-            ('"“”„', "'\"“”„'"),
-            ('$env:TOKEN; $(throw "expanded"); `n', '\'$env:TOKEN; $(throw "expanded"); `n\''),
-            ('雪\tline one\r\nline two\n', "'雪\tline one\r\nline two\n'"),
-        ],
-        ids=['empty', 'apostrophe', 'smart-single-quotes', 'double-quotes', 'interpolation', 'whitespace'],
-    )
-    def test_quotes_preserve_data_without_expansion(self, value, expected):
-        assert quote(value) == expected
 
 
 class TestStubProtocol:
@@ -123,6 +104,28 @@ class TestPowerShellBridge:
         assert result.returncode == 0, result.stdout
         assert sandbox.calls('docker') == [['logs', *arguments]]
         assert sandbox.snapshot == {}
+
+    @pytest.mark.parametrize('code', [0, 3])
+    def test_script_exit_status_preserves_native_observations(self, sandbox, probe, code):
+        """A completed PSRP pipeline can still represent a failed script command."""
+        sandbox.observe_proxy = True
+        result = probe(f'exit {code}')
+        assert result.returncode == code, result.stdout
+        assert sandbox.snapshot['same_system_proxy']
+
+    def test_switch_parameter_retains_its_boolean_type(self, sandbox, probe):
+        result = probe('[CmdletBinding()]param(); docker logs ([string]$VerbosePreference)', '-Verbose')
+        assert result.returncode == 0, result.stdout
+        assert sandbox.calls('docker') == [['logs', 'Continue']]
+
+    def test_timeout_terminates_the_native_process(self, sandbox):
+        """A hung shell must not leave the PSRP listener or test waiting forever."""
+        from support.harness import SHELL
+
+        sandbox.manager.write_text('Start-Sleep -Seconds 10', encoding='utf-8-sig')
+        request = sandbox.windows_request(sandbox.manager, [], {})
+        with pytest.raises(subprocess.TimeoutExpired):
+            invoke_powershell(request, shell=SHELL, env=sandbox.env, timeout=1)
 
     @pytest.mark.parametrize('swallowed', [False, True], ids=['unhandled', 'caught'])
     def test_failed_python_helper_cannot_return_a_successful_fixture(self, sandbox, probe, swallowed):

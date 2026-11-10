@@ -1,1 +1,3 @@
 pytest==9.0.2
+pypsrp==1.0.0b1
+psrpcore==0.3.1
