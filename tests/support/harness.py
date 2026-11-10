@@ -39,7 +39,7 @@ def invoke(script, arguments=(), *, parameters=None, env=None, timeout=30):
 
 
 class Sandbox:
-    def __init__(self, container_os='linux', *, observe_proxy=False, observe_acl=False):
+    def __init__(self, container_os='linux', *, observe_proxy=False, observe_acl=False, stub_http=True):
         self.temp = tempfile.TemporaryDirectory(prefix='proxy agent tests ')
         # Windows TEMP can use an 8.3 alias; PowerShell expands PSScriptRoot
         # to the long path, so use that same canonical path in expectations.
@@ -57,6 +57,7 @@ class Sandbox:
                             product_type=3, free_mb=100000)
         self.observe_proxy = observe_proxy
         self.observe_acl = observe_acl
+        self.stub_http = stub_http
         self.proxy_probes = []
         self.env = {key: value for key, value in os.environ.items()
                     if not (key.upper().endswith('_PROXY') or key.upper().startswith('PROXY_AGENT_')
@@ -69,6 +70,8 @@ class Sandbox:
             bin_dir = self.root / 'bin'
             bin_dir.mkdir()
             for name in ('docker', 'curl', 'id', 'df', 'date'):
+                if name == 'curl' and not stub_http:
+                    continue
                 stub = bin_dir / name
                 stub.write_text('#!/usr/bin/env bash\nexec "$AGENT_TEST_PYTHON" "$AGENT_TEST_STUB" '
                                 + shlex.quote(name) + ' "$@"\n')
@@ -104,6 +107,7 @@ class Sandbox:
             parameters['Verbose'] = True
         return dict(
             script=str(script), arguments=arguments, parameters=parameters,
+            stub_http=self.stub_http,
             system_proxy=self.options.get('system_proxy'),
             system_credentials=self.options.get('system_credentials', False),
             observe_proxy=self.observe_proxy, proxy_probes=self.proxy_probes,

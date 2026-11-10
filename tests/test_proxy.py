@@ -1,15 +1,180 @@
-"""Verify the PowerShell scripts' explicit .NET proxy configuration.
+"""Check shared proxy behavior and PowerShell's additional .NET configuration.
 
-Windows PowerShell 5.1 and PowerShell 7 use different default proxy APIs. The
-bridge observes their real objects inside the script's process while web calls
-are stubbed. Bash delegates proxy handling to curl, so these runtime checks are
-Windows-only; the source-consistency check runs on every host.
+Shared contract tests use real curl or PowerShell web requests against local
+origin/proxy servers, with Docker still stubbed. They verify routing, bypass,
+authentication, and credential redaction without external network access.
+Windows-only tests also inspect native .NET objects with web requests stubbed;
+the source-consistency check runs everywhere.
 """
 
+import base64
+import json
 import re
+import threading
+from contextlib import ExitStack
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
+from urllib.parse import quote, urlsplit
 
 import pytest
-from support.harness import REPO, WINDOWS
+from support.harness import EXT, REPO, TAGS, WINDOWS, Sandbox
+
+
+@pytest.fixture
+def native_web_sandbox(web_endpoints):
+    """Use real web clients, retaining fake Docker and an isolated curl config."""
+    installation = Sandbox(stub_http=False)
+    installation.env['CURL_HOME'] = str(installation.root)
+    (installation.root / '.curlrc').write_text('')
+    installation.env.update(
+        PROXY_AGENT_REGISTRY_TAGS_URL=web_endpoints.registry_url,
+        PROXY_AGENT_SCRIPT_URL=web_endpoints.script_url,
+        FIVETRAN_API_URL=web_endpoints.origin_url,
+    )
+    try:
+        yield installation
+    finally:
+        installation.close()
+
+
+@pytest.fixture
+def web_endpoints():
+    """Record direct and proxied HTTP requests; optionally challenge for Basic auth.
+
+    Both listeners serve registry tags and the checked-out manager. The proxy
+    accepts absolute URLs without forwarding; every connection stays on loopback.
+    """
+    endpoints = SimpleNamespace(requests={'origin': [], 'proxy': []}, expected_auth=None)
+    script_path = f'/proxy-agent-manager.{EXT}'
+    responses = {
+        '/v2/stub/tags/list': ('application/json', json.dumps({'tags': TAGS}).encode()),
+        script_path: ('text/plain', (REPO / script_path.lstrip('/')).read_bytes()),
+    }
+
+    def handler(role):
+        class Handler(BaseHTTPRequestHandler):
+            """Serve fixtures while recording proxy and origin authentication headers."""
+
+            def do_GET(self):
+                authorization = self.headers.get('Proxy-Authorization')
+                endpoints.requests[role].append(
+                    {
+                        'path': self.path,
+                        'proxy_authorization': authorization,
+                        'authorization': self.headers.get('Authorization'),
+                    }
+                )
+                if role == 'proxy' and endpoints.expected_auth and authorization != endpoints.expected_auth:
+                    self.send_response(407)
+                    self.send_header('Proxy-Authenticate', 'Basic realm="proxy-agent-test"')
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
+                path = urlsplit(self.path).path
+                if path not in responses:
+                    self.send_error(404)
+                    return
+                content_type, body = responses[path]
+                self.send_response(200)
+                self.send_header('Content-Type', content_type)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_arguments):
+                pass
+
+        return Handler
+
+    with ExitStack() as cleanup:
+        for role in ('origin', 'proxy'):
+            server = ThreadingHTTPServer(('127.0.0.1', 0), handler(role))
+            cleanup.callback(server.server_close)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            cleanup.callback(thread.join, timeout=5)
+            cleanup.callback(server.shutdown)
+            setattr(endpoints, f'{role}_url', f'http://127.0.0.1:{server.server_port}')
+        endpoints.registry_url = endpoints.origin_url + '/v2/stub/tags/list'
+        endpoints.script_url = endpoints.origin_url + script_path
+        yield endpoints
+
+
+class TestProxyContract:
+    """Exercise the same observable proxy contract through each host's real client.
+
+    Windows explicitly configures .NET from HTTP_PROXY; curl uses lowercase
+    http_proxy for HTTP targets. NO_PROXY and the resulting behavior are shared.
+    """
+
+    @pytest.mark.parametrize('credentials', [None, ('us@er', 'p:ss')], ids=['anonymous', 'basic-auth'])
+    @pytest.mark.parametrize('no_proxy', ['', '127.0.0.1', '*'], ids=['proxied', 'bypass-host', 'bypass-all'])
+    @pytest.mark.parametrize('operation', ['install', 'upgrade'])
+    def test_routing_and_credentials(
+        self, native_web_sandbox, web_endpoints, credentials, no_proxy, operation
+    ):
+        sandbox = native_web_sandbox
+        proxy_url = web_endpoints.proxy_url
+        if credentials:
+            username, password = credentials
+            web_endpoints.expected_auth = (
+                'Basic ' + base64.b64encode(f'{username}:{password}'.encode()).decode()
+            )
+            proxy_url = proxy_url.replace(
+                'http://', f'http://{quote(username, safe="")}:{quote(password, safe="")}@'
+            )
+        sandbox.env['NO_PROXY'] = no_proxy
+        # curl deliberately ignores uppercase HTTP_PROXY for HTTP URLs.
+        sandbox.env['HTTP_PROXY' if WINDOWS else 'http_proxy'] = proxy_url
+
+        expected_urls = {web_endpoints.registry_url}
+        if operation == 'install':
+            expected_urls.add(web_endpoints.script_url)
+            result = sandbox.install()
+            installation = sandbox.installed
+        else:
+            result = sandbox.run('upgrade')
+            installation = sandbox.agent
+
+        assert result.returncode == 0, result.stdout
+        assert (installation / 'version').read_text().strip() == '1.2.10'
+        assert sandbox.image.endswith(':1.2.10-ubuntu-26.04')
+        if no_proxy:
+            assert not web_endpoints.requests['proxy']
+            assert web_endpoints.requests['origin']
+            assert {request['path'] for request in web_endpoints.requests['origin']} == {
+                urlsplit(url).path for url in expected_urls
+            }
+            assert all(request['authorization'] is None for request in web_endpoints.requests['origin'])
+            assert all(request['proxy_authorization'] is None for request in web_endpoints.requests['origin'])
+        else:
+            assert not web_endpoints.requests['origin']
+            assert web_endpoints.requests['proxy']
+            assert {
+                request['path']
+                for request in web_endpoints.requests['proxy']
+                if request['proxy_authorization'] == web_endpoints.expected_auth
+            } == expected_urls
+            assert all(request['authorization'] is None for request in web_endpoints.requests['proxy'])
+        if credentials:
+            transcript = result.stdout + ''.join(
+                path.read_text(encoding='utf-8-sig') for path in (installation / 'logs').glob('*.log')
+            )
+            for secret in credentials:
+                assert secret not in transcript
+                assert quote(secret, safe='') not in transcript
+
+    @pytest.mark.skipif(WINDOWS, reason='curl-specific CGI security behavior')
+    def test_curl_ignores_uppercase_http_proxy(self, native_web_sandbox, web_endpoints):
+        native_web_sandbox.env.update(
+            HTTP_PROXY=web_endpoints.proxy_url,
+        )
+
+        result = native_web_sandbox.run('upgrade')
+
+        assert result.returncode == 0, result.stdout
+        assert web_endpoints.requests['origin']
+        assert not web_endpoints.requests['proxy']
 
 
 @pytest.fixture
@@ -59,7 +224,7 @@ class TestProxySource:
 
 
 @pytest.mark.skipif(not WINDOWS, reason='PowerShell applies environment variables to .NET proxies')
-class TestProxy:
+class TestWindowsProxy:
     """Inspect environment overrides, system credentials, and URL bypass decisions.
 
     Each invocation uses a fresh PowerShell child with a controlled system proxy.

@@ -7,7 +7,7 @@ Start with `test_manager.py` for the shared script behavior.
 | --- | --- |
 | [test_manager.py](test_manager.py) | Start, stop, restart, upgrade, rollback, version handling, and doctor reports. |
 | [test_install.py](test_install.py) | Installation, version selection, settings, permissions, and host checks. |
-| [test_proxy.py](test_proxy.py) | Windows proxy setup, credentials, and bypass rules. |
+| [test_proxy.py](test_proxy.py) | Shared HTTP proxy routing, authentication, and bypasses; Windows .NET proxy setup. |
 | [test_harness.py](test_harness.py) | Stub failures and Python/PowerShell argument and observation handling. |
 | [test_integration.py](test_integration.py) | Installation and lifecycle against real Docker and a local HTTP server. |
 
@@ -26,7 +26,8 @@ python -m pytest -v
 python -m pytest tests/test_manager.py -v
 ```
 
-Unit tests need no Docker or network. The host selects Bash or PowerShell;
+Unit tests need no Docker or external network. Proxy cases use local HTTP servers
+and require real curl on Unix or PowerShell web clients on Windows. The host selects Bash or PowerShell;
 `PROXY_AGENT_TEST_SHELL` selects the executable (defaults to `bash` on Unix,
 `powershell` on Windows; use `pwsh` for PowerShell 7). Windows-only cases are
 skipped on Unix, and common tests run in both simulated container modes on Windows.

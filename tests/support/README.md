@@ -1,7 +1,7 @@
 # Test support
 
 These helpers run the real scripts with fake dependencies. Assertions stay in
-[the Python tests](../); unit tests need no Docker daemon or network access.
+[the Python tests](../); unit tests need no Docker daemon or external network access.
 
 | File | Purpose |
 | --- | --- |
@@ -24,6 +24,8 @@ cleanup. The host selects the script; indirect fixture parameters select the fak
 Docker daemon's `container_os` (default `linux`). Set `sandbox.observe_proxy` or
 `sandbox.observe_acl` to capture Windows state in `sandbox.snapshot`;
 `sandbox.proxy_probes` supplies URLs to check.
+Proxy contracts use `Sandbox(stub_http=False)` to retain real web clients;
+Docker and host commands remain fake. Other cases stub HTTP by default.
 
 Change `sandbox.options` before an invocation:
 

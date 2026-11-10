@@ -38,8 +38,10 @@ function docker {
     $global:LASTEXITCODE = $LASTEXITCODE
 }
 
-function Invoke-RestMethod { Invoke-TestStub -Name 'Invoke-RestMethod' -Arguments $args }
-function Invoke-WebRequest { Invoke-TestStub -Name 'Invoke-WebRequest' -Arguments $args }
+if ($request.stub_http) {
+    function Invoke-RestMethod { Invoke-TestStub -Name 'Invoke-RestMethod' -Arguments $args }
+    function Invoke-WebRequest { Invoke-TestStub -Name 'Invoke-WebRequest' -Arguments $args }
+}
 function Get-CimInstance { Invoke-TestStub -Name 'Get-CimInstance' -Arguments $args }
 function Get-PSDrive { Invoke-TestStub -Name 'Get-PSDrive' -Arguments $args }
 
