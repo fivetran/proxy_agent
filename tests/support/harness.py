@@ -39,7 +39,7 @@ def invoke(script, arguments=(), *, parameters=None, env=None, timeout=30):
 
 
 class Sandbox:
-    def __init__(self, container_os='linux'):
+    def __init__(self, container_os='linux', *, observe_proxy=False, observe_acl=False):
         self.temp = tempfile.TemporaryDirectory(prefix='proxy agent tests ')
         # Windows TEMP can use an 8.3 alias; PowerShell expands PSScriptRoot
         # to the long path, so use that same canonical path in expectations.
@@ -55,6 +55,9 @@ class Sandbox:
         self.installed = self.root / 'installed'
         self.options = dict(container_os=container_os, tags=TAGS.copy(), build=20348,
                             product_type=3, free_mb=100000)
+        self.observe_proxy = observe_proxy
+        self.observe_acl = observe_acl
+        self.proxy_probes = []
         self.env = {key: value for key, value in os.environ.items()
                     if not (key.upper().endswith('_PROXY') or key.upper().startswith('PROXY_AGENT_')
                             or key.upper() in ('TOKEN', 'RUNTIME', 'MEMORY_ALLOCATION_MB', 'FIVETRAN_API_URL',
@@ -85,12 +88,28 @@ class Sandbox:
         (self.root / 'options.json').write_text(json.dumps(self.options))
         script = REPO / f'install.{EXT}' if install else self.manager
         if WINDOWS:
-            request = dict(kind='install' if install else 'manager', script=str(script),
-                           arguments=list(arguments), parameters=parameters or {})
             path = self.root / 'request.json'
-            path.write_text(json.dumps(request))
+            path.write_text(json.dumps(self.windows_request(script, arguments, parameters or {})))
             return invoke(REPO / 'tests/support/run.ps1', [path], env=self.env)
         return invoke(script, arguments, parameters=parameters, env=self.env)
+
+    def windows_request(self, script, arguments, parameters):
+        """Prepare fixtures in Python; run.ps1 only binds and observes Windows objects."""
+        arguments = list(arguments)
+        parameters = parameters.copy()
+        # Array splatting passes strings positionally. Named PowerShell common
+        # parameters must instead use a hashtable so the host consumes them.
+        if '-Verbose' in arguments:
+            arguments.remove('-Verbose')
+            parameters['Verbose'] = True
+        return dict(
+            script=str(script), arguments=arguments, parameters=parameters,
+            system_proxy=self.options.get('system_proxy'),
+            system_credentials=self.options.get('system_credentials', False),
+            observe_proxy=self.observe_proxy, proxy_probes=self.proxy_probes,
+            config_path=str(self.installed / 'config/config.json') if self.observe_acl else None,
+            snapshot_path=str(self.root / 'snapshot.json'),
+        )
 
     def install(self, **parameters):
         parameters = {'InstallDir': str(self.installed), 'ConfigPath': str(self.config), **parameters}

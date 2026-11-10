@@ -29,6 +29,7 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(self.s.calls('manager'), [['start']])
 
     def test_config_permissions(self):
+        self.s.observe_acl = True
         output = self.install()
         if WINDOWS:
             snapshot = self.s.snapshot

@@ -18,7 +18,14 @@ class ProxySourceTests(unittest.TestCase):
 @unittest.skipUnless(WINDOWS, 'PowerShell applies environment variables to .NET proxies')
 class ProxyTests(unittest.TestCase):
     def setUp(self):
-        self.s = Sandbox()
+        self.s = Sandbox(observe_proxy=True)
+        self.s.proxy_probes = [
+            'https://us-docker.pkg.dev/v2/tags/list',
+            'http://localhost:8080/',
+            'https://corp.example.com/',
+            'https://db.corp.example.com:5432/',
+            'https://notcorp.example.com/',
+        ]
         self.addCleanup(self.s.close)
 
     def upgrade(self, code=0):

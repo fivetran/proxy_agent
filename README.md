@@ -167,6 +167,8 @@ CI (`.github/workflows/ci.yml`) runs on every pull request:
 - The unit matrix covers Bash 3.2 on macOS, Bash on Ubuntu 22.04 and the current Ubuntu runner, and Windows PowerShell 5.1 and PowerShell 7 on Windows Server 2022 and 2025. `PROXY_AGENT_TEST_SHELL` selects the executable under test; it defaults to `bash` on Unix and `powershell` on Windows.
 - Shared Docker integration tests (`tests/test_integration.py`) run on Ubuntu (amd64 and arm64), and Windows Server 2022 and 2025 with Windows containers under both PowerShell 5.1 and 7. They build a stub agent image (`tests/stub/`) and use a local HTTP server (`tests/integration/registry_server.py`) for the registry, script download, and configure endpoint. They cover config-file, TOKEN, and legacy WebSocket installation, invalid credentials, version rollback, upgrade, doctor, restart and stop.
 
+Fixtures and mock behavior live in `tests/support/stub.py`; invocation and fixture setup live in `tests/support/harness.py`. The Windows-only `tests/support/run.ps1` bridge converts JSON to PowerShell objects, invokes the real script, and exports requested proxy or ACL observations. Stub arguments use UTF-8 JSON over stdin to preserve quotes, empty strings, and Unicode under both PowerShell versions. The bridge treats failed mocks as test failures even if the script catches their exceptions.
+
 Python 3.10 or later is sufficient for the unit suite; no Python packages, bats, or Pester are required. Run from the repository root:
 
 ```bash
