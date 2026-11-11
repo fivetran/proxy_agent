@@ -169,6 +169,26 @@ class TestManager:
         assert 'Config file not found' in run_manager('start', code=1)
         assert not docker_calls(sandbox, 'run')
 
+    @pytest.mark.parametrize(
+        'config,known_bash_gap',
+        [
+            pytest.param('{"agent_id":"abc123"', True, id='malformed'),
+            pytest.param('{"nested":{"agent_id":"abc123"}}', True, id='nested-id'),
+            pytest.param('{}', False, id='missing-id'),
+            pytest.param('{"agent_id":null}', False, id='null-id'),
+        ],
+    )
+    def test_invalid_config_cannot_start(self, sandbox, config, known_bash_gap, request):
+        """Only a valid config with a top-level agent ID may reach Docker."""
+        sandbox.config.write_text(config)
+        result = sandbox.run('start')
+        if known_bash_gap and not WINDOWS:
+            request.node.add_marker(
+                pytest.mark.xfail(reason='Bash extracts fields without parsing JSON', strict=True)
+            )
+        assert result.returncode != 0, result.stdout
+        assert not sandbox.calls('docker')
+
     @pytest.mark.parametrize('contents', ['', '\n', ' \t\r\n'], ids=['zero-byte', 'newline', 'whitespace'])
     def test_empty_version(self, sandbox, run_manager, contents):
         sandbox.version.write_bytes(contents.encode())
@@ -180,9 +200,48 @@ class TestManager:
         assert "Invalid proxy agent version '2.0'" in run_manager('upgrade', code=1)
         assert not docker_calls(sandbox, 'run')
 
+    @pytest.mark.parametrize(
+        'version,known_bash_gap',
+        [
+            pytest.param('1.2. 9', True, id='embedded-space'),
+            pytest.param('1.2.\n9', True, id='multiple-lines'),
+            pytest.param('1.2.9-beta', False, id='invalid-suffix'),
+        ],
+    )
+    def test_invalid_version_never_starts(self, sandbox, version, known_bash_gap, request):
+        sandbox.version.write_text(version)
+        result = sandbox.run('start')
+        if known_bash_gap and not WINDOWS:
+            request.node.add_marker(
+                pytest.mark.xfail(reason='Bash strips whitespace inside versions', strict=True)
+            )
+        assert result.returncode != 0, result.stdout
+        assert not docker_calls(sandbox, 'run')
+
+    def test_surrounding_version_whitespace_is_accepted(self, sandbox, variant, run_manager):
+        sandbox.version.write_text(' \t1.2.9 \r\n')
+        run_manager('start')
+        assert_image(sandbox, variant)
+
     def test_upgrade_selects_latest_matching_variant(self, sandbox, variant, run_manager):
         run_manager('upgrade')
         assert_image(sandbox, variant, '1.2.10')
+
+    def test_upgrade_sorts_unordered_numeric_versions(self, sandbox, variant, run_manager):
+        sandbox.options['tags'] = [f'1.2.{n}{variant.suffix}' for n in (10, 2, 12, 9)]
+        run_manager('upgrade')
+        assert_image(sandbox, variant, '1.2.12')
+
+    def test_empty_registry_tags_preserve_running_agent(self, sandbox, variant, run_manager):
+        run_manager('start')
+        before = sandbox.calls('docker')
+        sandbox.options['tags'] = []
+        result = sandbox.run('upgrade')
+        assert result.returncode != 0, result.stdout
+        assert not [
+            call for call in sandbox.calls('docker')[len(before) :] if call[0] in ('run', 'stop', 'rm')
+        ]
+        assert_image(sandbox, variant)
 
     @pytest.mark.parametrize(
         'url', [REGISTRY, 'http://127.0.0.1:1/v2/stub/tags/list'], ids=['default', 'override']
@@ -233,6 +292,13 @@ class TestManager:
     def test_upgrade_rolls_back_when_docker_cannot_start_new_image(self, sandbox, variant, run_manager):
         run_manager('start')
         sandbox.options['run_failure_tag'] = '1.2.10'
+        assert 'rolling back' in run_manager('upgrade', code=1)
+        assert_image(sandbox, variant)
+
+    def test_upgrade_rolls_back_when_failed_docker_writes_stderr(self, sandbox, variant, run_manager):
+        """A native Docker error on stderr must not prevent rollback."""
+        run_manager('start')
+        sandbox.options.update(run_failure_tag='1.2.10', run_failure_stderr=True)
         assert 'rolling back' in run_manager('upgrade', code=1)
         assert_image(sandbox, variant)
 

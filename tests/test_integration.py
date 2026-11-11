@@ -219,3 +219,22 @@ class TestIntegration:
                 assert f"$WINDOWS_VERSION = '{agent.ltsc}'" in (directory / 'settings.ps1').read_text()
             agent.assert_running(agent.new)
             agent.manager('stop', directory=directory)
+
+    def test_upgrade_rolls_back_after_real_docker_pull_failure(self, agent):
+        """Docker fails against a local registry; rollback must restore the old image."""
+        agent.install(agent.directory, agent.fixtures / 'config.json')
+        image = f'127.0.0.1:{agent.server.server_port}/proxy-agent-stub'
+        original = f'proxy-agent-stub:{agent.old}{agent.suffix}'
+        local_old = f'{image}:{agent.old}{agent.suffix}'
+        agent.docker('tag', original, local_old)
+        try:
+            agent.env['PROXY_AGENT_IMAGE'] = image
+            agent.directory.joinpath('version').write_text(agent.old)
+            agent.manager('start')
+            output = agent.manager('upgrade', code=1)
+            assert 'rolling back' in output
+            agent.assert_version(agent.old)
+            assert agent.docker('inspect', '-f', '{{.Config.Image}}', agent.container) == local_old
+            assert agent.docker('inspect', '-f', '{{.State.Health.Status}}', agent.container) == 'healthy'
+        finally:
+            agent.docker('image', 'rm', local_old, check=False)

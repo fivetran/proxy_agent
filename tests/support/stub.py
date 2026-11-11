@@ -107,7 +107,10 @@ def powershell_command(root, options, command, args):
                 '& $env:AGENT_TEST_PYTHON $env:AGENT_TEST_STUB manager-json\n'
                 'exit $LASTEXITCODE\n', encoding='ascii')
             return None
-        return {'StatusCode': 200, 'Content': '{"agent_id":"abc123"}'}
+        if options.get('configure_failure'):
+            return {'test_exception': 'configure endpoint unavailable'}
+        return {'StatusCode': options.get('configure_status', 200),
+                'Content': options.get('configure_body', '{"agent_id":"abc123"}')}
     if command == 'Get-CimInstance':
         fixtures = {
             'win32_operatingsystem': {'ProductType': options['product_type'],
@@ -168,7 +171,7 @@ def main():
                 return options.get("doctor_exit", 0)
             requested_image = next(arg for arg in args if "proxy-agent:" in arg)
             if options.get('run_failure_tag') and options['run_failure_tag'] in requested_image:
-                print('stub Docker run failed')
+                print('stub Docker run failed', file=sys.stderr if options.get('run_failure_stderr') else sys.stdout)
                 return 125
             image.write_text(requested_image)
             print("container-id")
@@ -195,8 +198,11 @@ def main():
                 '#!/usr/bin/env bash\nexec "$AGENT_TEST_PYTHON" "$AGENT_TEST_STUB" manager "$@"\n'
             )
         elif any("/proxy-agent/configure" in arg for arg in args):
-            print(json.dumps({"agent_id": "abc123"}))
-            print("200")
+            if options.get('configure_failure'):
+                print('configure endpoint unavailable', file=sys.stderr)
+                return 7
+            print(options.get('configure_body', '{"agent_id":"abc123"}'))
+            print(options.get('configure_status', 200))
         else:
             if options.get('registry_failure'):
                 print('stub registry unavailable', file=sys.stderr)

@@ -11,6 +11,10 @@ Start with `test_manager.py` for the shared script behavior.
 | [test_harness.py](test_harness.py) | Stub failures and Python/PowerShell argument and observation handling. |
 | [test_integration.py](test_integration.py) | Real Docker lifecycle and independent TOKEN/WebSocket installation cases; image setup is shared. |
 
+Strict expected failures identify known validation differences that still need a
+shared behavior decision. They become failures if the behavior changes, so the
+expectation can be reviewed and updated.
+
 [requirements.in](requirements.in) pins direct dependencies; [requirements.txt](requirements.txt)
 locks the full dependency set with artifact hashes. CI audits this lock for known vulnerabilities.
 

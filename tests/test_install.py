@@ -108,6 +108,27 @@ class TestInstall:
         assert (sandbox.installed / 'version').read_text().strip() == '1.2.10'
         assert (sandbox.installed / 'config/config.json').read_bytes() == sandbox.config.read_bytes()
 
+    @pytest.mark.parametrize(
+        'options,known_gap',
+        [
+            pytest.param({'configure_failure': True}, None, id='connection-error'),
+            pytest.param({'configure_status': 503}, None, id='http-503'),
+            pytest.param({'configure_body': 'not-json'}, 'invalid-json', id='invalid-json'),
+            pytest.param({'configure_body': '{}'}, 'missing-agent-id', id='missing-agent-id'),
+        ],
+    )
+    def test_invalid_configure_response_does_not_start(self, sandbox, options, known_gap, request):
+        """An invalid configure response must not launch an agent."""
+        sandbox.env['TOKEN'] = 'test-token'
+        sandbox.options.update(options)
+        result = sandbox.install(ConfigPath='')
+        if known_gap == 'missing-agent-id' or (known_gap == 'invalid-json' and not WINDOWS):
+            request.node.add_marker(
+                pytest.mark.xfail(reason='Installer does not validate this configure response', strict=True)
+            )
+        assert result.returncode != 0, result.stdout
+        assert not sandbox.calls('manager')
+
     def test_low_disk_space_warns_using_platform_minimum(self, sandbox, install):
         sandbox.options['free_mb'] = 1000
         output = install()

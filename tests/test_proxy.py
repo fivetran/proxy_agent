@@ -46,7 +46,7 @@ def web_endpoints():
     accepts absolute URLs without forwarding. The origin uses this machine's
     non-loopback IPv4 address so .NET Framework cannot bypass it automatically.
     """
-    endpoints = SimpleNamespace(requests={'origin': [], 'proxy': []}, expected_auth=None)
+    endpoints = SimpleNamespace(requests={'origin': [], 'proxy': []}, expected_auth=None, registry_body=None)
     script_path = f'/proxy-agent-manager.{EXT}'
     responses = {
         '/v2/stub/tags/list': ('application/json', json.dumps({'tags': TAGS}).encode()),
@@ -77,6 +77,8 @@ def web_endpoints():
                     self.send_error(404)
                     return
                 content_type, body = responses[path]
+                if path == '/v2/stub/tags/list' and endpoints.registry_body is not None:
+                    body = endpoints.registry_body
                 self.send_response(200)
                 self.send_header('Content-Type', content_type)
                 self.send_header('Content-Length', str(len(body)))
@@ -193,6 +195,26 @@ class TestProxyContract:
         assert result.returncode == 0, result.stdout
         assert web_endpoints.requests['origin']
         assert not web_endpoints.requests['proxy']
+
+    def test_invalid_registry_json_preserves_running_agent(self, native_web_sandbox, web_endpoints, request):
+        """A malformed successful response must not replace a running agent."""
+        sandbox = native_web_sandbox
+        result = sandbox.run('start')
+        assert result.returncode == 0, result.stdout
+        image, version = sandbox.image, sandbox.version.read_text()
+        before = sandbox.calls('docker')
+        web_endpoints.registry_body = b'{"tags":["1.2.10-ubuntu-26.04"]'
+        result = sandbox.run('upgrade')
+        if not WINDOWS:
+            request.node.add_marker(
+                pytest.mark.xfail(reason='Bash extracts tags without validating registry JSON', strict=True)
+            )
+        assert result.returncode != 0, result.stdout
+        assert not [
+            call for call in sandbox.calls('docker')[len(before) :] if call[0] in ('run', 'stop', 'rm')
+        ]
+        assert sandbox.image == image
+        assert sandbox.version.read_text() == version
 
 
 @pytest.fixture
