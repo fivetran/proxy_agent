@@ -37,7 +37,7 @@ and require real curl on Unix or PowerShell web clients on Windows. The host sel
 `powershell` on Windows; use `pwsh` for PowerShell 7). Windows-only cases are
 skipped on Unix, and common tests run in both simulated container modes on Windows.
 
-Set `PROXY_AGENT_INTEGRATION=1` to enable Docker integration tests. These require
+Integration tests run by default and require
 a running Docker daemon, network access for base images, and Windows-container
-mode on Windows Server. See the [development instructions](../README.md#development)
+mode on Windows Server. Use `python -m pytest -m "not integration"` to run only unit tests. See the [development instructions](../README.md#development)
 for integration commands and the CI matrix.

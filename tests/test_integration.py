@@ -1,6 +1,6 @@
 """Exercise installation and management against a real Docker daemon.
 
-Enabled with PROXY_AGENT_INTEGRATION=1. The suite builds a minimal heartbeat/
+The suite builds a minimal heartbeat/
 doctor image and serves the checked-out manager, registry tags, and config from
 a local HTTP server. This checks actual HTTP and container behavior without
 Fivetran credentials; network access is needed to pull the image's base layers.
@@ -18,13 +18,7 @@ import pytest
 from integration.registry_server import make_server
 from support.harness import EXT, REPO, SHELL, WINDOWS, invoke
 
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.skipif(
-        os.environ.get('PROXY_AGENT_INTEGRATION') != '1',
-        reason='requires Docker; set PROXY_AGENT_INTEGRATION=1',
-    ),
-]
+pytestmark = pytest.mark.integration
 
 
 class TestIntegration:

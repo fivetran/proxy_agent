@@ -176,7 +176,7 @@ Use Python 3.11 or later and install the test dependency from `tests/requirement
 python3 -m pip install -r tests/requirements.txt
 python3 -m pytest -v
 PROXY_AGENT_TEST_SHELL=/bin/bash python3 -m pytest -v
-PROXY_AGENT_INTEGRATION=1 python3 -m pytest tests/test_integration.py -v
+python3 -m pytest -v -m integration
 ```
 
 ```powershell
@@ -184,8 +184,7 @@ python -m pip install -r tests/requirements.txt
 python -m pytest -v
 $env:PROXY_AGENT_TEST_SHELL = 'pwsh' # defaults to Windows PowerShell 5.1
 python -m pytest -v
-$env:PROXY_AGENT_INTEGRATION = '1'
-python -m pytest tests/test_integration.py -v
+python -m pytest -v -m integration
 ```
 
 Integration tests need a running Docker daemon (Windows-container mode on Windows Server) and network access to pull the stub's `alpine` or `servercore` base image. Run Linux integration tests as a regular user, as required by the installer. They use the fixed fixture container name `proxy-agent-test-agent`, so run one integration suite at a time per Docker daemon. Unit tests use isolated temporary directories, including paths with spaces.
