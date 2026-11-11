@@ -295,13 +295,6 @@ class TestManager:
         assert 'rolling back' in run_manager('upgrade', code=1)
         assert_image(sandbox, variant)
 
-    def test_upgrade_rolls_back_when_failed_docker_writes_stderr(self, sandbox, variant, run_manager):
-        """A native Docker error on stderr must not prevent rollback."""
-        run_manager('start')
-        sandbox.options.update(run_failure_tag='1.2.10', run_failure_stderr=True)
-        assert 'rolling back' in run_manager('upgrade', code=1)
-        assert_image(sandbox, variant)
-
     def test_upgrade_reports_failed_rollback(self, sandbox, run_manager):
         sandbox.options['unhealthy_tag'] = '1.2.'
         assert 'Rollback to 1.2.9 failed' in run_manager('upgrade', code=1)

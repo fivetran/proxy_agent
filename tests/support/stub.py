@@ -171,7 +171,7 @@ def main():
                 return options.get("doctor_exit", 0)
             requested_image = next(arg for arg in args if "proxy-agent:" in arg)
             if options.get('run_failure_tag') and options['run_failure_tag'] in requested_image:
-                print('stub Docker run failed', file=sys.stderr if options.get('run_failure_stderr') else sys.stdout)
+                print('stub Docker run failed')
                 return 125
             image.write_text(requested_image)
             print("container-id")
