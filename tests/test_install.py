@@ -78,6 +78,36 @@ class TestInstall:
         assert not (sandbox.installed / 'version').exists()
         assert not sandbox.calls('manager')
 
+    def test_registry_failure_does_not_pin_or_start(self, sandbox, install):
+        sandbox.options['registry_failure'] = True
+        assert 'Unable to query' in install(code=1)
+        assert not (sandbox.installed / 'version').exists()
+        assert not sandbox.calls('manager')
+
+    def test_interrupted_download_preserves_existing_installation(self, sandbox, install):
+        """A partial download must be removed without replacing existing files."""
+        (sandbox.installed / 'config').mkdir(parents=True)
+        original = {
+            sandbox.manager.name: 'existing manager',
+            'version': '1.2.9',
+            'config/config.json': '{"agent_id":"existing"}',
+        }
+        for name, contents in original.items():
+            (sandbox.installed / name).write_text(contents)
+        sandbox.options['download_failure'] = True
+        assert 'Failed to download management script' in install(code=1)
+        for name, contents in original.items():
+            assert (sandbox.installed / name).read_text() == contents
+        assert not list(sandbox.installed.glob(sandbox.manager.name + '.*'))
+        assert not sandbox.calls('manager')
+
+    def test_downloaded_manager_failure_is_reported(self, sandbox, install):
+        sandbox.options['manager_exit'] = 7
+        assert 'agent failed to start' in install(code=1)
+        assert sandbox.calls('manager') == [['start']]
+        assert (sandbox.installed / 'version').read_text().strip() == '1.2.10'
+        assert (sandbox.installed / 'config/config.json').read_bytes() == sandbox.config.read_bytes()
+
     def test_low_disk_space_warns_using_platform_minimum(self, sandbox, install):
         sandbox.options['free_mb'] = 1000
         output = install()

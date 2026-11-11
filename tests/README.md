@@ -5,11 +5,11 @@ Start with `test_manager.py` for the shared script behavior.
 
 | File | Coverage |
 | --- | --- |
-| [test_manager.py](test_manager.py) | Start, stop, restart, upgrade, rollback, version handling, and doctor reports. |
-| [test_install.py](test_install.py) | Installation, version selection, settings, permissions, and host checks. |
+| [test_manager.py](test_manager.py) | Lifecycle, rollback, dependency failures, heartbeat health checks, versions, and doctor reports. |
+| [test_install.py](test_install.py) | Installation, dependency failures, version selection, settings, permissions, and host checks. |
 | [test_proxy.py](test_proxy.py) | Shared HTTP proxy routing, authentication, and bypasses; Windows .NET proxy setup. |
 | [test_harness.py](test_harness.py) | Stub failures and Python/PowerShell argument and observation handling. |
-| [test_integration.py](test_integration.py) | Installation and lifecycle against real Docker and a local HTTP server. |
+| [test_integration.py](test_integration.py) | Real Docker lifecycle and independent TOKEN/WebSocket installation cases; image setup is shared. |
 
 [requirements.in](requirements.in) pins direct dependencies; [requirements.txt](requirements.txt)
 locks the full dependency set with artifact hashes. CI audits this lock for known vulnerabilities.
@@ -31,6 +31,7 @@ python -m pytest tests/test_manager.py -v
 ```
 
 Unit tests need no Docker or external network. Proxy cases use local HTTP servers
+on loopback and the host's non-loopback IPv4 interface (to test actual bypass behavior)
 and require real curl on Unix or PowerShell web clients on Windows. The host selects Bash or PowerShell;
 `PROXY_AGENT_TEST_SHELL` selects the executable (defaults to `bash` on Unix,
 `powershell` on Windows; use `pwsh` for PowerShell 7). Windows-only cases are

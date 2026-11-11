@@ -38,6 +38,8 @@ Change `sandbox.options` before an invocation:
 | `build`, `product_type` | Simulated Windows build and server/client host type. |
 | `free_mb`, `docker_root`, `uid` | Free disk space, Docker storage location, and Bash user ID. |
 | `unhealthy_tag` | Image substring that causes health checks to fail. |
+| `registry_failure`, `download_failure` | Fail registry queries or interrupt manager downloads. |
+| `run_failure_tag`, `manager_exit` | Fail Docker startup for matching images, or the downloaded manager with the given exit code. |
 | `doctor_exit`, `doctor_report`, `doctor_log` | Doctor exit code, stdout, and whether it saves its own log. |
 | `system_proxy`, `system_credentials` | Initial Windows proxy and whether it has preset credentials. |
 

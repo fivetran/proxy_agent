@@ -12,6 +12,7 @@ import os
 import stat
 import subprocess
 import threading
+from types import SimpleNamespace
 
 import pytest
 from integration.registry_server import make_server
@@ -27,7 +28,7 @@ pytestmark = [
 
 
 class TestIntegration:
-    """Run a complete lifecycle, then verify TOKEN and legacy WebSocket installation.
+    """Verify lifecycle and independent TOKEN/WebSocket installation scenarios.
 
     Steps share one daemon and fixture container, so run one integration suite
     at a time per daemon. Cleanup removes the container and stops the local
@@ -77,8 +78,42 @@ class TestIntegration:
     def assert_version(self, version):
         assert (self.directory / 'version').read_text().strip() == version
 
+    @pytest.fixture(scope='class')
+    def images(self):
+        """Build and tag the stub image once for all independent workflows."""
+        ltsc = None
+        if WINDOWS:
+            result = subprocess.run(
+                [
+                    SHELL,
+                    '-NoProfile',
+                    '-NonInteractive',
+                    '-Command',
+                    '(Get-CimInstance Win32_OperatingSystem).BuildNumber',
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            ltsc = {17763: 'ltsc2019', 20348: 'ltsc2022', 26100: 'ltsc2025'}[int(result.stdout.strip())]
+        suffix = f'-windows-{ltsc}' if WINDOWS else '-ubuntu-26.04'
+        old, new = (self.old, self.new)
+        build_args = ['--build-arg', f'BASE_TAG={ltsc}'] if WINDOWS else []
+        self.docker(
+            'build',
+            '-q',
+            *build_args,
+            '-f',
+            str(REPO / f'tests/stub/Dockerfile.{("windows" if WINDOWS else "linux")}'),
+            '-t',
+            f'proxy-agent-stub:{old}{suffix}',
+            str(REPO / 'tests/stub'),
+        )
+        self.docker('tag', f'proxy-agent-stub:{old}{suffix}', f'proxy-agent-stub:{new}{suffix}')
+        return SimpleNamespace(ltsc=ltsc, suffix=suffix, memory='512' if WINDOWS else '256')
+
     @pytest.fixture
-    def agent(self, tmp_path):
+    def agent(self, tmp_path, images):
         """Own Docker and HTTP resources for one workflow, including setup failures."""
         self.root = tmp_path / 'proxy agent integration'
         self.root.mkdir()
@@ -90,35 +125,8 @@ class TestIntegration:
             for key in list(self.env):
                 if key.upper().endswith('_PROXY') or key.upper() == 'TOKEN':
                     self.env.pop(key)
-            ltsc = None
-            if WINDOWS:
-                result = subprocess.run(
-                    [
-                        SHELL,
-                        '-NoProfile',
-                        '-NonInteractive',
-                        '-Command',
-                        '(Get-CimInstance Win32_OperatingSystem).BuildNumber',
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                ltsc = {17763: 'ltsc2019', 20348: 'ltsc2022', 26100: 'ltsc2025'}[int(result.stdout.strip())]
-            self.suffix = f'-windows-{ltsc}' if WINDOWS else '-ubuntu-26.04'
-            old, new = (self.old, self.new)
-            build_args = ['--build-arg', f'BASE_TAG={ltsc}'] if WINDOWS else []
-            self.docker(
-                'build',
-                '-q',
-                *build_args,
-                '-f',
-                str(REPO / f'tests/stub/Dockerfile.{("windows" if WINDOWS else "linux")}'),
-                '-t',
-                f'proxy-agent-stub:{old}{self.suffix}',
-                str(REPO / 'tests/stub'),
-            )
-            self.docker('tag', f'proxy-agent-stub:{old}{self.suffix}', f'proxy-agent-stub:{new}{self.suffix}')
+            self.ltsc, self.suffix, self.memory = images.ltsc, images.suffix, images.memory
+            old, new = self.old, self.new
             fixtures = self.fixtures
             token = self.token
             tags = [
@@ -132,11 +140,9 @@ class TestIntegration:
             self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
             self.thread.start()
             url = f'http://127.0.0.1:{self.server.server_port}'
-            memory = '512' if WINDOWS else '256'
-            self.ltsc, self.memory = (ltsc, memory)
             self.env.update(
                 RUNTIME='docker',
-                MEMORY_ALLOCATION_MB=memory,
+                MEMORY_ALLOCATION_MB=self.memory,
                 PROXY_AGENT_IMAGE='proxy-agent-stub',
                 PROXY_AGENT_REGISTRY_TAGS_URL=url + '/v2/stub/tags/list',
                 PROXY_AGENT_SCRIPT_URL=url + f'/proxy-agent-manager.{EXT}',
@@ -153,7 +159,7 @@ class TestIntegration:
 
     def test_install_and_lifecycle(self, agent):
         old, new = (agent.old, agent.new)
-        fixtures, token = (agent.fixtures, agent.token)
+        fixtures = agent.fixtures
         ltsc, memory = (agent.ltsc, agent.memory)
         agent.install(agent.directory, fixtures / 'config.json')
         agent.assert_running(new)
@@ -196,23 +202,26 @@ class TestIntegration:
         agent.assert_running(new)
         agent.manager('stop')
         assert agent.docker('ps', '-a', '--filter', f'name={agent.container}', '--format', '{{.Names}}') == ''
-        for mode in ('token', 'bad-token', 'websocket'):
-            directory = agent.root / mode
-            parameters = {'WindowsVersion': ltsc} if WINDOWS and mode == 'websocket' else {}
-            output = agent.install(
-                directory,
-                fixtures / 'config-websocket.json' if mode == 'websocket' else None,
-                token=token if mode == 'token' else 'invalid' if mode == 'bad-token' else None,
-                code=1 if mode == 'bad-token' else 0,
-                **parameters,
-            )
-            config = directory / 'config/config.json'
-            if mode == 'bad-token':
-                assert 'HTTP 401' in output
-                assert not (config.exists() and config.stat().st_size)
-            else:
-                assert config.read_bytes() == (fixtures / 'config.json').read_bytes()
-                if parameters:
-                    assert f"$WINDOWS_VERSION = '{ltsc}'" in (directory / 'settings.ps1').read_text()
-                agent.assert_running(new)
-                agent.manager('stop', directory=directory)
+
+    @pytest.mark.parametrize('mode', ['token', 'bad-token', 'websocket'])
+    def test_installation_modes(self, agent, mode):
+        """Each authentication/migration mode gets its own installation and cleanup."""
+        directory = agent.root / mode
+        parameters = {'WindowsVersion': agent.ltsc} if WINDOWS and mode == 'websocket' else {}
+        output = agent.install(
+            directory,
+            agent.fixtures / 'config-websocket.json' if mode == 'websocket' else None,
+            token=agent.token if mode == 'token' else 'invalid' if mode == 'bad-token' else None,
+            code=1 if mode == 'bad-token' else 0,
+            **parameters,
+        )
+        config = directory / 'config/config.json'
+        if mode == 'bad-token':
+            assert 'HTTP 401' in output
+            assert not (config.exists() and config.stat().st_size)
+        else:
+            assert config.read_bytes() == (agent.fixtures / 'config.json').read_bytes()
+            if parameters:
+                assert f"$WINDOWS_VERSION = '{agent.ltsc}'" in (directory / 'settings.ps1').read_text()
+            agent.assert_running(agent.new)
+            agent.manager('stop', directory=directory)

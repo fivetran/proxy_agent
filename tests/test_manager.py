@@ -9,11 +9,14 @@ separate cases below.
 """
 
 import base64
+import os
 import re
+import subprocess
+import time
 from types import SimpleNamespace
 
 import pytest
-from support.harness import IMAGE, REGISTRY, WINDOWS
+from support.harness import IMAGE, REGISTRY, SHELL, WINDOWS
 
 
 @pytest.fixture
@@ -52,6 +55,13 @@ def assert_image(sandbox, variant, version='1.2.9'):
     assert sandbox.version.read_text().strip() == version
 
 
+def assert_options(arguments, pairs):
+    """Require adjacent option/value pairs without depending on option order."""
+    actual = list(zip(arguments, arguments[1:]))
+    for pair in pairs:
+        assert pair in actual
+
+
 @pytest.mark.parametrize('sandbox', ['linux', 'windows'], indirect=True)
 class TestManager:
     """Verify lifecycle, version, resource, and doctor behavior shared by both scripts.
@@ -65,21 +75,39 @@ class TestManager:
         run_manager('start')
         assert_image(sandbox, variant)
         args = run_args(sandbox)
-        for value in (
-            '--memory=5120m',
-            'proxy-agent-abc123',
-            'proxy_agent_id=abc123',
-            'fivetran=proxy-agent',
-            'unless-stopped',
-            f'LOG_FOLDER_PATH={variant.log_dir}',
-        ):
-            assert value in args
+        assert '--memory=5120m' in args
+        heartbeat = (
+            'C:/app/logs/proxy-agent-heartbeat.txt'
+            if sandbox.options['container_os'] == 'windows'
+            else '/tmp/proxy-agent-heartbeat.txt'
+        )
+        assert_options(
+            args,
+            [
+                ('--name', 'proxy-agent-abc123'),
+                ('--label', 'proxy_agent_id=abc123'),
+                ('--label', 'fivetran=proxy-agent'),
+                ('--restart', 'unless-stopped'),
+                ('--env', 'IS_DOCKER=true'),
+                ('--env', f'LOG_FOLDER_PATH={variant.log_dir}'),
+                ('--env', f'HEARTBEAT_PATH={heartbeat}'),
+                ('--env', 'HEARTBEAT_EXPIRY_SECONDS=30'),
+                ('--health-interval', '10s'),
+                ('--health-retries', '3'),
+                ('--health-start-period', '30s'),
+            ],
+        )
         source = sandbox.agent / (
             'config' if sandbox.options['container_os'] == 'windows' else 'config/config.json'
         )
         target = 'C:/config' if sandbox.options['container_os'] == 'windows' else variant.config_path
-        assert f'{source.as_posix()}:{target}:ro' in args
-        assert f'{(sandbox.agent / "logs").as_posix()}:{variant.log_dir}' in args
+        assert_options(
+            args,
+            [
+                ('-v', f'{source.as_posix()}:{target}:ro'),
+                ('-v', f'{(sandbox.agent / "logs").as_posix()}:{variant.log_dir}'),
+            ],
+        )
         assert args[-2:] == ['-i', variant.config_path]
         health = args[args.index('--health-cmd') + 1]
         if sandbox.options['container_os'] == 'windows':
@@ -184,6 +212,30 @@ class TestManager:
         assert 'rolling back' in run_manager('upgrade', code=1)
         assert_image(sandbox, variant)
 
+    def test_registry_failure_preserves_running_agent(self, sandbox, variant, run_manager):
+        """A failed lookup must not stop, replace, or repin the running agent."""
+        run_manager('start')
+        before = sandbox.calls('docker')
+        sandbox.options['registry_failure'] = True
+        assert 'Unable to query image registry' in run_manager('upgrade', code=1)
+        assert not [
+            call for call in sandbox.calls('docker')[len(before) :] if call[0] in ('run', 'stop', 'rm')
+        ]
+        assert_image(sandbox, variant)
+
+    def test_docker_start_failure_is_reported(self, sandbox, run_manager):
+        """Bash propagates Docker's status; PowerShell normalizes startup failure to 1."""
+        sandbox.options['run_failure_tag'] = '1.2.9'
+        run_manager('start', code=1 if WINDOWS else 125)
+        assert sandbox.image is None
+        assert sandbox.version.read_text().strip() == '1.2.9'
+
+    def test_upgrade_rolls_back_when_docker_cannot_start_new_image(self, sandbox, variant, run_manager):
+        run_manager('start')
+        sandbox.options['run_failure_tag'] = '1.2.10'
+        assert 'rolling back' in run_manager('upgrade', code=1)
+        assert_image(sandbox, variant)
+
     def test_upgrade_reports_failed_rollback(self, sandbox, run_manager):
         sandbox.options['unhealthy_tag'] = '1.2.'
         assert 'Rollback to 1.2.9 failed' in run_manager('upgrade', code=1)
@@ -201,13 +253,18 @@ class TestManager:
         args = run_args(sandbox)
         assert args[:4] == ['run', '--rm', '--workdir', variant.log_dir]
         assert '--memory=5120m' in args
-        assert f'LOG_FOLDER_PATH={variant.log_dir}' in args
+        assert_options(args, [('--env', 'IS_DOCKER=true'), ('--env', f'LOG_FOLDER_PATH={variant.log_dir}')])
         source = sandbox.agent / (
             'config' if sandbox.options['container_os'] == 'windows' else 'config/config.json'
         )
         target = 'C:/config' if sandbox.options['container_os'] == 'windows' else variant.config_path
-        assert f'{source.as_posix()}:{target}:ro' in args
-        assert f'{(sandbox.agent / "logs").as_posix()}:{variant.log_dir}' in args
+        assert_options(
+            args,
+            [
+                ('-v', f'{source.as_posix()}:{target}:ro'),
+                ('-v', f'{(sandbox.agent / "logs").as_posix()}:{variant.log_dir}'),
+            ],
+        )
         assert args[-7:] == [
             f'{IMAGE}:1.2.9{variant.suffix}',
             variant.config_path,
@@ -259,6 +316,40 @@ class TestManager:
 
     def test_unknown_command_prints_usage(self, run_manager):
         assert 'Usage:' in run_manager('bogus', code=1)
+
+
+@pytest.mark.parametrize('sandbox', ['windows' if WINDOWS else 'linux'], indirect=True)
+class TestHealthcheck:
+    """Execute the generated health command for the host's native container OS.
+
+    Docker is stubbed only to obtain the command. The real shell evaluates it
+    against heartbeat files, so a command that always succeeds cannot pass.
+    """
+
+    @pytest.mark.parametrize('state', ['missing', 'fresh', 'expired', 'malformed', 'empty'])
+    def test_heartbeat_status(self, sandbox, run_manager, tmp_path, state):
+        run_manager('start')
+        args = run_args(sandbox)
+        health = args[args.index('--health-cmd') + 1]
+        heartbeat = tmp_path / 'heartbeat.txt'
+        if state != 'missing':
+            contents = {
+                'fresh': f'HEARTBEAT_EXPIRE_AT={int(time.time()) + 3600}\n',
+                'expired': f'HEARTBEAT_EXPIRE_AT={int(time.time()) - 3600}\n',
+                'malformed': 'HEARTBEAT_EXPIRE_AT=not-a-timestamp\n',
+                'empty': '',
+            }
+            heartbeat.write_text(contents[state])
+        env = os.environ.copy()
+        env.pop('HEARTBEAT_EXPIRE_AT', None)
+        env['HEARTBEAT_PATH'] = str(heartbeat)
+        if WINDOWS:
+            assert health.startswith('powershell.exe -NoProfile -EncodedCommand ')
+            command = [SHELL, '-NoProfile', '-NonInteractive', '-EncodedCommand', health.split()[-1]]
+        else:
+            command = ['/bin/sh', '-c', health]
+        result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
+        assert (result.returncode == 0) == (state in ('missing', 'fresh')), result.stdout + result.stderr
 
 
 @pytest.mark.skipif(not WINDOWS, reason='Windows containers require the PowerShell manager')

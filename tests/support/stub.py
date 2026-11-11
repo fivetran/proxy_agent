@@ -34,7 +34,14 @@ def native_command():
             raise ValueError(f'Test stub {name} failed (exit {result.returncode}): {response}')
         if not response:
             raise ValueError(f'Test stub {name} returned no JSON.')
-        value = json.dumps(json.loads(response))
+        response = json.loads(response)
+        if isinstance(response, dict) and set(response) == {'test_exception'}:
+            # An intentional dependency failure is catchable by the script;
+            # malformed mocks still persist a separate infrastructure failure.
+            action = 'throw'
+            value = response['test_exception']
+        else:
+            value = json.dumps(response)
     except (ValueError, OSError, subprocess.TimeoutExpired) as error:
         value = str(error)
         (Path(os.environ['AGENT_TEST_ROOT']) / 'stub-error.txt').write_text(value, encoding='utf-8')
@@ -86,13 +93,19 @@ def powershell_command(root, options, command, args):
         record(root, 'request', [parameters['uri'], parameters.get('method', ''),
                                  str(parameters.get('timeoutsec', 0))])
         if command == 'Invoke-RestMethod':
+            if options.get('registry_failure'):
+                return {'test_exception': 'stub registry unavailable'}
             return {'tags': options['tags']}
         if 'outfile' in parameters:
+            if options.get('download_failure'):
+                Path(parameters['outfile']).write_text('partial download')
+                return {'test_exception': 'stub download interrupted'}
             Path(parameters['outfile']).write_text(
                 # Use the same JSON bridge for the downloaded manager's arguments.
                 '$OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n'
                 'ConvertTo-Json -InputObject @($args) -Compress | '
-                '& $env:AGENT_TEST_PYTHON $env:AGENT_TEST_STUB manager-json\n', encoding='ascii')
+                '& $env:AGENT_TEST_PYTHON $env:AGENT_TEST_STUB manager-json\n'
+                'exit $LASTEXITCODE\n', encoding='ascii')
             return None
         return {'StatusCode': 200, 'Content': '{"agent_id":"abc123"}'}
     if command == 'Get-CimInstance':
@@ -153,7 +166,11 @@ def main():
                 if options.get("doctor_log"):
                     (root / "agent/logs/doctor-stub.log").write_text("stub doctor log\n")
                 return options.get("doctor_exit", 0)
-            image.write_text(next(arg for arg in args if "proxy-agent:" in arg))
+            requested_image = next(arg for arg in args if "proxy-agent:" in arg)
+            if options.get('run_failure_tag') and options['run_failure_tag'] in requested_image:
+                print('stub Docker run failed')
+                return 125
+            image.write_text(requested_image)
             print("container-id")
         elif args[0] == "inspect":
             if not image.exists():
@@ -169,6 +186,10 @@ def main():
             raise ValueError(f'Unexpected docker command: {args[0]}')
     elif command == "curl":
         if "-o" in args:
+            if options.get('download_failure'):
+                Path(args[args.index('-o') + 1]).write_text('partial download')
+                print('stub download interrupted', file=sys.stderr)
+                return 22
             # The installer downloads a manager that only records its arguments.
             Path(args[args.index("-o") + 1]).write_text(
                 '#!/usr/bin/env bash\nexec "$AGENT_TEST_PYTHON" "$AGENT_TEST_STUB" manager "$@"\n'
@@ -177,6 +198,9 @@ def main():
             print(json.dumps({"agent_id": "abc123"}))
             print("200")
         else:
+            if options.get('registry_failure'):
+                print('stub registry unavailable', file=sys.stderr)
+                return 22
             print(json.dumps({"tags": options["tags"]}))
     elif command == "id":
         print(options.get("uid", 1000))
@@ -186,7 +210,11 @@ def main():
     elif command == "date":
         # Fix timestamps to exercise collisions between doctor reports.
         print("2020-01-02T03-04-05")
-    elif command not in ('request', 'drive', 'manager'):
+    elif command == 'manager':
+        if options.get('manager_exit'):
+            print('stub manager startup failed')
+        return options.get('manager_exit', 0)
+    elif command not in ('request', 'drive'):
         raise ValueError(f'Unexpected stub command: {command}')
     return 0
 

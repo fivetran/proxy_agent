@@ -10,6 +10,7 @@ the source-consistency check runs everywhere.
 import base64
 import json
 import re
+import socket
 import threading
 from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -42,7 +43,8 @@ def web_endpoints():
     """Record direct and proxied HTTP requests; optionally challenge for Basic auth.
 
     Both listeners serve registry tags and the checked-out manager. The proxy
-    accepts absolute URLs without forwarding; every connection stays on loopback.
+    accepts absolute URLs without forwarding. The origin uses this machine's
+    non-loopback IPv4 address so .NET Framework cannot bypass it automatically.
     """
     endpoints = SimpleNamespace(requests={'origin': [], 'proxy': []}, expected_auth=None)
     script_path = f'/proxy-agent-manager.{EXT}'
@@ -86,15 +88,23 @@ def web_endpoints():
 
         return Handler
 
+    # UDP connect selects an interface without sending a packet. No DNS or
+    # external server is used; all HTTP traffic stays on this machine.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
+        route.connect(('192.0.2.1', 9))
+        origin_host = route.getsockname()[0]
+    assert not origin_host.startswith('127.'), 'Proxy tests require a non-loopback local interface'
+    endpoints.origin_host = origin_host
     with ExitStack() as cleanup:
         for role in ('origin', 'proxy'):
-            server = ThreadingHTTPServer(('127.0.0.1', 0), handler(role))
+            host = origin_host if role == 'origin' else '127.0.0.1'
+            server = ThreadingHTTPServer((host, 0), handler(role))
             cleanup.callback(server.server_close)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             cleanup.callback(thread.join, timeout=5)
             cleanup.callback(server.shutdown)
-            setattr(endpoints, f'{role}_url', f'http://127.0.0.1:{server.server_port}')
+            setattr(endpoints, f'{role}_url', f'http://{host}:{server.server_port}')
         endpoints.registry_url = endpoints.origin_url + '/v2/stub/tags/list'
         endpoints.script_url = endpoints.origin_url + script_path
         yield endpoints
@@ -108,7 +118,7 @@ class TestProxyContract:
     """
 
     @pytest.mark.parametrize('credentials', [None, ('us@er', 'p:ss')], ids=['anonymous', 'basic-auth'])
-    @pytest.mark.parametrize('no_proxy', ['', '127.0.0.1', '*'], ids=['proxied', 'bypass-host', 'bypass-all'])
+    @pytest.mark.parametrize('no_proxy', ['', 'host', '*'], ids=['proxied', 'bypass-host', 'bypass-all'])
     @pytest.mark.parametrize('operation', ['install', 'upgrade'])
     def test_routing_and_credentials(
         self, native_web_sandbox, web_endpoints, credentials, no_proxy, operation
@@ -123,15 +133,12 @@ class TestProxyContract:
             proxy_url = proxy_url.replace(
                 'http://', f'http://{quote(username, safe="")}:{quote(password, safe="")}@'
             )
-        sandbox.env['NO_PROXY'] = no_proxy
+        sandbox.env['NO_PROXY'] = web_endpoints.origin_host if no_proxy == 'host' else no_proxy
         # curl deliberately ignores uppercase HTTP_PROXY for HTTP URLs.
         sandbox.env['HTTP_PROXY' if WINDOWS else 'http_proxy'] = proxy_url
 
-        # .NET Framework always bypasses loopback destinations. A reserved name
-        # tests proxy routing without DNS: our proxy serves it without forwarding.
+        # Use the same destination in every case: only NO_PROXY changes routing.
         origin_url = web_endpoints.origin_url
-        if not no_proxy:
-            origin_url = origin_url.replace('127.0.0.1', 'proxy-agent-test.invalid')
         registry_url = origin_url + '/v2/stub/tags/list'
         script_url = origin_url + f'/proxy-agent-manager.{EXT}'
         sandbox.env.update(

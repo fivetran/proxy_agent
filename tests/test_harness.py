@@ -142,6 +142,16 @@ class TestPowerShellBridge:
         assert result.returncode == 1, result.stdout
         assert 'Unexpected CIM class' in result.stdout
 
+    def test_intentional_dependency_failure_is_catchable(self, sandbox, probe):
+        """Configured failures test script recovery without forcing the host's exit code."""
+        sandbox.options['registry_failure'] = True
+        result = probe(
+            "try { Invoke-RestMethod -Uri https://unused.example.com } catch { Write-Host 'caught' }; exit 0"
+        )
+        assert result.returncode == 0, result.stdout
+        assert 'caught' in result.stdout
+        assert not (sandbox.root / 'stub-error.txt').exists()
+
     def test_script_exception_preserves_requested_observations(self, sandbox, probe):
         sandbox.observe_proxy = True
         result = probe("throw 'probe failure'")
