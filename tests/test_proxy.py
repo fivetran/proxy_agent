@@ -46,7 +46,9 @@ def web_endpoints():
     accepts absolute URLs without forwarding. The origin uses this machine's
     non-loopback IPv4 address so .NET Framework cannot bypass it automatically.
     """
-    endpoints = SimpleNamespace(requests={'origin': [], 'proxy': []}, expected_auth=None, registry_body=None)
+    endpoints = SimpleNamespace(
+        requests={'origin': [], 'proxy': []}, expected_auth=None, registry_body=None, script_body=None
+    )
     script_path = f'/proxy-agent-manager.{EXT}'
     responses = {
         '/v2/stub/tags/list': ('application/json', json.dumps({'tags': TAGS}).encode()),
@@ -79,6 +81,8 @@ def web_endpoints():
                 content_type, body = responses[path]
                 if path == '/v2/stub/tags/list' and endpoints.registry_body is not None:
                     body = endpoints.registry_body
+                if path == script_path and endpoints.script_body is not None:
+                    body = endpoints.script_body
                 self.send_response(200)
                 self.send_header('Content-Type', content_type)
                 self.send_header('Content-Length', str(len(body)))
@@ -118,6 +122,16 @@ class TestProxyContract:
     Windows explicitly configures .NET from HTTP_PROXY; curl uses lowercase
     http_proxy for HTTP targets. NO_PROXY and the resulting behavior are shared.
     """
+
+    def test_update_manager_installs_downloaded_script(self, native_web_sandbox, web_endpoints):
+        source = (REPO / f'proxy-agent-manager.{EXT}').read_bytes() + b'\n# Updated manager\n'
+        web_endpoints.script_body = source
+        native_web_sandbox.env['NO_PROXY'] = '*'
+
+        result = native_web_sandbox.run('update-manager')
+
+        assert result.returncode == 0, result.stdout
+        assert native_web_sandbox.manager.read_bytes() == source
 
     @pytest.mark.parametrize('credentials', [None, ('us@er', 'p:ss')], ids=['anonymous', 'basic-auth'])
     @pytest.mark.parametrize('no_proxy', ['', 'host', '*'], ids=['proxied', 'bypass-host', 'bypass-all'])
