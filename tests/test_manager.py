@@ -3,6 +3,7 @@
 Sandbox selects Bash or PowerShell for the host and supplies Python stubs for
 Docker and registry requests. Tests inspect recorded arguments, fake container
 state, and real installation files without requiring Docker or network access.
+Manager updates also check validated replacement and failed-download cleanup.
 The shared contract runs in Linux-container mode on every host and is parametrized
 for Windows-container mode on Windows. Deliberate platform differences have
 separate cases below.
@@ -16,7 +17,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from support.harness import IMAGE, REGISTRY, SHELL, WINDOWS
+from support.harness import EXT, IMAGE, REGISTRY, SHELL, WINDOWS
 
 
 @pytest.fixture
@@ -60,6 +61,90 @@ def assert_options(arguments, pairs):
     actual = list(zip(arguments, arguments[1:]))
     for pair in pairs:
         assert pair in actual
+
+
+@pytest.fixture
+def updated_manager(sandbox):
+    """Download a valid copy with a marker, so replacement is observable."""
+    source = sandbox.manager.read_text(encoding='utf-8-sig') + '\n# Updated manager\n'
+    sandbox.options['script_content'] = source
+    return source
+
+
+@pytest.mark.parametrize('sandbox', ['linux', 'windows'], indirect=True)
+class TestUpdateManager:
+    """Replace only the manager, preserving the agent and recovering from bad downloads.
+
+    Downloads are Python fixtures, including partial writes followed by failure.
+    The real shell parses and replaces its copied manager; the downloaded script
+    must run only on a subsequent invocation, independently of agent settings.
+    """
+
+    def test_replaces_script_without_changing_agent(self, sandbox, run_manager, updated_manager):
+        run_manager('start')
+        settings = sandbox.settings(MEMORY_ALLOCATION_MB=2048)
+        before_files = {path: path.read_bytes() for path in (settings, sandbox.config, sandbox.version)}
+        before_docker = sandbox.calls('docker')
+        before_image = sandbox.image
+
+        assert 'Management script updated' in run_manager('update-manager')
+
+        assert sandbox.manager.read_text(encoding='utf-8-sig') == updated_manager
+        assert {path: path.read_bytes() for path in before_files} == before_files
+        assert sandbox.calls('docker') == before_docker
+        assert sandbox.image == before_image
+        assert not list(sandbox.agent.glob('.proxy-agent-manager.*'))
+        url = f'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.{EXT}'
+        if WINDOWS:
+            assert sandbox.calls('request') == [[url, '', '30']]
+            (request,) = sandbox.calls('Invoke-WebRequest')
+            assert '-UseBasicParsing' in request
+        else:
+            (request,) = sandbox.calls('curl')
+            assert url in request
+            assert request[request.index('--max-time') + 1] == '30'
+            assert sandbox.manager.stat().st_mode & 0o100
+        assert 'NAMES IMAGE STATUS' in run_manager('status')
+
+    def test_custom_url_needs_no_config_version_or_settings(self, sandbox, run_manager):
+        sandbox.config.unlink()
+        sandbox.version.unlink()
+        (sandbox.agent / f'settings.{EXT}').write_text('throw "Settings loaded"' if WINDOWS else 'exit 99\n')
+        source = 'throw "Download executed"' if WINDOWS else '#!/usr/bin/env bash\nexit 99\n'
+        sandbox.options['script_content'] = source
+        url = f'https://downloads.example.com/manager.{EXT}'
+        sandbox.env['PROXY_AGENT_SCRIPT_URL'] = url
+
+        run_manager('update-manager')
+
+        assert sandbox.manager.read_text(encoding='utf-8-sig') == source
+        assert not sandbox.calls('docker')
+        assert not list(sandbox.agent.glob('.proxy-agent-manager.*'))
+        if WINDOWS:
+            assert sandbox.calls('request') == [[url, '', '30']]
+        else:
+            (request,) = sandbox.calls('curl')
+            assert url in request
+
+    @pytest.mark.parametrize('failure', ['partial-download', 'empty', 'syntax-error'])
+    def test_failed_download_preserves_manager_and_cleans_up(self, sandbox, run_manager, failure):
+        original = sandbox.manager.read_bytes()
+        sandbox.options['script_content'] = {
+            'partial-download': '# Partial download',
+            'empty': '',
+            'syntax-error': 'function Broken {' if WINDOWS else '#!/usr/bin/env bash\nif then',
+        }[failure]
+        sandbox.options['download_exit'] = 18 if failure == 'partial-download' else 0
+
+        output = run_manager('update-manager', code=1)
+
+        assert (
+            'Failed to' if WINDOWS or failure == 'partial-download' else 'empty or has invalid syntax'
+        ) in output
+        assert sandbox.manager.read_bytes() == original
+        assert not list(sandbox.agent.glob('.proxy-agent-manager.*'))
+        assert not sandbox.calls('docker')
+
 
 
 @pytest.mark.parametrize('sandbox', ['linux', 'windows'], indirect=True)

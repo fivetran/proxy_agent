@@ -70,7 +70,7 @@ Linux releases continue to use `proxy-agent:<version>` for backward compatibilit
 
 ### Installing behind a network proxy
 
-The installers and the `upgrade` command use a proxy for their web requests: downloading the management script, listing image tags, and fetching the agent configuration from Fivetran.
+The installers and the `upgrade` and `update-manager` commands use a proxy for their web requests: downloading the management script, listing image tags, and fetching the agent configuration from Fivetran.
 
 On Linux, the shell scripts use `curl`. Set `HTTPS_PROXY` or `https_proxy` for HTTPS URLs, which the scripts use by default. Set lowercase `http_proxy` for HTTP URLs; curl ignores uppercase `HTTP_PROXY`. `NO_PROXY` or `no_proxy` excludes hosts.
 
@@ -122,7 +122,7 @@ $HOME/fivetran-proxy-agent/
 Use `proxy-agent-manager.sh` to control the agent:
 
 ```bash
-./proxy-agent-manager.sh {start|stop|restart|upgrade|status|logs|doctor [options]}
+./proxy-agent-manager.sh {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}
 ```
 
 ### Windows
@@ -130,7 +130,7 @@ Use `proxy-agent-manager.sh` to control the agent:
 Use `proxy-agent-manager.ps1` to control the agent:
 
 ```powershell
-& "$env:USERPROFILE\fivetran-proxy-agent\proxy-agent-manager.ps1" {start|stop|restart|upgrade|status|logs|doctor [options]}
+& "$env:USERPROFILE\fivetran-proxy-agent\proxy-agent-manager.ps1" {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}
 ```
 
 | Command   | Description                                          |
@@ -138,10 +138,76 @@ Use `proxy-agent-manager.ps1` to control the agent:
 | `start`   | Start the agent container                            |
 | `stop`    | Stop and remove the agent container                  |
 | `restart` | Stop then start the agent container                  |
-| `upgrade` | Pull and start the latest version, with auto-rollback on failure |
+| `upgrade` | Pull and start the latest agent version, with auto-rollback on failure |
+| `update-manager` | Download and replace the management script without restarting the agent |
 | `status`  | Show container name, image, and health status        |
 | `logs`    | Stream live container logs                           |
 | `doctor`  | Check the installation and connectivity to Fivetran in a separate container. The doctor's log and archive are saved to `logs/`, or its output if the doctor saves no log, as in 1.2.10. Options are passed to the agent's `--doctor`, e.g. `doctor --region us-east-1` |
+
+### Updating the management script
+
+Run `update-manager` as the user who installed the agent:
+
+```bash
+"$HOME/fivetran-proxy-agent/proxy-agent-manager.sh" update-manager
+```
+
+```powershell
+& "$env:USERPROFILE\fivetran-proxy-agent\proxy-agent-manager.ps1" update-manager
+```
+
+Use your installation directory if it differs from the default. This downloads the latest management script from this repository's `main` branch, checks that it is nonempty and has valid syntax, then replaces the installed script. A failed download or validation leaves the existing script intact. Configuration, settings, the pinned agent version, and the running container are unchanged; the new script takes effect on the next command. Updating the manager does not require Docker or valid agent configuration.
+
+`upgrade` updates only the agent container. To update both, run `update-manager` first, then invoke the script again with `upgrade`.
+
+#### Older installations without `update-manager`
+
+Replace the script manually once using the commands below. Set `agent_dir` or `$agentDir` to your installation directory if needed. These commands download to a temporary file and validate it before replacing the installed script; no agent restart is needed.
+
+Linux (Bash):
+
+```bash
+(
+    set -e
+    agent_dir="$HOME/fivetran-proxy-agent"
+    tmp_script=$(mktemp "$agent_dir/.proxy-agent-manager.XXXXXX")
+    trap 'rm -f "$tmp_script"' EXIT
+    curl -fSsL --max-time 30 \
+        https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh \
+        -o "$tmp_script"
+    test -s "$tmp_script"
+    bash -n "$tmp_script"
+    chmod u+x "$tmp_script"
+    mv -f "$tmp_script" "$agent_dir/proxy-agent-manager.sh"
+)
+```
+
+Windows (PowerShell):
+
+```powershell
+& {
+    $ErrorActionPreference = 'Stop'
+    $agentDir = "$env:USERPROFILE\fivetran-proxy-agent"
+    $tmpScript = Join-Path $agentDir ('.proxy-agent-manager.' + [guid]::NewGuid() + '.ps1')
+    try {
+        Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 `
+            -Uri https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1 `
+            -OutFile $tmpScript
+        if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $tmpScript -Raw))) {
+            throw 'Downloaded script is empty.'
+        }
+        $parseErrors = $null
+        $null = [System.Management.Automation.Language.Parser]::ParseFile($tmpScript, [ref]$null, [ref]$parseErrors)
+        if ($parseErrors.Count -gt 0) { throw 'Downloaded script has invalid syntax.' }
+        Unblock-File -LiteralPath $tmpScript
+        [System.IO.File]::Replace($tmpScript, (Join-Path $agentDir 'proxy-agent-manager.ps1'), [NullString]::Value)
+    } finally {
+        Remove-Item -LiteralPath $tmpScript -Force -ErrorAction SilentlyContinue
+    }
+}
+```
+
+The manual PowerShell download uses your system proxy settings; on Windows PowerShell 5.1, pass `-Proxy` and, if needed, `-ProxyUseDefaultCredentials` to `Invoke-WebRequest` when a proxy is required. The `update-manager` command itself uses the environment proxy settings described above.
 
 ## Troubleshooting
 
@@ -195,7 +261,7 @@ The scripts read these environment variables so the tests can point them at the 
 |----------|---------|----------|
 | `PROXY_AGENT_IMAGE` | management scripts | the agent image repository |
 | `PROXY_AGENT_REGISTRY_TAGS_URL` | installers and management scripts | the registry tag listing URL |
-| `PROXY_AGENT_SCRIPT_URL` | installers | the management script download URL |
+| `PROXY_AGENT_SCRIPT_URL` | installers and management scripts | the management script download URL |
 
 ## License
 

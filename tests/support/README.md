@@ -42,6 +42,7 @@ Change `sandbox.options` before an invocation:
 | `run_failure_tag`, `manager_exit` | Fail Docker startup for matching images, or the downloaded manager with the given exit code. |
 | `configure_failure`, `configure_status`, `configure_body` | Simulate configure errors and responses. |
 | `doctor_exit`, `doctor_report`, `doctor_log` | Doctor exit code, stdout, and whether it saves its own log. |
+| `script_content`, `download_exit` | Downloaded manager content and failure after writing it (curl exit code; PowerShell exception). |
 | `system_proxy`, `system_credentials` | Initial Windows proxy and whether it has preset credentials. |
 
 Use `sandbox.env` for production environment variables and `settings(**values)`
