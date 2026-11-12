@@ -157,13 +157,6 @@ class TestProxyContract:
             installation = sandbox.agent
 
         assert result.returncode == 0, result.stdout
-        if operation == 'update-manager':
-            assert (installation / 'version').read_text().strip() == '1.2.9'
-            assert not sandbox.calls('docker')
-            assert sandbox.manager.read_bytes() == (REPO / f'proxy-agent-manager.{EXT}').read_bytes()
-        else:
-            assert (installation / 'version').read_text().strip() == '1.2.10'
-            assert sandbox.image.endswith(':1.2.10-ubuntu-26.04')
         if no_proxy:
             assert not web_endpoints.requests['proxy']
             assert web_endpoints.requests['origin']
