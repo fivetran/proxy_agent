@@ -162,21 +162,32 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 CI (`.github/workflows/ci.yml`) runs on every pull request:
 
+- A dependency audit rejects known vulnerabilities in the locked Python test dependencies.
 - `shellcheck` on the shell scripts and PSScriptAnalyzer (settings in `PSScriptAnalyzerSettings.psd1`) on the PowerShell scripts.
-- Unit tests for the management scripts and the Windows installer: `tests/bash/manager.bats` (bats), and `tests/pwsh/Manager.Tests.ps1` and `tests/pwsh/Install.Tests.ps1` (Pester 5, under both Windows PowerShell 5.1 and PowerShell 7). They run the scripts with stubbed `docker`, registry and host calls, so they need no Docker daemon.
-- Integration tests that run the installer and management script against a real Docker daemon: `tests/integration/linux.sh` on Ubuntu (amd64 and arm64), and `tests/integration/windows.ps1` on Windows Server 2022 and 2025 with Windows containers (on 2025 also under PowerShell 7). They use a stub agent image (`tests/stub/`) that only writes the heartbeat file, or stands in for the doctor, and a local stand-in for the registry, the script download and the configure endpoint (`tests/integration/registry_server.py`), so they need no Fivetran credentials. They cover installing from a config file, from a `TOKEN`, and from a legacy WebSocket config, then rollback, upgrade, doctor, restart and stop.
+- A shared Python `pytest` suite for both installers and management scripts (`tests/test_*.py`). It detects the host platform and invokes Bash or PowerShell with equivalent arguments. Most cases stub external commands; proxy contracts use real curl or PowerShell web requests against local HTTP servers. Unit tests need no Docker daemon or external network. Common assertions also run in both Linux-container and Windows-container modes on Windows. Explicit Windows expectations cover LTSC selection, container paths and health checks, config ACLs, and .NET proxy handling; Linux checks mode 600 and rejection of root installs.
+- The unit matrix covers Bash 3.2 on macOS, Bash on Ubuntu 22.04 and the current Ubuntu runner, and Windows PowerShell 5.1 and PowerShell 7 on Windows Server 2022 and 2025. `PROXY_AGENT_TEST_SHELL` selects the executable under test; it defaults to `bash` on Unix and `powershell` on Windows.
+- Shared Docker integration tests (`tests/test_integration.py`) run on Ubuntu (amd64 and arm64), and Windows Server 2022 and 2025 with Windows containers under both PowerShell 5.1 and 7. They build a stub agent image once (`tests/stub/`) and use a local HTTP server (`tests/integration/registry_server.py`) for the registry, script download, and configure endpoint. Independent cases cover TOKEN, legacy WebSocket, and invalid-credential installation. The lifecycle case covers config-file installation, starting older pinned versions, upgrade, doctor, restart and stop.
 
-To run them locally you need Docker for the integration tests, `python3` (`python` on Windows) for the registry stand-in, [bats-core](https://github.com/bats-core/bats-core) for the bash tests and [Pester 5](https://pester.dev) for the PowerShell tests. The stub images pull `alpine` and `servercore` base images, so the integration tests need network access for that.
+Fixtures live in `tests/conftest.py`, sandbox setup and invocation in `tests/support/harness.py`, and mock commands in `tests/support/stub.py`. Windows fixtures use pythonnet to host the selected PowerShell engine in a spawned Python child, binding arguments as .NET values and reading native proxy or ACL observations. PowerShell 5.1 uses .NET Framework; PowerShell 7 uses its bundled CoreCLR. Mock commands use UTF-8 JSON over stdin to preserve quotes, empty strings, and Unicode under both PowerShell versions. Python tracks failed mocks independently, so they fail the test even if the script catches their exceptions.
+
+Use Python 3.11 or later and install the test dependency from `tests/requirements.txt`. Unix proxy tests also require curl. Run from the repository root:
 
 ```bash
-bats tests/bash
-tests/integration/linux.sh            # needs Docker
+python3 -m pip install -r tests/requirements.txt
+python3 -m pytest -v
+PROXY_AGENT_TEST_SHELL=/bin/bash python3 -m pytest -v
+python3 -m pytest -v -m integration
 ```
 
 ```powershell
-Invoke-Pester -Path tests/pwsh
-tests\integration\windows.ps1          # needs Docker in Windows-containers mode
+python -m pip install -r tests/requirements.txt
+python -m pytest -v
+$env:PROXY_AGENT_TEST_SHELL = 'pwsh' # defaults to Windows PowerShell 5.1
+python -m pytest -v
+python -m pytest -v -m integration
 ```
+
+Integration tests need a running Docker daemon (Windows-container mode on Windows Server) and network access to pull the stub's `alpine` or `servercore` base image. Run Linux integration tests as a regular user, as required by the installer. They use the fixed fixture container name `proxy-agent-test-agent`, so run one integration suite at a time per Docker daemon. Unit tests use isolated temporary directories, including paths with spaces.
 
 The scripts read these environment variables so the tests can point them at the stub image and local server. They are not meant for production use:
 

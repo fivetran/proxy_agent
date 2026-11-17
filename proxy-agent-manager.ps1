@@ -63,11 +63,12 @@ if (-not (Test-Path $VERSION_FILE)) {
     exit 1
 }
 
-$PINNED_VERSION = (Get-Content $VERSION_FILE -Raw).Trim()
-if (-not $PINNED_VERSION) {
+$PINNED_VERSION = Get-Content $VERSION_FILE -Raw
+if ([string]::IsNullOrWhiteSpace($PINNED_VERSION)) {
     Write-Host "ERROR: $VERSION_FILE is empty." -ForegroundColor Red
     exit 1
 }
+$PINNED_VERSION = $PINNED_VERSION.Trim()
 
 # ── Functions ────────────────────────────────────────────────────────────────
 
