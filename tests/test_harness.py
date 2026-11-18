@@ -137,6 +137,21 @@ class TestPowerShellBridge:
         assert result.returncode == 1, result.stdout
         assert 'Test stub Invoke-RestMethod failed (exit 7)' in result.stdout
 
+    def test_intentional_download_failure_can_be_caught_without_failing_fixture(self, sandbox, probe):
+        sandbox.options.update(script_content='# Partial download', download_exit=18)
+        partial = sandbox.agent / 'partial.ps1'
+
+        result = probe(
+            'try { Invoke-WebRequest -Uri https://unused.example.com -OutFile $args[0] } '
+            'catch { Write-Output "Caught: $_" }; exit 0',
+            str(partial),
+        )
+
+        assert result.returncode == 0, result.stdout
+        assert 'Caught: Download interrupted' in result.stdout
+        assert partial.read_text(encoding='utf-8-sig') == '# Partial download'
+        assert not (sandbox.root / 'stub-error.txt').exists()
+
     def test_unknown_cim_class_does_not_query_the_real_host(self, probe):
         result = probe('Get-CimInstance Win32_Processor -ErrorAction Stop')
         assert result.returncode == 1, result.stdout
