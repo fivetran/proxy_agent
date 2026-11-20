@@ -60,6 +60,9 @@ def write_script(path, options, default_script, encoding='utf-8'):
         Path(path).write_bytes(base64.b64decode(options['script_bytes']))
     else:
         Path(path).write_text(options.get('script_content', default_script), encoding=encoding)
+    if 'script_mtime_ns' in options:
+        timestamp = options['script_mtime_ns']
+        os.utime(path, ns=(timestamp, timestamp))
 
 
 def powershell_parameters(command, args):

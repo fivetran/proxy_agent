@@ -131,15 +131,22 @@ class TestUpdateManager:
         (sandbox.agent / '.manager-auto-update').mkdir()
         # The old script would run Docker. Only the downloaded script should run.
         if WINDOWS:
-            sandbox.options['script_content'] = (
+            replacement = (
                 'param($Command, [string[]]$DoctorArgs)\n'
                 'Write-Host ((@($Command) + $DoctorArgs) -join "|")\n'
                 'exit 7\n'
             )
         else:
-            sandbox.options['script_content'] = '#!/usr/bin/env bash\nprintf "%s|" "$@"\nexit 7\n'
+            replacement = '#!/usr/bin/env bash\nprintf "%s|" "$@"\nexit 7\n'
+        # Keep both attributes identical so the test also catches metadata-based caching.
+        original = sandbox.manager.stat()
+        contents = (replacement + '#').encode('ascii').ljust(original.st_size)
+        sandbox.options['script_bytes'] = base64.b64encode(contents).decode('ascii')
+        sandbox.options['script_mtime_ns'] = original.st_mtime_ns
 
         assert 'doctor|--region|a b' in run_manager('doctor', '--region', 'a b', code=7)
+        assert sandbox.manager.stat().st_size == original.st_size
+        assert sandbox.manager.stat().st_mtime_ns == original.st_mtime_ns
         assert not sandbox.calls('docker')
         assert len(sandbox.calls('request' if WINDOWS else 'curl')) == 1
 
