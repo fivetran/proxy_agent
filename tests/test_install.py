@@ -41,6 +41,19 @@ class TestInstall:
         settings = (sandbox.installed / f'settings.{EXT}').read_text()
         assert ('$MEMORY_ALLOCATION_MB = 2048' if WINDOWS else 'MEMORY_ALLOCATION_MB=2048') in settings
         assert 'WINDOWS_VERSION' not in settings
+        assert sandbox.calls('manager') == [['start'], ['enable-manager-auto-update']]
+
+    def test_schedule_failure_warns_after_agent_start(self, sandbox, install):
+        sandbox.options['schedule_exit'] = 1
+
+        assert 'Could not schedule daily management script checks' in install()
+        assert sandbox.calls('manager') == [['start'], ['enable-manager-auto-update']]
+
+    def test_install_can_skip_auto_update_setup(self, sandbox, install):
+        sandbox.env['PROXY_AGENT_SKIP_AUTO_UPDATE_SETUP'] = '1'
+
+        install()
+
         assert sandbox.calls('manager') == [['start']]
 
     def test_config_permissions(self, sandbox, install):

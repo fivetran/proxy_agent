@@ -551,6 +551,15 @@ try {
         exit 1
     }
 
+    if ($env:PROXY_AGENT_SKIP_AUTO_UPDATE_SETUP -ne '1') {
+        try {
+            & $agentScript enable-manager-auto-update
+            if (-not $?) { throw 'The manager could not enable automatic updates.' }
+        } catch {
+            Write-Warning "Could not schedule daily management script checks. Retry with & '$agentScript' enable-manager-auto-update. $_"
+        }
+    }
+
     Write-Host "`nInstallation complete."
     Write-Host "Install directory: $InstallDir"
     # Otherwise the script would exit with whatever $LASTEXITCODE a tolerated

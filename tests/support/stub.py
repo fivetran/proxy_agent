@@ -55,6 +55,13 @@ def record(root, command, args):
         log.write(json.dumps([command, *args]) + "\n")
 
 
+def write_script(path, options, default_script, encoding='utf-8'):
+    if 'script_bytes' in options:
+        Path(path).write_bytes(base64.b64decode(options['script_bytes']))
+    else:
+        Path(path).write_text(options.get('script_content', default_script), encoding=encoding)
+
+
 def powershell_parameters(command, args):
     """Bind the small cmdlet interfaces used by the scripts, failing on unknown options."""
     positional, allowed = {
@@ -88,8 +95,10 @@ def powershell_parameters(command, args):
 
 def powershell_command(root, options, command, args):
     """PowerShell mocks return JSON, which the bridge converts to native objects."""
-    parameters = powershell_parameters(command, args)
     record(root, command, args)
+    if command.startswith('New-ScheduledTask') or command == 'Register-ScheduledTask':
+        return command
+    parameters = powershell_parameters(command, args)
     if command in ('Invoke-RestMethod', 'Invoke-WebRequest'):
         record(root, 'request', [parameters['uri'], parameters.get('method', ''),
                                  str(parameters.get('timeoutsec', 0))])
@@ -108,8 +117,7 @@ def powershell_command(root, options, command, args):
                 '& $env:AGENT_TEST_PYTHON $env:AGENT_TEST_STUB manager-json\n'
                 'exit $LASTEXITCODE\n'
             )
-            Path(parameters['outfile']).write_text(
-                options.get('script_content', default_script), encoding='utf-8-sig')
+            write_script(parameters['outfile'], options, default_script, encoding='utf-8-sig')
             if options.get('download_exit'):
                 return {'download_error': 'Download interrupted'}
             return None
@@ -201,8 +209,7 @@ def main():
                 return 22
             # The installer downloads a manager that only records its arguments.
             default_script = '#!/usr/bin/env bash\nexec "$AGENT_TEST_PYTHON" "$AGENT_TEST_STUB" manager "$@"\n'
-            Path(args[args.index("-o") + 1]).write_text(
-                options.get('script_content', default_script))
+            write_script(args[args.index("-o") + 1], options, default_script)
             return options.get('download_exit', 0)
         elif any("/proxy-agent/configure" in arg for arg in args):
             if options.get('configure_failure'):
@@ -222,8 +229,10 @@ def main():
         print(f"stub 100000 0 {options.get('free_mb', 100000)} 0% /")
     elif command == "date":
         # Fix timestamps to exercise collisions between doctor reports.
-        print("2020-01-02T03-04-05")
+        print("2020-01-02" if "+%F" in args else "2020-01-02T03-04-05")
     elif command == 'manager':
+        if args == ['enable-manager-auto-update']:
+            return options.get('schedule_exit', 0)
         if options.get('manager_exit'):
             print('stub manager startup failed')
         return options.get('manager_exit', 0)

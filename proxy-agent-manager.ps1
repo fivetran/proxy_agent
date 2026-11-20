@@ -18,14 +18,16 @@ $VERSION_FILE       = Join-Path $BASE_DIR 'version'
 $LOGFILE            = Join-Path $BASE_DIR 'logs\proxy-agent-manager.log'
 $CONTAINER_LOG_DIR  = '/app/logs'
 $SETTINGS_FILE = Join-Path $BASE_DIR 'settings.ps1'
+$AUTO_UPDATE_DIR = Join-Path $BASE_DIR '.manager-auto-update'
 # Appended to the plain agent version to form the Linux image tag.
 $LINUX_IMAGE_TAG_SUFFIX = '-ubuntu-26.04'
 
 # ── Startup validation ───────────────────────────────────────────────────────
 
-$validCommands = @('start', 'stop', 'restart', 'upgrade', 'update-manager', 'status', 'logs', 'doctor')
+$validCommands = @('start', 'stop', 'restart', 'upgrade', 'update-manager', 'enable-manager-auto-update',
+    'check-manager-update', 'status', 'logs', 'doctor')
 if (-not $Command -or $Command -notin $validCommands) {
-    Write-Host "Usage: $($MyInvocation.MyCommand.Name) {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}"
+    Write-Host "Usage: $($MyInvocation.MyCommand.Name) {start|stop|restart|upgrade|update-manager|enable-manager-auto-update|status|logs|doctor [options]}"
     exit 1
 }
 
@@ -69,8 +71,7 @@ function Set-WebProxyFromEnvironment {
     try {
         $proxyUri = [Uri]$proxyUrl
     } catch {
-        Write-Host "ERROR: Invalid proxy URL in HTTPS_PROXY/HTTP_PROXY" -ForegroundColor Red
-        exit 1
+        throw 'Invalid proxy URL in HTTPS_PROXY/HTTP_PROXY'
     }
 
     # .NET bypass entries are regular expressions matched against the request URL. As with curl,
@@ -122,16 +123,61 @@ function Update-Manager {
         if ($parseErrors.Count -gt 0) {
             throw 'Downloaded management script has invalid syntax.'
         }
+        if ((Get-FileHash -LiteralPath $tmpScript).Hash -eq (Get-FileHash -LiteralPath $PSCommandPath).Hash) {
+            Write-Host 'Management script is already up to date.'
+            return $false
+        }
         Unblock-File -LiteralPath $tmpScript
         # $null binds to an empty string here; Replace requires a null backup path.
         [System.IO.File]::Replace($tmpScript, $PSCommandPath, [NullString]::Value)
-        Write-Host "Management script updated. The agent has not been restarted."
-    } catch {
-        Write-Host "ERROR: Failed to update management script: $_" -ForegroundColor Red
-        exit 1
+        Write-Host 'Management script updated.'
+        return $true
     } finally {
         Remove-Item -LiteralPath $tmpScript -Force -ErrorAction SilentlyContinue
     }
+}
+
+# Claim the UTC day before downloading so simultaneous invocations share one check,
+# including when the download fails.
+function Invoke-ManagerUpdateCheck {
+    if (-not (Test-Path -LiteralPath $AUTO_UPDATE_DIR -PathType Container)) { return $false }
+    $day = [DateTime]::UtcNow.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+    $stamp = Join-Path $AUTO_UPDATE_DIR $day
+    try {
+        [IO.File]::Open($stamp, [IO.FileMode]::CreateNew).Dispose()
+    } catch [IO.IOException] {
+        if (Test-Path -LiteralPath $stamp -PathType Leaf) { return $false }
+        throw
+    }
+    Get-ChildItem -LiteralPath $AUTO_UPDATE_DIR -File -Filter '????-??-??' |
+        Where-Object { $_.Name -clt $day } |
+        Remove-Item -ErrorAction SilentlyContinue
+    Update-Manager
+}
+
+function Enable-ManagerAutoUpdate {
+    $null = New-Item -ItemType Directory -Path $AUTO_UPDATE_DIR -Force
+    $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes("$userSid|${PSCommandPath}".ToUpperInvariant()))
+        $taskName = 'Fivetran Proxy Agent Manager Update ' + [BitConverter]::ToString($hash).Replace('-', '')
+    } finally {
+        $sha256.Dispose()
+    }
+    $executable = if ($PSVersionTable.PSEdition -eq 'Desktop') { 'powershell.exe' } else { 'pwsh.exe' }
+    # Encode the literal path so Task Scheduler cannot expand percent signs in it.
+    $scriptPath = $PSCommandPath.Replace("'", "''")
+    $commandLine = "& '$scriptPath' check-manager-update; exit `$LASTEXITCODE"
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($commandLine))
+    $action = New-ScheduledTaskAction -Execute (Join-Path $PSHOME $executable) `
+        -Argument "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encoded"
+    $trigger = New-ScheduledTaskTrigger -Daily -At ([DateTime]::Today.AddHours(3))
+    $principal = New-ScheduledTaskPrincipal -UserId $userSid -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    $null = Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+        -Principal $principal -Settings $settings -Force
+    Write-Host "Daily management script check enabled in scheduled task '$taskName'."
 }
 
 function Get-ContainerOsType {
@@ -528,9 +574,33 @@ function Invoke-Doctor {
 
 # Updating the manager does not require agent configuration or Docker.
 if ($Command -eq 'update-manager') {
-    Update-Manager
+    try {
+        $null = Update-Manager
+    } catch {
+        Write-Host "ERROR: Failed to update management script: $_" -ForegroundColor Red
+        exit 1
+    }
     exit 0
 }
+if ($Command -eq 'enable-manager-auto-update') {
+    Enable-ManagerAutoUpdate
+    exit 0
+}
+
+$managerUpdated = $false
+try {
+    $managerUpdated = Invoke-ManagerUpdateCheck
+} catch {
+    Write-Warning "Failed to update management script: $_"
+    if ($Command -eq 'check-manager-update') { exit 1 }
+}
+if ($managerUpdated) {
+    # Call the replacement in a new script scope with the original bound parameters.
+    $global:LASTEXITCODE = 0
+    & $PSCommandPath @PSBoundParameters
+    exit $LASTEXITCODE
+}
+if ($Command -eq 'check-manager-update') { exit 0 }
 
 # settings.ps1 may set $MEMORY_ALLOCATION_MB and, for Windows containers,
 # $WINDOWS_VERSION (an LTSC variant that overrides host detection).

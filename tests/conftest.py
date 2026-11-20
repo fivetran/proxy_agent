@@ -217,7 +217,9 @@ class _PowerShellEngine:
             'ConvertTo-Json -InputObject (@($Name) + @($Arguments)) -Depth 10 -Compress | '
             '& $env:AGENT_TEST_PYTHON $env:AGENT_TEST_RUNNER native | Out-String | Invoke-Expression',
         }
-        commands = ['Get-CimInstance', 'Get-PSDrive']
+        commands = ['Get-CimInstance', 'Get-PSDrive', 'New-ScheduledTaskAction',
+                    'New-ScheduledTaskTrigger', 'New-ScheduledTaskPrincipal',
+                    'New-ScheduledTaskSettingsSet', 'Register-ScheduledTask']
         if request['stub_http']:
             commands += ['Invoke-RestMethod']
             # Intentional download failures are cmdlet exceptions, not broken mocks.

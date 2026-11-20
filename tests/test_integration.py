@@ -140,6 +140,7 @@ class TestIntegration:
                 PROXY_AGENT_IMAGE='proxy-agent-stub',
                 PROXY_AGENT_REGISTRY_TAGS_URL=url + '/v2/stub/tags/list',
                 PROXY_AGENT_SCRIPT_URL=url + f'/proxy-agent-manager.{EXT}',
+                PROXY_AGENT_SKIP_AUTO_UPDATE_SETUP='1',
                 FIVETRAN_API_URL=url,
             )
             yield self

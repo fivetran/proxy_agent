@@ -368,6 +368,10 @@ main() {
         exit 1
     fi
 
+    if [ "${PROXY_AGENT_SKIP_AUTO_UPDATE_SETUP:-}" != 1 ] && ! ./$AGENT_SCRIPT enable-manager-auto-update; then
+        echo "WARNING: Could not schedule daily management script checks. Retry with ./$AGENT_SCRIPT enable-manager-auto-update." >&2
+    fi
+
     echo -e "\nInstallation complete."
     echo "Install directory: $install_dir"
 }

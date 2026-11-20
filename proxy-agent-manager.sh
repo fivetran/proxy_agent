@@ -2,7 +2,7 @@
 #
 #  Management script for Fivetran Proxy Agent (Docker)
 #
-#  Usage: ./proxy-agent-manager.sh {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}
+#  Usage: ./proxy-agent-manager.sh {start|stop|restart|upgrade|update-manager|enable-manager-auto-update|status|logs|doctor [options]}
 #
 set -euo pipefail
 
@@ -16,6 +16,7 @@ IMAGE_TAG_SUFFIX="-ubuntu-26.04"
 CONFIG_FILE="$BASE_DIR/config/config.json"
 VERSION_FILE="$BASE_DIR/version"
 SETTINGS_FILE="$BASE_DIR/settings.sh"
+AUTO_UPDATE_DIR="$BASE_DIR/.manager-auto-update"
 
 get_agent_id() {
     grep -o '"agent_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null \
@@ -46,10 +47,11 @@ check_memory_allocation() {
 
 # Download beside the installed script so rename replaces it atomically.
 # The subshell confines the cleanup trap to this command.
+# Exit 0 after replacement, 2 if current, and 1 on failure.
 update_manager() (
     local script_url="${PROXY_AGENT_SCRIPT_URL:-https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh}"
     local tmp_script
-    tmp_script=$(mktemp "$BASE_DIR/.proxy-agent-manager.XXXXXX")
+    tmp_script=$(mktemp "$BASE_DIR/.proxy-agent-manager.XXXXXX") || exit 1
     trap 'rm -f "$tmp_script"' EXIT
 
     echo "Downloading management script..."
@@ -61,10 +63,62 @@ update_manager() (
         echo "ERROR: Downloaded management script is empty or has invalid syntax" >&2
         exit 1
     fi
-    chmod u+x "$tmp_script"
-    mv -f "$tmp_script" "$0"
-    echo "Management script updated. The agent has not been restarted."
+    if cmp -s "$tmp_script" "$0"; then
+        echo "Management script is already up to date."
+        exit 2
+    fi
+    chmod u+x "$tmp_script" && mv -f -- "$tmp_script" "$0" || exit 1
+    echo "Management script updated."
 )
+
+# Claim the UTC day before contacting the server. A timer and an interactive
+# command can arrive together, and an outage should cost at most one attempt.
+check_manager_update() {
+    [ -d "$AUTO_UPDATE_DIR" ] || return 2
+    local day stamp
+    day=$(date -u +%F) || return 1
+    if ! (set -C; : > "$AUTO_UPDATE_DIR/$day") 2>/dev/null; then
+        [ -f "$AUTO_UPDATE_DIR/$day" ] && return 2
+        echo "ERROR: Could not record the management script update check" >&2
+        return 1
+    fi
+    for stamp in "$AUTO_UPDATE_DIR"/????-??-??; do
+        if [[ ${stamp##*/} < "$day" ]]; then
+            rm -f -- "$stamp"
+        fi
+    done
+    update_manager >&2
+}
+
+enable_manager_auto_update() {
+    local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    local timer
+    mkdir -p "$AUTO_UPDATE_DIR"
+    timer=$(systemd-escape --path --template=proxy-agent-manager-update@.timer -- "$BASE_DIR/${0##*/}")
+    mkdir -p "$unit_dir"
+    cat > "$unit_dir/proxy-agent-manager-update@.service" <<'EOF'
+[Unit]
+Description=Update the Fivetran Proxy Agent management script
+
+[Service]
+Type=oneshot
+ExecStart=:/usr/bin/env bash %f check-manager-update
+EOF
+    cat > "$unit_dir/proxy-agent-manager-update@.timer" <<'EOF'
+[Unit]
+Description=Check daily for Fivetran Proxy Agent management script updates
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl --user daemon-reload
+    systemctl --user enable --now -- "$timer"
+    echo "Daily management script check enabled in $timer."
+}
 
 get_latest_version() {
     local registry_host="${IMAGE%%/*}"
@@ -242,10 +296,32 @@ run_doctor() {
 
 # Updating the manager does not require agent configuration or Docker. Exit in
 # this parsed block so Bash never resumes reading the replaced script.
-if [ "${1:-}" = "update-manager" ]; then
-    update_manager
-    exit 0
-fi
+case "${1:-}" in
+    update-manager)
+        if update_manager; then
+            exit 0
+        else
+            status=$?
+            [ "$status" -eq 2 ] && exit 0
+            exit "$status"
+        fi
+        ;;
+    enable-manager-auto-update)
+        enable_manager_auto_update
+        exit 0
+        ;;
+    check-manager-update|start|stop|restart|upgrade|status|logs|doctor)
+        if check_manager_update; then
+            exec "$BASH" "$0" "$@"
+        else
+            status=$?
+            if [ "$1" = "check-manager-update" ]; then
+                [ "$status" -eq 2 ] && exit 0
+                exit "$status"
+            fi
+        fi
+        ;;
+esac
 
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "ERROR: Config file not found: $CONFIG_FILE"
@@ -331,7 +407,7 @@ case "${1:-}" in
         ;;
 
     *)
-        echo "Usage: $0 {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}"
+        echo "Usage: $0 {start|stop|restart|upgrade|update-manager|enable-manager-auto-update|status|logs|doctor [options]}"
         exit 1
         ;;
 esac
