@@ -12,6 +12,7 @@ separate cases below.
 import base64
 import os
 import re
+import shutil
 import subprocess
 import time
 from types import SimpleNamespace
@@ -71,7 +72,13 @@ def updated_manager(sandbox):
     return source
 
 
-@pytest.mark.parametrize('sandbox', ['linux', 'windows'], indirect=True)
+@pytest.fixture
+def manager_update_due(sandbox):
+    shutil.rmtree(sandbox.update_state)
+    yesterday = time.time() - 25 * 3600
+    os.utime(sandbox.manager, (yesterday, yesterday))
+
+
 class TestUpdateManager:
     """Replace only the manager, preserving the agent and recovering from bad downloads.
 
@@ -80,6 +87,7 @@ class TestUpdateManager:
     must run only on a subsequent invocation, independently of agent settings.
     """
 
+    @pytest.mark.parametrize('sandbox', ['linux', 'windows'], indirect=True)
     def test_replaces_script_without_changing_agent(self, sandbox, run_manager, updated_manager):
         run_manager('start')
         settings = sandbox.settings(MEMORY_ALLOCATION_MB=2048)
@@ -125,6 +133,67 @@ class TestUpdateManager:
         else:
             (request,) = sandbox.calls('curl')
             assert url in request
+
+    def test_recently_installed_manager_skips_download(self, sandbox, run_manager):
+        shutil.rmtree(sandbox.update_state)
+        installed_at = time.time() - (24 * 60 - 1) * 60
+        os.utime(sandbox.manager, (installed_at, installed_at))
+
+        assert 'NAMES IMAGE STATUS' in run_manager('status')
+        assert not sandbox.calls('request' if WINDOWS else 'curl')
+
+    @pytest.mark.usefixtures('manager_update_due')
+    def test_daily_update_reruns_original_command_and_returns_its_status(self, sandbox, run_manager):
+        # The old script would run Docker. Only the downloaded script should run.
+        if WINDOWS:
+            replacement = (
+                'param($Command, [string[]]$DoctorArgs)\n'
+                'Write-Host ((@($Command) + $DoctorArgs) -join "|")\n'
+                'exit 7\n'
+            )
+        else:
+            replacement = '#!/usr/bin/env bash\nprintf "%s|" "$@"\nexit 7\n'
+        # Keep both attributes identical so the test also catches metadata-based caching.
+        original = sandbox.manager.stat()
+        contents = (replacement + '#').encode('ascii').ljust(original.st_size)
+        sandbox.options['script_bytes'] = base64.b64encode(contents).decode('ascii')
+        sandbox.options['script_mtime_ns'] = original.st_mtime_ns
+
+        assert 'doctor|--region|a b' in run_manager('doctor', '--region', 'a b', code=7)
+        installed = sandbox.manager.stat()
+        assert (installed.st_size, installed.st_mtime_ns) == (original.st_size, original.st_mtime_ns)
+        assert not sandbox.calls('docker')
+        assert len(sandbox.calls('request' if WINDOWS else 'curl')) == 1
+
+    @pytest.mark.parametrize('download_failure', [False, True], ids=['unchanged', 'download-failed'])
+    @pytest.mark.usefixtures('manager_update_due')
+    def test_daily_check_preserves_manager(self, sandbox, run_manager, download_failure):
+        state = sandbox.update_state
+        state.mkdir()
+        old_check = state / '2000-01-01'
+        old_check.touch()
+        sandbox.options.update(
+            download_failure=download_failure,
+            script_bytes=base64.b64encode(sandbox.manager.read_bytes()).decode('ascii'),
+        )
+        mtime = sandbox.manager.stat().st_mtime_ns
+
+        assert 'NAMES IMAGE STATUS' in run_manager('status')
+        assert 'NAMES IMAGE STATUS' in run_manager('status')
+
+        assert sandbox.manager.stat().st_mtime_ns == mtime
+        assert len(sandbox.calls('request' if WINDOWS else 'curl')) == 1
+        assert not old_check.exists()
+
+    @pytest.mark.skipif(not WINDOWS, reason='PowerShell configures the web proxy itself')
+    @pytest.mark.usefixtures('manager_update_due')
+    def test_bad_proxy_does_not_abort_daily_foreground_command(self, sandbox, run_manager):
+        sandbox.env['HTTPS_PROXY'] = 'http://[invalid'
+
+        output = run_manager('status')
+
+        assert 'Invalid proxy URL' in output
+        assert 'NAMES IMAGE STATUS' in output
 
     @pytest.mark.parametrize('failure', ['partial-download', 'empty', 'syntax-error'])
     def test_failed_download_preserves_manager_and_cleans_up(self, sandbox, run_manager, failure):

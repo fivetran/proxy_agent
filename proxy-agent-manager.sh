@@ -16,6 +16,7 @@ IMAGE_TAG_SUFFIX="-ubuntu-26.04"
 CONFIG_FILE="$BASE_DIR/config/config.json"
 VERSION_FILE="$BASE_DIR/version"
 SETTINGS_FILE="$BASE_DIR/settings.sh"
+AUTO_UPDATE_DIR="$BASE_DIR/.manager-auto-update"
 
 get_agent_id() {
     grep -o '"agent_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null \
@@ -46,10 +47,11 @@ check_memory_allocation() {
 
 # Download beside the installed script so rename replaces it atomically.
 # The subshell confines the cleanup trap to this command.
+# Exit 0 after replacement, 2 if current, and 1 on failure.
 update_manager() (
     local script_url="${PROXY_AGENT_SCRIPT_URL:-https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh}"
     local tmp_script
-    tmp_script=$(mktemp "$BASE_DIR/.proxy-agent-manager.XXXXXX")
+    tmp_script=$(mktemp "$BASE_DIR/.proxy-agent-manager.XXXXXX") || exit 1
     trap 'rm -f "$tmp_script"' EXIT
 
     echo "Downloading management script..."
@@ -61,10 +63,35 @@ update_manager() (
         echo "ERROR: Downloaded management script is empty or has invalid syntax" >&2
         exit 1
     fi
-    chmod u+x "$tmp_script"
-    mv -f "$tmp_script" "$0"
-    echo "Management script updated. The agent has not been restarted."
+    if cmp -s "$tmp_script" "$0"; then
+        echo "Management script is already up to date."
+        exit 2
+    fi
+    chmod u+x "$tmp_script" && mv -f -- "$tmp_script" "$0" || exit 1
+    echo "Management script updated."
 )
+
+# Claim the UTC day before downloading so concurrent invocations share one
+# attempt, including when the download fails.
+check_manager_update() {
+    local day stamp
+    day=$(date -u +%F) || return 1
+    [ -f "$AUTO_UPDATE_DIR/$day" ] && return 2
+    # A freshly downloaded manager already has the latest available script.
+    [ -n "$(find -L "$BASE_DIR/${0##*/}" -mtime -1 -print)" ] && return 2
+    mkdir -p -- "$AUTO_UPDATE_DIR" || return 1
+    if ! (set -C; : > "$AUTO_UPDATE_DIR/$day") 2>/dev/null; then
+        [ -f "$AUTO_UPDATE_DIR/$day" ] && return 2
+        echo "ERROR: Could not record the management script update check" >&2
+        return 1
+    fi
+    for stamp in "$AUTO_UPDATE_DIR"/????-??-??; do
+        if [[ ${stamp##*/} < "$day" ]]; then
+            rm -f -- "$stamp"
+        fi
+    done
+    update_manager >&2
+}
 
 get_latest_version() {
     local registry_host="${IMAGE%%/*}"
@@ -242,10 +269,22 @@ run_doctor() {
 
 # Updating the manager does not require agent configuration or Docker. Exit in
 # this parsed block so Bash never resumes reading the replaced script.
-if [ "${1:-}" = "update-manager" ]; then
-    update_manager
-    exit 0
-fi
+case "${1:-}" in
+    update-manager)
+        if update_manager; then
+            exit 0
+        else
+            status=$?
+            [ "$status" -eq 2 ] && exit 0
+            exit "$status"
+        fi
+        ;;
+    start|stop|restart|upgrade|status|logs|doctor)
+        if check_manager_update; then
+            exec "$BASH" "$0" "$@"
+        fi
+        ;;
+esac
 
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "ERROR: Config file not found: $CONFIG_FILE"

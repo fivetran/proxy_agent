@@ -146,7 +146,14 @@ Use `proxy-agent-manager.ps1` to control the agent:
 
 ### Updating the management script
 
-Run `update-manager` as the user who installed the agent:
+Installing or replacing the management script delays automatic checks for 24
+hours. After that, the first management command each UTC day checks this
+repository's `main` branch for a changed script. After an update, the new script
+runs the original command with the same arguments. If the check fails, the installed
+script runs the command and tries again on the next day it is used. Automatic
+checks use the invoking user's proxy configuration.
+
+To update immediately, run `update-manager` as the user who installed the agent:
 
 ```bash
 "$HOME/fivetran-proxy-agent/proxy-agent-manager.sh" update-manager
@@ -156,7 +163,7 @@ Run `update-manager` as the user who installed the agent:
 & "$env:USERPROFILE\fivetran-proxy-agent\proxy-agent-manager.ps1" update-manager
 ```
 
-Use your installation directory if it differs from the default. This downloads the latest management script from this repository's `main` branch, checks that it is nonempty and has valid syntax, then replaces the installed script. A failed download or validation leaves the existing script intact. Configuration, settings, the pinned agent version, and the running container are unchanged; the new script takes effect on the next command. Updating the manager does not require Docker or valid agent configuration.
+Use your installation directory if it differs from the default. This downloads the latest management script from this repository's `main` branch, checks that it is nonempty and has valid syntax, and replaces the installed script if it differs. A failed download or validation leaves the existing script intact. The new script takes effect on the next command. Updating the manager preserves the agent configuration, settings, pinned agent version, and running container, and works independently of Docker.
 
 `upgrade` updates only the agent container. To update both, run `update-manager` first, then invoke the script again with `upgrade`.
 

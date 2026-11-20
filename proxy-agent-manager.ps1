@@ -18,6 +18,7 @@ $VERSION_FILE       = Join-Path $BASE_DIR 'version'
 $LOGFILE            = Join-Path $BASE_DIR 'logs\proxy-agent-manager.log'
 $CONTAINER_LOG_DIR  = '/app/logs'
 $SETTINGS_FILE = Join-Path $BASE_DIR 'settings.ps1'
+$AUTO_UPDATE_DIR = Join-Path $BASE_DIR '.manager-auto-update'
 # Appended to the plain agent version to form the Linux image tag.
 $LINUX_IMAGE_TAG_SUFFIX = '-ubuntu-26.04'
 
@@ -69,8 +70,7 @@ function Set-WebProxyFromEnvironment {
     try {
         $proxyUri = [Uri]$proxyUrl
     } catch {
-        Write-Host "ERROR: Invalid proxy URL in HTTPS_PROXY/HTTP_PROXY" -ForegroundColor Red
-        exit 1
+        throw 'Invalid proxy URL in HTTPS_PROXY/HTTP_PROXY'
     }
 
     # .NET bypass entries are regular expressions matched against the request URL. As with curl,
@@ -122,16 +122,40 @@ function Update-Manager {
         if ($parseErrors.Count -gt 0) {
             throw 'Downloaded management script has invalid syntax.'
         }
+        if ((Get-FileHash -LiteralPath $tmpScript).Hash -eq (Get-FileHash -LiteralPath $PSCommandPath).Hash) {
+            Write-Host 'Management script is already up to date.'
+            return $false
+        }
         Unblock-File -LiteralPath $tmpScript
         # $null binds to an empty string here; Replace requires a null backup path.
         [System.IO.File]::Replace($tmpScript, $PSCommandPath, [NullString]::Value)
-        Write-Host "Management script updated. The agent has not been restarted."
-    } catch {
-        Write-Host "ERROR: Failed to update management script: $_" -ForegroundColor Red
-        exit 1
+        Write-Host 'Management script updated.'
+        return $true
     } finally {
         Remove-Item -LiteralPath $tmpScript -Force -ErrorAction SilentlyContinue
     }
+}
+
+# Claim the UTC day before downloading so simultaneous invocations share one check,
+# including when the download fails.
+function Invoke-ManagerUpdateCheck {
+    $now = [DateTime]::UtcNow
+    $day = $now.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+    $stamp = Join-Path $AUTO_UPDATE_DIR $day
+    if (Test-Path -LiteralPath $stamp -PathType Leaf) { return $false }
+    # A freshly downloaded manager already has the latest available script.
+    if ([IO.File]::GetLastWriteTimeUtc($PSCommandPath) -gt $now.AddDays(-1)) { return $false }
+    $null = [IO.Directory]::CreateDirectory($AUTO_UPDATE_DIR)
+    try {
+        [IO.File]::Open($stamp, [IO.FileMode]::CreateNew).Dispose()
+    } catch [IO.IOException] {
+        if (Test-Path -LiteralPath $stamp -PathType Leaf) { return $false }
+        throw
+    }
+    Get-ChildItem -LiteralPath $AUTO_UPDATE_DIR -File -Filter '????-??-??' |
+        Where-Object { $_.Name -clt $day } |
+        Remove-Item -ErrorAction SilentlyContinue
+    Update-Manager
 }
 
 function Get-ContainerOsType {
@@ -528,8 +552,25 @@ function Invoke-Doctor {
 
 # Updating the manager does not require agent configuration or Docker.
 if ($Command -eq 'update-manager') {
-    Update-Manager
+    try {
+        $null = Update-Manager
+    } catch {
+        Write-Host "ERROR: Failed to update management script: $_" -ForegroundColor Red
+        exit 1
+    }
     exit 0
+}
+$managerUpdated = $false
+try {
+    $managerUpdated = Invoke-ManagerUpdateCheck
+} catch {
+    Write-Warning "Failed to update management script: $_"
+}
+if ($managerUpdated) {
+    # Call the replacement in a new script scope with the original bound parameters.
+    $global:LASTEXITCODE = 0
+    & $PSCommandPath @PSBoundParameters
+    exit $LASTEXITCODE
 }
 
 # settings.ps1 may set $MEMORY_ALLOCATION_MB and, for Windows containers,
