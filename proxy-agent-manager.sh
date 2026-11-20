@@ -77,6 +77,8 @@ check_manager_update() {
     local day stamp
     day=$(date -u +%F) || return 1
     [ -f "$AUTO_UPDATE_DIR/$day" ] && return 2
+    # A freshly downloaded manager already has the latest available script.
+    [ -n "$(find -L "$BASE_DIR/${0##*/}" -mtime -1 -print)" ] && return 2
     mkdir -p -- "$AUTO_UPDATE_DIR" || return 1
     if ! (set -C; : > "$AUTO_UPDATE_DIR/$day") 2>/dev/null; then
         [ -f "$AUTO_UPDATE_DIR/$day" ] && return 2

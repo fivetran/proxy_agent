@@ -146,9 +146,10 @@ Use `proxy-agent-manager.ps1` to control the agent:
 
 ### Updating the management script
 
-The first management command each UTC day checks this repository's `main` branch
-for a changed management script. After an update, the new script runs the
-original command with the same arguments. If the check fails, the installed
+Installing or replacing the management script delays automatic checks for 24
+hours. After that, the first management command each UTC day checks this
+repository's `main` branch for a changed script. After an update, the new script
+runs the original command with the same arguments. If the check fails, the installed
 script runs the command and tries again on the next day it is used. Automatic
 checks use the invoking user's proxy configuration.
 

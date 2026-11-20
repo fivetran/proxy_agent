@@ -139,9 +139,12 @@ function Update-Manager {
 # Claim the UTC day before downloading so simultaneous invocations share one check,
 # including when the download fails.
 function Invoke-ManagerUpdateCheck {
-    $day = [DateTime]::UtcNow.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+    $now = [DateTime]::UtcNow
+    $day = $now.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
     $stamp = Join-Path $AUTO_UPDATE_DIR $day
     if (Test-Path -LiteralPath $stamp -PathType Leaf) { return $false }
+    # A freshly downloaded manager already has the latest available script.
+    if ([IO.File]::GetLastWriteTimeUtc($PSCommandPath) -gt $now.AddDays(-1)) { return $false }
     $null = [IO.Directory]::CreateDirectory($AUTO_UPDATE_DIR)
     try {
         [IO.File]::Open($stamp, [IO.FileMode]::CreateNew).Dispose()

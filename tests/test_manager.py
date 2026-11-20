@@ -72,6 +72,13 @@ def updated_manager(sandbox):
     return source
 
 
+@pytest.fixture
+def manager_update_due(sandbox):
+    shutil.rmtree(sandbox.update_state)
+    yesterday = time.time() - 25 * 3600
+    os.utime(sandbox.manager, (yesterday, yesterday))
+
+
 class TestUpdateManager:
     """Replace only the manager, preserving the agent and recovering from bad downloads.
 
@@ -127,8 +134,16 @@ class TestUpdateManager:
             (request,) = sandbox.calls('curl')
             assert url in request
 
-    def test_daily_update_reruns_original_command_and_returns_its_status(self, sandbox, run_manager):
+    def test_recently_installed_manager_skips_download(self, sandbox, run_manager):
         shutil.rmtree(sandbox.update_state)
+        installed_at = time.time() - (24 * 60 - 1) * 60
+        os.utime(sandbox.manager, (installed_at, installed_at))
+
+        assert 'NAMES IMAGE STATUS' in run_manager('status')
+        assert not sandbox.calls('request' if WINDOWS else 'curl')
+
+    @pytest.mark.usefixtures('manager_update_due')
+    def test_daily_update_reruns_original_command_and_returns_its_status(self, sandbox, run_manager):
         # The old script would run Docker. Only the downloaded script should run.
         if WINDOWS:
             replacement = (
@@ -151,9 +166,9 @@ class TestUpdateManager:
         assert len(sandbox.calls('request' if WINDOWS else 'curl')) == 1
 
     @pytest.mark.parametrize('download_failure', [False, True], ids=['unchanged', 'download-failed'])
+    @pytest.mark.usefixtures('manager_update_due')
     def test_daily_check_preserves_manager(self, sandbox, run_manager, download_failure):
         state = sandbox.update_state
-        shutil.rmtree(state)
         state.mkdir()
         old_check = state / '2000-01-01'
         old_check.touch()
@@ -171,8 +186,8 @@ class TestUpdateManager:
         assert not old_check.exists()
 
     @pytest.mark.skipif(not WINDOWS, reason='PowerShell configures the web proxy itself')
+    @pytest.mark.usefixtures('manager_update_due')
     def test_bad_proxy_does_not_abort_daily_foreground_command(self, sandbox, run_manager):
-        shutil.rmtree(sandbox.update_state)
         sandbox.env['HTTPS_PROXY'] = 'http://[invalid'
 
         output = run_manager('status')
