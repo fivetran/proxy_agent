@@ -144,6 +144,12 @@ Use `proxy-agent-manager.ps1` to control the agent:
 | `logs`    | Stream live container logs                           |
 | `doctor`  | Check the installation and connectivity to Fivetran in a separate container. The doctor's log and archive are saved to `logs/`, or its output if the doctor saves no log, as in 1.2.10. Options are passed to the agent's `--doctor`, e.g. `doctor --region us-east-1` |
 
+If the manager finds a configuration problem before starting the Doctor container,
+it prints the config path and how to fix it. When the log directory is writable,
+it saves the same message in `logs/proxy-agent-manager-doctor-*.log` and prints
+the log path. On Linux, Doctor validates JSON syntax if `jq` is available. Without
+`jq`, the manager checks for an agent ID using its existing text match.
+
 ### Updating the management script
 
 Run `update-manager` as the user who installed the agent:

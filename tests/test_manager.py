@@ -12,6 +12,7 @@ separate cases below.
 import base64
 import os
 import re
+import shutil
 import subprocess
 import time
 from types import SimpleNamespace
@@ -390,6 +391,42 @@ class TestManager:
         run_manager('upgrade', code=1)
         assert not docker_calls(sandbox, 'run')
         assert sandbox.version.read_text().strip() == '1.2.9'
+
+    @pytest.mark.parametrize('config,reason,action', [
+        pytest.param(None, 'Config file not found', 'save it at this path', id='missing-config'),
+        pytest.param('{"agent_id":"abc123","auth_token":"fixture-secret"', 'Invalid JSON',
+                     'Replace it with a fresh configuration', id='invalid-json',
+                     marks=pytest.mark.skipif(not WINDOWS and not shutil.which('jq'),
+                                              reason='Linux JSON syntax checks require jq')),
+        pytest.param('{"auth_token":"fixture-secret"}', "Missing 'agent_id'",
+                     'Download the configuration for this agent', id='missing-agent-id'),
+    ])
+    def test_doctor_logs_config_errors_before_docker(self, sandbox, run_manager, config, reason, action):
+        if config is None:
+            sandbox.config.unlink()
+        else:
+            sandbox.config.write_text(config)
+
+        output = run_manager('doctor', code=1)
+
+        saved, = (sandbox.agent / 'logs').glob('proxy-agent-manager-doctor-*.log')
+        message = saved.read_text(encoding='utf-8').strip()
+        assert reason in message and str(sandbox.config) in message and action in message
+        assert message in output
+        assert str(saved) in output
+        assert 'fixture-secret' not in output
+        assert not sandbox.calls('docker')
+
+    def test_doctor_reports_config_error_when_log_cannot_be_created(self, sandbox, run_manager):
+        sandbox.config.unlink()
+        (sandbox.agent / 'logs').touch()
+
+        output = run_manager('doctor', code=1)
+
+        assert f'Config file not found: {sandbox.config}' in output
+        assert 'save it at this path' in output
+        assert 'output was saved' not in output
+        assert not sandbox.calls('docker')
 
     def test_doctor_arguments_mounts_memory_and_exit_code(self, sandbox, variant, run_manager):
         sandbox.options['doctor_exit'] = 3

@@ -478,7 +478,13 @@ function Invoke-Upgrade {
 # 1.2.10), which only print their report, or when the doctor fails before
 # saving its log, its output is saved there instead.
 function Invoke-Doctor {
-    param([string[]]$DoctorArgs)
+    param([string[]]$DoctorArgs, [string]$OutputFile)
+
+    $logsDir = Join-Path $BASE_DIR 'logs'
+    if (-not $OutputFile) {
+        Write-Host "ERROR: Could not open a Doctor log in $logsDir. Check the log directory permissions." -ForegroundColor Red
+        exit 1
+    }
 
     $containerOsType = Get-ContainerOsType
     $windowsVersion = Resolve-WindowsVersion -ContainerOsType $containerOsType
@@ -492,12 +498,9 @@ function Invoke-Doctor {
     $dockerArgs += @("${IMAGE}:${imageTag}", (Get-ContainerConfigPath -ContainerOsType $containerOsType), '--doctor')
     if ($DoctorArgs) { $dockerArgs += $DoctorArgs }
 
-    $logsDir = Join-Path $BASE_DIR 'logs'
-    $timestamp = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH-mm-ss")
-    $outputFile = Join-Path $logsDir "proxy-agent-manager-doctor-$timestamp-$([Guid]::NewGuid().ToString('N')).log"
     $earlierDoctorLogs = @(Get-ChildItem -LiteralPath $logsDir -Filter 'doctor-*.log' | ForEach-Object Name)
     # Tee-Object can't choose the encoding on Windows PowerShell 5.1.
-    $outputStream = [System.IO.File]::Open($outputFile, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    $outputStream = [System.IO.File]::Open($OutputFile, [System.IO.FileMode]::Truncate, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
     $writer = [System.IO.StreamWriter]::new($outputStream, [System.Text.UTF8Encoding]::new($false))
     # Under 'Stop', Windows PowerShell 5.1 throws on the first line docker
     # writes to stderr once it is redirected.
@@ -515,13 +518,38 @@ function Invoke-Doctor {
     }
     $newDoctorLogs = Get-ChildItem -LiteralPath $logsDir -Filter 'doctor-*.log' | Where-Object { $_.Name -notin $earlierDoctorLogs }
     if ($newDoctorLogs) {
-        Remove-Item -LiteralPath $outputFile
+        Remove-Item -LiteralPath $OutputFile
         # The doctor printed paths inside the container.
         Write-Host "$(Get-ContainerLogDir -ContainerOsType $containerOsType) in the container is $logsDir on this host."
     } else {
-        Write-Host "The doctor's output was saved to $outputFile"
+        Write-Host "The doctor's output was saved to $OutputFile"
     }
     exit $status
+}
+
+function New-DoctorLog {
+    $logsDir = Join-Path $BASE_DIR 'logs'
+    $null = [IO.Directory]::CreateDirectory($logsDir)
+    $timestamp = [DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH-mm-ss")
+    $outputFile = Join-Path $logsDir "proxy-agent-manager-doctor-$timestamp-$([Guid]::NewGuid().ToString('N')).log"
+    [IO.File]::Open($outputFile, [IO.FileMode]::CreateNew).Dispose()
+    return $outputFile
+}
+
+function Stop-ConfigCheck {
+    param([string]$Message)
+
+    $errorMessage = "ERROR: $Message"
+    Write-Host $errorMessage -ForegroundColor Red
+    if ($doctorOutputFile) {
+        try {
+            [IO.File]::AppendAllText($doctorOutputFile, "$errorMessage$([Environment]::NewLine)")
+            Write-Host "The doctor's output was saved to $doctorOutputFile"
+        } catch {
+            # The config error was already printed to the terminal.
+        }
+    }
+    exit 1
 }
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -530,6 +558,15 @@ function Invoke-Doctor {
 if ($Command -eq 'update-manager') {
     Update-Manager
     exit 0
+}
+
+$doctorOutputFile = $null
+if ($Command -eq 'doctor') {
+    try {
+        $doctorOutputFile = New-DoctorLog
+    } catch {
+        # Check the config even when the log directory is inaccessible.
+    }
 }
 
 # settings.ps1 may set $MEMORY_ALLOCATION_MB and, for Windows containers,
@@ -541,22 +578,27 @@ if (Test-Path -LiteralPath $SETTINGS_FILE) {
 if ("$MEMORY_ALLOCATION_MB" -eq '') { $MEMORY_ALLOCATION_MB = 5120 }
 if (-not $WINDOWS_VERSION) { $WINDOWS_VERSION = $null }
 
-if (-not (Test-Path $CONFIG_FILE)) {
-    Write-Host "ERROR: Config file not found: $CONFIG_FILE" -ForegroundColor Red
-    exit 1
+if (-not (Test-Path -LiteralPath $CONFIG_FILE -PathType Leaf)) {
+    Stop-ConfigCheck "Config file not found: $CONFIG_FILE. Download your agent configuration from Fivetran and save it at this path."
 }
 
 try {
-    $configJson = Get-Content $CONFIG_FILE -Raw | ConvertFrom-Json
+    $configContent = Get-Content -LiteralPath $CONFIG_FILE -Raw -ErrorAction Stop
 } catch {
-    Write-Host "ERROR: Failed to parse config file: $_" -ForegroundColor Red
-    exit 1
+    Stop-ConfigCheck "Could not read config file: $CONFIG_FILE. Check its permissions and try again."
+}
+try {
+    if ([string]::IsNullOrWhiteSpace($configContent)) { throw 'Empty config' }
+    $configJson = ConvertFrom-Json -InputObject $configContent -ErrorAction Stop
+} catch {
+    # JSON parser errors can contain the input, including the auth token.
+    Stop-ConfigCheck "Invalid JSON in config file: $CONFIG_FILE. Replace it with a fresh configuration from Fivetran."
 }
 
 $AGENT_ID = $configJson.agent_id
-if (-not $AGENT_ID -or $AGENT_ID -eq 'null') {
-    Write-Host "ERROR: 'agent_id' missing in $CONFIG_FILE" -ForegroundColor Red
-    exit 1
+if ($configContent -notmatch '^\s*\{' -or $AGENT_ID -isnot [string] -or
+    [string]::IsNullOrWhiteSpace($AGENT_ID) -or $AGENT_ID -eq 'null') {
+    Stop-ConfigCheck "Missing 'agent_id' in config file: $CONFIG_FILE. Download the configuration for this agent from Fivetran and replace this file."
 }
 
 $CONTAINER_NAME = "proxy-agent-$AGENT_ID"
@@ -604,6 +646,6 @@ switch ($Command) {
     'doctor' {
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
         Assert-MemoryAllocation
-        Invoke-Doctor -DoctorArgs $DoctorArgs
+        Invoke-Doctor -DoctorArgs $DoctorArgs -OutputFile $doctorOutputFile
     }
 }

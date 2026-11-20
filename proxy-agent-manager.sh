@@ -193,17 +193,11 @@ list_doctor_logs() {
     find "$BASE_DIR/logs" -maxdepth 1 -name 'doctor-*.log' | LC_ALL=C sort
 }
 
-# Runs the doctor in a throwaway container beside the agent's, passing "$@" to
-# --doctor (e.g. --region us-east-1), and exits with its exit code. Newer
-# doctors save their log and an archive to the mounted log folder, so they
-# outlive the container. Otherwise, as with older doctors (e.g. 1.2.10), which
-# only print their report, or when the doctor fails before saving its log, its
-# output is saved there instead.
-run_doctor() {
-    mkdir -p "$BASE_DIR/logs"
-    local output_file temporary_output_file earlier_doctor_logs timestamp
-    timestamp=$(date -u +'%Y-%m-%dT%H-%M-%S')
-    temporary_output_file=$(mktemp "$BASE_DIR/logs/proxy-agent-manager-doctor-${timestamp}.XXXXXXXXXX")
+create_doctor_log() {
+    mkdir -p "$BASE_DIR/logs" || return 1
+    local output_file temporary_output_file timestamp
+    timestamp=$(date -u +'%Y-%m-%dT%H-%M-%S') || return 1
+    temporary_output_file=$(mktemp "$BASE_DIR/logs/proxy-agent-manager-doctor-${timestamp}.XXXXXXXXXX") || return 1
     output_file="${temporary_output_file}.log"
     # macOS mktemp requires Xs at the end, so add the discoverable .log suffix
     # with a hard link. ln creates it atomically and won't overwrite a report.
@@ -212,6 +206,30 @@ run_doctor() {
         return 1
     fi
     rm -f "$temporary_output_file"
+    printf '%s\n' "$output_file"
+}
+
+fail_config_check() {
+    local message="ERROR: $1"
+    printf '%s\n' "$message"
+    if [ -n "$DOCTOR_OUTPUT" ] && printf '%s\n' "$message" 2>/dev/null >> "$DOCTOR_OUTPUT"; then
+        printf "The doctor's output was saved to %s\n" "$DOCTOR_OUTPUT"
+    fi
+    exit 1
+}
+
+# Runs the doctor in a throwaway container beside the agent's, passing "$@" to
+# --doctor (e.g. --region us-east-1), and exits with its exit code. Newer
+# doctors save their log and an archive to the mounted log folder, so they
+# outlive the container. Otherwise, as with older doctors (e.g. 1.2.10), which
+# only print their report, or when the doctor fails before saving its log, its
+# output is saved there instead.
+run_doctor() {
+    if [ -z "$DOCTOR_OUTPUT" ]; then
+        echo "ERROR: Could not open a Doctor log in $BASE_DIR/logs. Check the log directory permissions."
+        return 1
+    fi
+    local earlier_doctor_logs
     earlier_doctor_logs=$(list_doctor_logs)
 
     # No terminal (-t), which would merge the doctor's progress line into the
@@ -225,15 +243,15 @@ run_doctor() {
         "${AGENT_RUN_ARGS[@]}" \
         "$(image_tag "$CURRENT_VERSION")" \
         "$CONTAINER_CONFIG_FILE" --doctor "$@" 2>&1 \
-        | tee "$output_file"
+        | tee "$DOCTOR_OUTPUT"
     local status="${PIPESTATUS[0]}"
     set -e
     if [ -n "$(LC_ALL=C comm -13 <(echo "$earlier_doctor_logs") <(list_doctor_logs))" ]; then
-        rm -f "$output_file"
+        rm -f "$DOCTOR_OUTPUT"
         # The doctor printed paths inside the container.
         echo "$CONTAINER_LOG_DIR in the container is $BASE_DIR/logs on this host."
     else
-        echo "The doctor's output was saved to $output_file"
+        echo "The doctor's output was saved to $DOCTOR_OUTPUT"
     fi
     exit "$status"
 }
@@ -247,15 +265,31 @@ if [ "${1:-}" = "update-manager" ]; then
     exit 0
 fi
 
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "ERROR: Config file not found: $CONFIG_FILE"
-    exit 1
+DOCTOR_OUTPUT=""
+if [ "${1:-}" = "doctor" ]; then
+    DOCTOR_OUTPUT=$(create_doctor_log 2>/dev/null) || DOCTOR_OUTPUT=""
 fi
 
-AGENT_ID=$(get_agent_id)
-if [ -z "$AGENT_ID" ] || [ "$AGENT_ID" = "null" ]; then
-    echo "ERROR: 'agent_id' missing in $CONFIG_FILE"
-    exit 1
+if [ ! -f "$CONFIG_FILE" ]; then
+    fail_config_check "Config file not found: $CONFIG_FILE. Download your agent configuration from Fivetran and save it at this path."
+fi
+if [ ! -r "$CONFIG_FILE" ]; then
+    fail_config_check "Could not read config file: $CONFIG_FILE. Check its permissions and try again."
+fi
+if [ "${1:-}" = "doctor" ] && command -v jq >/dev/null 2>&1; then
+    # Keep parser errors private because they can contain config contents.
+    if ! AGENT_ID=$(jq -rs '
+        if length == 1 then .[0] | objects | .agent_id | strings
+        else error("expected a single JSON document")
+        end
+    ' "$CONFIG_FILE" 2>/dev/null); then
+        fail_config_check "Invalid JSON in config file: $CONFIG_FILE. Replace it with a fresh configuration from Fivetran."
+    fi
+else
+    AGENT_ID=$(get_agent_id)
+fi
+if [[ ! "$AGENT_ID" =~ [^[:space:]] || "$AGENT_ID" == "null" ]]; then
+    fail_config_check "Missing 'agent_id' in config file: $CONFIG_FILE. Download the configuration for this agent from Fivetran and replace this file."
 fi
 
 CONTAINER_NAME="proxy-agent-${AGENT_ID}"
