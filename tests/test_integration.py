@@ -55,12 +55,14 @@ class TestIntegration:
         self.env.pop('TOKEN', None)
         if token:
             self.env['TOKEN'] = token
-        return self.run_script(
+        output = self.run_script(
             REPO / f'install.{EXT}',
             [config] if config else [],
             parameters={'InstallDir': directory, **parameters},
             code=code,
         )
+        assert not (directory / '.manager-auto-update').exists()
+        return output
 
     def assert_running(self, version):
         assert (
