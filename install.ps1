@@ -89,8 +89,7 @@ function Set-WebProxyFromEnvironment {
     try {
         $proxyUri = [Uri]$proxyUrl
     } catch {
-        Write-Host "ERROR: Invalid proxy URL in HTTPS_PROXY/HTTP_PROXY" -ForegroundColor Red
-        exit 1
+        throw 'Invalid proxy URL in HTTPS_PROXY/HTTP_PROXY'
     }
 
     # .NET bypass entries are regular expressions matched against the request URL. As with curl,
@@ -341,7 +340,12 @@ if ($env:RUNTIME -ne 'docker') {
     exit 1
 }
 
-Set-WebProxyFromEnvironment -ProbeUri ([Uri]$REGISTRY_TAGS_URL)
+try {
+    Set-WebProxyFromEnvironment -ProbeUri ([Uri]$REGISTRY_TAGS_URL)
+} catch {
+    Write-Host "ERROR: $_" -ForegroundColor Red
+    exit 1
+}
 
 $currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if ($currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
