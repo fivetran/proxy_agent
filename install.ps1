@@ -470,6 +470,8 @@ try {
         Write-Host "ERROR: Failed to download management script from ${AGENT_SCRIPT_URL}: $_" -ForegroundColor Red
         exit 1
     }
+    # Start the manager's 24-hour cooldown at installation.
+    [IO.File]::SetLastWriteTimeUtc($tmpScript, [DateTime]::UtcNow)
     Move-Item -LiteralPath $tmpScript -Destination $agentScript -Force
     Unblock-File -LiteralPath $agentScript
 

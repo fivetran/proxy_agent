@@ -329,6 +329,8 @@ main() {
         die "Failed to download management script from $AGENT_SCRIPT_URL"
     fi
     chmod u+x "$tmp_script"
+    # Start the manager's 24-hour cooldown at installation.
+    touch -m -- "$tmp_script"
     mv "$tmp_script" "$install_dir/$AGENT_SCRIPT"
 
     # Bootstrap or copy config
