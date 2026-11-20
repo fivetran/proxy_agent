@@ -98,10 +98,8 @@ def powershell_parameters(command, args):
 
 def powershell_command(root, options, command, args):
     """PowerShell mocks return JSON, which the bridge converts to native objects."""
-    record(root, command, args)
-    if command.startswith('New-ScheduledTask') or command == 'Register-ScheduledTask':
-        return command
     parameters = powershell_parameters(command, args)
+    record(root, command, args)
     if command in ('Invoke-RestMethod', 'Invoke-WebRequest'):
         record(root, 'request', [parameters['uri'], parameters.get('method', ''),
                                  str(parameters.get('timeoutsec', 0))])
@@ -234,8 +232,6 @@ def main():
         # Fix timestamps to exercise collisions between doctor reports.
         print("2020-01-02" if "+%F" in args else "2020-01-02T03-04-05")
     elif command == 'manager':
-        if args == ['enable-manager-auto-update']:
-            return options.get('schedule_exit', 0)
         if options.get('manager_exit'):
             print('stub manager startup failed')
         return options.get('manager_exit', 0)

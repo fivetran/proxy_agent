@@ -94,7 +94,6 @@ The installer will:
 - Download the management script
 - Fetch your agent configuration from Fivetran
 - Start the agent container
-- Enable daily management script updates
 
 Installation directory structure:
 
@@ -123,7 +122,7 @@ $HOME/fivetran-proxy-agent/
 Use `proxy-agent-manager.sh` to control the agent:
 
 ```bash
-./proxy-agent-manager.sh {start|stop|restart|upgrade|update-manager|enable-manager-auto-update|status|logs|doctor [options]}
+./proxy-agent-manager.sh {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}
 ```
 
 ### Windows
@@ -131,7 +130,7 @@ Use `proxy-agent-manager.sh` to control the agent:
 Use `proxy-agent-manager.ps1` to control the agent:
 
 ```powershell
-& "$env:USERPROFILE\fivetran-proxy-agent\proxy-agent-manager.ps1" {start|stop|restart|upgrade|update-manager|enable-manager-auto-update|status|logs|doctor [options]}
+& "$env:USERPROFILE\fivetran-proxy-agent\proxy-agent-manager.ps1" {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}
 ```
 
 | Command   | Description                                          |
@@ -141,35 +140,19 @@ Use `proxy-agent-manager.ps1` to control the agent:
 | `restart` | Stop then start the agent container                  |
 | `upgrade` | Pull and start the latest agent version, with auto-rollback on failure |
 | `update-manager` | Download and replace the management script without restarting the agent |
-| `enable-manager-auto-update` | Register the daily update check for this installation |
 | `status`  | Show container name, image, and health status        |
 | `logs`    | Stream live container logs                           |
 | `doctor`  | Check the installation and connectivity to Fivetran in a separate container. The doctor's log and archive are saved to `logs/`, or its output if the doctor saves no log, as in 1.2.10. Options are passed to the agent's `--doctor`, e.g. `doctor --region us-east-1` |
 
 ### Updating the management script
 
-New installations check this repository's `main` branch once per UTC day for a
-changed management script. Either the daily schedule or the first management
-command of the day can perform the check. If a command installs an update, it
-runs again with the same arguments using the new script. Failed checks leave the
-installed script available and are retried on the next UTC day.
+The first management command each UTC day checks this repository's `main` branch
+for a changed management script. After an update, the new script runs the
+original command with the same arguments. If the check fails, the installed
+script runs the command and tries again on the next day it is used. Automatic
+checks use the invoking user's proxy configuration.
 
-Linux uses a systemd user timer. Enable lingering for the installing user with
-`loginctl enable-linger` if the timer needs to run while that user is logged out.
-Windows uses Task Scheduler and runs under the installing user's account while
-that user is signed in. For signed-out checks, set the task to **Run whether user
-is logged on or not** and provide the account password in Task Scheduler.
-Scheduled checks use the scheduler's environment, so
-configure any required proxy for the systemd user manager on Linux or in the
-installing user's environment or Internet Options on Windows.
-
-On an existing installation, run `update-manager` as shown below and then run
-`enable-manager-auto-update` with the same script. You can also use this command
-to retry schedule registration after an installer warning. Management commands
-can still check for updates if schedule registration fails. Set
-`PROXY_AGENT_SKIP_AUTO_UPDATE_SETUP=1` in the installer environment to skip setup.
-
-Run `update-manager` as the user who installed the agent:
+To update immediately, run `update-manager` as the user who installed the agent:
 
 ```bash
 "$HOME/fivetran-proxy-agent/proxy-agent-manager.sh" update-manager

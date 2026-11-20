@@ -2,7 +2,7 @@
 #
 #  Management script for Fivetran Proxy Agent (Docker)
 #
-#  Usage: ./proxy-agent-manager.sh {start|stop|restart|upgrade|update-manager|enable-manager-auto-update|status|logs|doctor [options]}
+#  Usage: ./proxy-agent-manager.sh {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}
 #
 set -euo pipefail
 
@@ -71,12 +71,13 @@ update_manager() (
     echo "Management script updated."
 )
 
-# Claim the UTC day before contacting the server. A timer and an interactive
-# command can arrive together, and an outage should cost at most one attempt.
+# Claim the UTC day before downloading so concurrent invocations share one
+# attempt, including when the download fails.
 check_manager_update() {
-    [ -d "$AUTO_UPDATE_DIR" ] || return 2
     local day stamp
     day=$(date -u +%F) || return 1
+    [ -f "$AUTO_UPDATE_DIR/$day" ] && return 2
+    mkdir -p -- "$AUTO_UPDATE_DIR" || return 1
     if ! (set -C; : > "$AUTO_UPDATE_DIR/$day") 2>/dev/null; then
         [ -f "$AUTO_UPDATE_DIR/$day" ] && return 2
         echo "ERROR: Could not record the management script update check" >&2
@@ -88,36 +89,6 @@ check_manager_update() {
         fi
     done
     update_manager >&2
-}
-
-enable_manager_auto_update() {
-    local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-    local timer
-    mkdir -p "$AUTO_UPDATE_DIR"
-    timer=$(systemd-escape --path --template=proxy-agent-manager-update@.timer -- "$BASE_DIR/${0##*/}")
-    mkdir -p "$unit_dir"
-    cat > "$unit_dir/proxy-agent-manager-update@.service" <<'EOF'
-[Unit]
-Description=Update the Fivetran Proxy Agent management script
-
-[Service]
-Type=oneshot
-ExecStart=:/usr/bin/env bash %f check-manager-update
-EOF
-    cat > "$unit_dir/proxy-agent-manager-update@.timer" <<'EOF'
-[Unit]
-Description=Check daily for Fivetran Proxy Agent management script updates
-
-[Timer]
-OnCalendar=daily
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-    systemctl --user daemon-reload
-    systemctl --user enable --now -- "$timer"
-    echo "Daily management script check enabled in $timer."
 }
 
 get_latest_version() {
@@ -306,19 +277,9 @@ case "${1:-}" in
             exit "$status"
         fi
         ;;
-    enable-manager-auto-update)
-        enable_manager_auto_update
-        exit 0
-        ;;
-    check-manager-update|start|stop|restart|upgrade|status|logs|doctor)
+    start|stop|restart|upgrade|status|logs|doctor)
         if check_manager_update; then
             exec "$BASH" "$0" "$@"
-        else
-            status=$?
-            if [ "$1" = "check-manager-update" ]; then
-                [ "$status" -eq 2 ] && exit 0
-                exit "$status"
-            fi
         fi
         ;;
 esac
@@ -407,7 +368,7 @@ case "${1:-}" in
         ;;
 
     *)
-        echo "Usage: $0 {start|stop|restart|upgrade|update-manager|enable-manager-auto-update|status|logs|doctor [options]}"
+        echo "Usage: $0 {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}"
         exit 1
         ;;
 esac

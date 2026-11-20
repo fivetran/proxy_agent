@@ -12,6 +12,7 @@ separate cases below.
 import base64
 import os
 import re
+import shutil
 import subprocess
 import time
 from types import SimpleNamespace
@@ -127,7 +128,7 @@ class TestUpdateManager:
             assert url in request
 
     def test_daily_update_reruns_original_command_and_returns_its_status(self, sandbox, run_manager):
-        (sandbox.agent / '.manager-auto-update').mkdir()
+        shutil.rmtree(sandbox.update_state)
         # The old script would run Docker. Only the downloaded script should run.
         if WINDOWS:
             replacement = (
@@ -149,12 +150,10 @@ class TestUpdateManager:
         assert not sandbox.calls('docker')
         assert len(sandbox.calls('request' if WINDOWS else 'curl')) == 1
 
-    @pytest.mark.parametrize('download_failure,command,expected', [
-        pytest.param(False, 'check-manager-update', 'already up to date', id='unchanged'),
-        pytest.param(True, 'status', 'NAMES IMAGE STATUS', id='download-failed'),
-    ])
-    def test_daily_check_preserves_manager(self, sandbox, run_manager, download_failure, command, expected):
-        state = sandbox.agent / '.manager-auto-update'
+    @pytest.mark.parametrize('download_failure', [False, True], ids=['unchanged', 'download-failed'])
+    def test_daily_check_preserves_manager(self, sandbox, run_manager, download_failure):
+        state = sandbox.update_state
+        shutil.rmtree(state)
         state.mkdir()
         old_check = state / '2000-01-01'
         old_check.touch()
@@ -164,7 +163,7 @@ class TestUpdateManager:
         )
         mtime = sandbox.manager.stat().st_mtime_ns
 
-        assert expected in run_manager(command)
+        assert 'NAMES IMAGE STATUS' in run_manager('status')
         assert 'NAMES IMAGE STATUS' in run_manager('status')
 
         assert sandbox.manager.stat().st_mtime_ns == mtime
@@ -173,47 +172,13 @@ class TestUpdateManager:
 
     @pytest.mark.skipif(not WINDOWS, reason='PowerShell configures the web proxy itself')
     def test_bad_proxy_does_not_abort_daily_foreground_command(self, sandbox, run_manager):
-        (sandbox.agent / '.manager-auto-update').mkdir()
+        shutil.rmtree(sandbox.update_state)
         sandbox.env['HTTPS_PROXY'] = 'http://[invalid'
 
         output = run_manager('status')
 
         assert 'Invalid proxy URL' in output
         assert 'NAMES IMAGE STATUS' in output
-
-    def test_enables_daily_check_for_installation_without_agent_config(self, sandbox, run_manager):
-        sandbox.config.unlink()
-        if not WINDOWS:
-            sandbox.env['XDG_CONFIG_HOME'] = str(sandbox.root)
-            for command, body in {
-                'systemd-escape': 'echo proxy-agent-manager-update@test.timer',
-                'systemctl': 'echo "$*" > "$AGENT_TEST_ROOT/systemctl"',
-            }.items():
-                stub = sandbox.root / 'bin' / command
-                stub.write_text(f'#!/bin/bash\n{body}\n')
-                stub.chmod(0o755)
-
-        run_manager('enable-manager-auto-update')
-
-        assert (sandbox.agent / '.manager-auto-update').is_dir()
-        assert not sandbox.calls('docker')
-        if WINDOWS:
-            action, = sandbox.calls('New-ScheduledTaskAction')
-            encoded = action[action.index('-Argument') + 1].split()[-1]
-            command_line = base64.b64decode(encoded).decode('utf-16-le')
-            script_path = str(sandbox.manager).replace("'", "''")
-            assert command_line.startswith(f"& '{script_path}' check-manager-update")
-            assert '-Daily' in sandbox.calls('New-ScheduledTaskTrigger')[0]
-            principal, = sandbox.calls('New-ScheduledTaskPrincipal')
-            assert_options(principal, [('-LogonType', 'Interactive'), ('-RunLevel', 'Limited')])
-            assert '-Force' in sandbox.calls('Register-ScheduledTask')[0]
-        else:
-            unit_dir = sandbox.root / 'systemd/user'
-            assert 'OnCalendar=daily\nPersistent=true' in (unit_dir / 'proxy-agent-manager-update@.timer').read_text()
-            assert '%f check-manager-update' in (unit_dir / 'proxy-agent-manager-update@.service').read_text()
-            assert (sandbox.root / 'systemctl').read_text().strip() == (
-                '--user enable --now -- proxy-agent-manager-update@test.timer'
-            )
 
     @pytest.mark.parametrize('failure', ['partial-download', 'empty', 'syntax-error'])
     def test_failed_download_preserves_manager_and_cleans_up(self, sandbox, run_manager, failure):

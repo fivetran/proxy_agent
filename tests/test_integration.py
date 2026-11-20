@@ -55,14 +55,12 @@ class TestIntegration:
         self.env.pop('TOKEN', None)
         if token:
             self.env['TOKEN'] = token
-        output = self.run_script(
+        return self.run_script(
             REPO / f'install.{EXT}',
             [config] if config else [],
             parameters={'InstallDir': directory, **parameters},
             code=code,
         )
-        assert not (directory / '.manager-auto-update').exists()
-        return output
 
     def assert_running(self, version):
         assert (
@@ -142,7 +140,6 @@ class TestIntegration:
                 PROXY_AGENT_IMAGE='proxy-agent-stub',
                 PROXY_AGENT_REGISTRY_TAGS_URL=url + '/v2/stub/tags/list',
                 PROXY_AGENT_SCRIPT_URL=url + f'/proxy-agent-manager.{EXT}',
-                PROXY_AGENT_SKIP_AUTO_UPDATE_SETUP='1',
                 FIVETRAN_API_URL=url,
             )
             yield self
