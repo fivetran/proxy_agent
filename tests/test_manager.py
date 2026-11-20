@@ -10,6 +10,7 @@ separate cases below.
 """
 
 import base64
+import json
 import os
 import re
 import shutil
@@ -392,29 +393,41 @@ class TestManager:
         assert not docker_calls(sandbox, 'run')
         assert sandbox.version.read_text().strip() == '1.2.9'
 
-    @pytest.mark.parametrize('config,reason,action', [
-        pytest.param(None, 'Config file not found', 'save it at this path', id='missing-config'),
-        pytest.param('{"agent_id":"abc123","auth_token":"fixture-secret"', 'Invalid JSON',
-                     'Replace it with a fresh configuration', id='invalid-json',
-                     marks=pytest.mark.skipif(not WINDOWS and not shutil.which('jq'),
-                                              reason='Linux JSON syntax checks require jq')),
-        pytest.param('{"auth_token":"fixture-secret"}', "Missing 'agent_id'",
-                     'Download the configuration for this agent', id='missing-agent-id'),
+    @pytest.mark.parametrize('problem,diagnostic', [
+        (
+            'missing-config',
+            'Config file not found: {path}. Download your agent configuration from Fivetran and save it at this path.',
+        ),
+        pytest.param(
+            'invalid-json',
+            'Invalid JSON in config file: {path}. Replace it with a fresh configuration from Fivetran.',
+            marks=pytest.mark.skipif(not WINDOWS and not shutil.which('jq'), reason='Linux JSON syntax checks require jq'),
+        ),
+        (
+            'missing-agent-id',
+            "Missing 'agent_id' in config file: {path}. Download the configuration for this agent from Fivetran "
+            'and replace this file.',
+        ),
     ])
-    def test_doctor_logs_config_errors_before_docker(self, sandbox, run_manager, config, reason, action):
-        if config is None:
+    def test_doctor_logs_only_safe_config_diagnostics(self, sandbox, run_manager, problem, diagnostic):
+        if problem == 'missing-config':
             sandbox.config.unlink()
         else:
+            config = json.dumps({
+                'auth_token': 'fixture-auth-token',
+                'client_private_key': 'fixture-private-key',
+                'proxy_host': 'http://fixture-user:fixture-password@proxy.invalid',
+            })
+            if problem == 'invalid-json':
+                config = '{"agent_id":"fixture-agent-id",' + config[1:-1]
             sandbox.config.write_text(config)
 
         output = run_manager('doctor', code=1)
 
         saved, = (sandbox.agent / 'logs').glob('proxy-agent-manager-doctor-*.log')
-        message = saved.read_text(encoding='utf-8').strip()
-        assert reason in message and str(sandbox.config) in message and action in message
-        assert message in output
-        assert str(saved) in output
-        assert 'fixture-secret' not in output
+        message = 'ERROR: ' + diagnostic.format(path=sandbox.config)
+        assert saved.read_text(encoding='utf-8').splitlines() == [message]
+        assert output.splitlines() == [message, f"The doctor's output was saved to {saved}"]
         assert not sandbox.calls('docker')
 
     def test_doctor_reports_config_error_when_log_cannot_be_created(self, sandbox, run_manager):

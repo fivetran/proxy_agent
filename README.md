@@ -147,8 +147,10 @@ Use `proxy-agent-manager.ps1` to control the agent:
 If the manager finds a configuration problem before starting the Doctor container,
 it prints the config path and how to fix it. When the log directory is writable,
 it saves the same message in `logs/proxy-agent-manager-doctor-*.log` and prints
-the log path. On Linux, Doctor validates JSON syntax if `jq` is available. Without
-`jq`, the manager checks for an agent ID using its existing text match.
+the log path. These messages omit config contents and parser diagnostics. The
+agent image controls the contents of reports produced by the Doctor container.
+On Linux, Doctor validates JSON syntax if `jq` is available. Without `jq`, the
+manager checks for an agent ID using its existing text match.
 
 ### Updating the management script
 
