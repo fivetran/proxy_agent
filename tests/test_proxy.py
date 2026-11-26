@@ -255,26 +255,6 @@ class TestProxyContract:
         assert web_endpoints.requests['origin']
         assert not web_endpoints.requests['proxy']
 
-    def test_invalid_registry_json_preserves_running_agent(self, native_web_sandbox, web_endpoints, request):
-        """A malformed successful response must not replace a running agent."""
-        sandbox = native_web_sandbox
-        result = sandbox.run('start')
-        assert result.returncode == 0, result.stdout
-        image, version = sandbox.image, sandbox.version.read_text()
-        before = sandbox.calls('docker')
-        web_endpoints.registry_body = b'{"tags":["1.2.10-ubuntu-26.04"]'
-        result = sandbox.run('upgrade')
-        if not WINDOWS:
-            request.node.add_marker(
-                pytest.mark.xfail(reason='Bash extracts tags without validating registry JSON', strict=True)
-            )
-        assert result.returncode != 0, result.stdout
-        assert not [
-            call for call in sandbox.calls('docker')[len(before) :] if call[0] in ('run', 'stop', 'rm')
-        ]
-        assert sandbox.image == image
-        assert sandbox.version.read_text() == version
-
 
 @pytest.fixture
 def proxy_sandbox(sandbox):

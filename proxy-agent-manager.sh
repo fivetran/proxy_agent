@@ -288,13 +288,6 @@ run_native_manager() {
 }
 
 case "${1:-}" in
-    start)
-        load_agent
-        CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
-        check_memory_allocation
-        pin_version "$CURRENT_VERSION"
-        start_agent "$CURRENT_VERSION"
-        ;;
     restart)
         load_agent
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
