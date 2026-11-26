@@ -1,6 +1,19 @@
 {
   "reflection": [
     {
+      "type": "com.fivetran.proxy_agent.Manager",
+      "fields": [{"name": "help"}]
+    },
+    {
+      "type": "com.fivetran.proxy_agent.Manager$InstallArguments",
+      "fields": [
+        {"name": "help"},
+        {"name": "installDir"},
+        {"name": "windowsVersion"},
+        {"name": "config"}
+      ]
+    },
+    {
       "type": "sun.net.www.protocol.http.Handler",
       "methods": [{"name": "<init>", "parameterTypes": []}]
     },

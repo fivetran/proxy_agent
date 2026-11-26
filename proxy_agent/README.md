@@ -42,7 +42,7 @@ Install Bazelisk and a GraalVM JDK with Native Image for the build host. On
 Windows, also install MSVC and the Windows SDK. CI builds Linux x86-64 and
 AArch64 binaries and a Windows x86-64 binary with GraalVM Community Edition
 25.6.5.1. Bazel compiles the sources for Java 17, matching the engineering
-repository. The CLI uses Picocli's programmatic model. [Native Image build prerequisites](https://www.graalvm.org/latest/reference-manual/native-image/#prerequisites)
+repository. The CLI uses Picocli annotations, with the command fields registered for Native Image. [Native Image build prerequisites](https://www.graalvm.org/latest/reference-manual/native-image/#prerequisites)
 
 ```bash
 bazel build //proxy_agent:manager_deploy.jar
