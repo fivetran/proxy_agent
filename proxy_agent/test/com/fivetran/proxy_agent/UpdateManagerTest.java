@@ -4,7 +4,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
-import static org.junit.Assert.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -14,18 +14,17 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.Set;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /** Exercises downloaded binary verification and script validation against a local release. */
 public final class UpdateManagerTest {
     private static final byte[] MANAGER = "verified native manager".getBytes(UTF_8);
     private static final String SCRIPT = "# new manager script\n";
 
-    @Rule
-    public final TemporaryFolder temporary = new TemporaryFolder();
+    @TempDir
+    Path temporary;
 
     private final CommandRunner commands = new CommandRunner(Set.of());
     private final OsOperations operations = OsOperations.forCurrentHost(commands, new Docker(commands));
@@ -33,9 +32,9 @@ public final class UpdateManagerTest {
     private Path manager;
     private Path wrapper;
 
-    @Before
+    @BeforeEach
     public void createExistingInstallation() throws IOException {
-        directory = temporary.getRoot().toPath();
+        directory = temporary;
         manager = directory.resolve(operations.managerBinaryName());
         wrapper = directory.resolve(operations.managerScriptName());
         Files.writeString(manager, "original manager");

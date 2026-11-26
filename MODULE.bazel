@@ -19,9 +19,9 @@ http_jar(
     urls = ["https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-core/2.23.0/jackson-core-2.23.0.jar"],
 )
 http_jar(
-    name = "junit4",
-    sha256 = "8e495b634469d64fb8acfa3495a065cbacc8a0fff55ce1e31007be4c16dc57d3",
-    urls = ["https://repo.maven.apache.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar"],
+    name = "junit5",
+    sha256 = "7c6968cbcaf4301c729f202b23b7d736c5d88be625fc7d27ad5d746146a8bc28",
+    urls = ["https://repo.maven.apache.org/maven2/org/junit/platform/junit-platform-console-standalone/1.14.4/junit-platform-console-standalone-1.14.4.jar"],
 )
 http_jar(
     name = "hamcrest",

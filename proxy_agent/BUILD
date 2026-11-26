@@ -30,11 +30,18 @@ java_test(
     name = "update_manager_tests",
     size = "small",
     srcs = ["test/com/fivetran/proxy_agent/UpdateManagerTest.java"],
+    args = [
+        "execute",
+        "--fail-if-no-tests",
+        "--include-engine=junit-jupiter",
+        "--select-class=com.fivetran.proxy_agent.UpdateManagerTest",
+    ],
+    main_class = "org.junit.platform.console.ConsoleLauncher",
     tags = ["requires-network"],
-    test_class = "com.fivetran.proxy_agent.UpdateManagerTest",
+    use_testrunner = False,
     deps = [
         ":proxy_agent",
         "@hamcrest//jar",
-        "@junit4//jar",
+        "@junit5//jar",
     ],
 )
