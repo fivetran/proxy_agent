@@ -10,21 +10,6 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $BASE_DIR           = $PSScriptRoot
-
-# A manager from an older release can coexist with this script.
-$nativeManager = Join-Path $BASE_DIR 'manager.exe'
-if ($Command -eq 'status' -and (Test-Path -LiteralPath $nativeManager -PathType Leaf)) {
-    try {
-        & $nativeManager status --help *> $null
-        $hasNativeCommand = $LASTEXITCODE -eq 0
-    } catch {
-        $hasNativeCommand = $false
-    }
-    if ($hasNativeCommand) {
-        & $nativeManager --agent-dir $BASE_DIR status
-        exit $LASTEXITCODE
-    }
-}
 # PROXY_AGENT_IMAGE and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
 # test suite can run against a stub image and registry.
 $IMAGE              = if ($env:PROXY_AGENT_IMAGE) { $env:PROXY_AGENT_IMAGE } else { 'us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent' }
@@ -35,14 +20,6 @@ $CONTAINER_LOG_DIR  = '/app/logs'
 $SETTINGS_FILE = Join-Path $BASE_DIR 'settings.ps1'
 # Appended to the plain agent version to form the Linux image tag.
 $LINUX_IMAGE_TAG_SUFFIX = '-ubuntu-26.04'
-
-# ── Startup validation ───────────────────────────────────────────────────────
-
-$validCommands = @('start', 'stop', 'restart', 'upgrade', 'update-manager', 'status', 'logs', 'doctor')
-if (-not $Command -or $Command -notin $validCommands) {
-    Write-Host "Usage: $($MyInvocation.MyCommand.Name) {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}"
-    exit 1
-}
 
 # ── Functions ────────────────────────────────────────────────────────────────
 
@@ -580,98 +557,120 @@ function Invoke-Doctor {
 
 # ── Commands ─────────────────────────────────────────────────────────────────
 
-# Updating the manager does not require agent configuration or Docker.
-if ($Command -eq 'update-manager') {
-    $nativeManager = Join-Path $BASE_DIR 'manager.exe'
-    $hasNativeUpdater = $false
-    if (Test-Path -LiteralPath $nativeManager -PathType Leaf) {
-        try {
-            & $nativeManager update-manager --help *> $null
-            $hasNativeUpdater = $LASTEXITCODE -eq 0
-        } catch {
-            $hasNativeUpdater = $false
-        }
+$loadAgent = {
+    # settings.ps1 may set $MEMORY_ALLOCATION_MB and, for Windows containers,
+    # $WINDOWS_VERSION (an LTSC variant that overrides host detection).
+    if (Test-Path -LiteralPath $SETTINGS_FILE) {
+        . $SETTINGS_FILE
     }
-    if ($hasNativeUpdater) {
-        & $nativeManager --agent-dir $BASE_DIR update-manager @DoctorArgs
-        exit $LASTEXITCODE
+    # Unset or empty only, so 0 is rejected like any other invalid setting.
+    if ("$MEMORY_ALLOCATION_MB" -eq '') { $MEMORY_ALLOCATION_MB = 5120 }
+    if (-not $WINDOWS_VERSION) { $WINDOWS_VERSION = $null }
+
+    if (-not (Test-Path $CONFIG_FILE)) {
+        Write-Host "ERROR: Config file not found: $CONFIG_FILE" -ForegroundColor Red
+        exit 1
     }
-    Update-Manager
-    exit 0
-}
 
-# settings.ps1 may set $MEMORY_ALLOCATION_MB and, for Windows containers,
-# $WINDOWS_VERSION (an LTSC variant that overrides host detection).
-if (Test-Path -LiteralPath $SETTINGS_FILE) {
-    . $SETTINGS_FILE
-}
-# Unset or empty only, so 0 is rejected like any other invalid setting.
-if ("$MEMORY_ALLOCATION_MB" -eq '') { $MEMORY_ALLOCATION_MB = 5120 }
-if (-not $WINDOWS_VERSION) { $WINDOWS_VERSION = $null }
+    try {
+        $configJson = Get-Content $CONFIG_FILE -Raw | ConvertFrom-Json
+    } catch {
+        Write-Host "ERROR: Failed to parse config file: $_" -ForegroundColor Red
+        exit 1
+    }
 
-if (-not (Test-Path $CONFIG_FILE)) {
-    Write-Host "ERROR: Config file not found: $CONFIG_FILE" -ForegroundColor Red
-    exit 1
-}
+    $AGENT_ID = $configJson.agent_id
+    if (-not $AGENT_ID -or $AGENT_ID -eq 'null') {
+        Write-Host "ERROR: 'agent_id' missing in $CONFIG_FILE" -ForegroundColor Red
+        exit 1
+    }
 
-try {
-    $configJson = Get-Content $CONFIG_FILE -Raw | ConvertFrom-Json
-} catch {
-    Write-Host "ERROR: Failed to parse config file: $_" -ForegroundColor Red
-    exit 1
-}
+    $script:CONTAINER_NAME = "proxy-agent-$AGENT_ID"
 
-$AGENT_ID = $configJson.agent_id
-if (-not $AGENT_ID -or $AGENT_ID -eq 'null') {
-    Write-Host "ERROR: 'agent_id' missing in $CONFIG_FILE" -ForegroundColor Red
-    exit 1
-}
+    if (-not (Test-Path $VERSION_FILE)) {
+        Write-Host "ERROR: $VERSION_FILE not found." -ForegroundColor Red
+        exit 1
+    }
 
-$CONTAINER_NAME = "proxy-agent-$AGENT_ID"
-
-if (-not (Test-Path $VERSION_FILE)) {
-    Write-Host "ERROR: $VERSION_FILE not found." -ForegroundColor Red
-    exit 1
+    $PINNED_VERSION = Get-Content $VERSION_FILE -Raw
+    if ([string]::IsNullOrWhiteSpace($PINNED_VERSION)) {
+        Write-Host "ERROR: $VERSION_FILE is empty." -ForegroundColor Red
+        exit 1
+    }
+    $PINNED_VERSION = $PINNED_VERSION.Trim()
 }
-
-$PINNED_VERSION = Get-Content $VERSION_FILE -Raw
-if ([string]::IsNullOrWhiteSpace($PINNED_VERSION)) {
-    Write-Host "ERROR: $VERSION_FILE is empty." -ForegroundColor Red
-    exit 1
-}
-$PINNED_VERSION = $PINNED_VERSION.Trim()
 
 switch ($Command) {
     'start' {
+        . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
         Assert-MemoryAllocation
         if (-not (Start-CurrentProxyAgent)) { exit 1 }
     }
     'stop' {
+        . $loadAgent
         Write-Log "Stopping $CONTAINER_NAME..."
         Stop-ProxyAgent
     }
     'restart' {
+        . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
         Assert-MemoryAllocation
         Write-Log "Restarting $CONTAINER_NAME..."
         if (-not (Start-CurrentProxyAgent)) { exit 1 }
     }
     'upgrade' {
+        . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
         Assert-MemoryAllocation
         Set-WebProxyFromEnvironment -ProbeUri ([Uri]"https://$($IMAGE.Split('/')[0])/")
         Invoke-Upgrade
     }
-    'status' {
-        docker ps -a --filter "name=$CONTAINER_NAME" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
-    }
     'logs' {
+        . $loadAgent
         docker logs -f $CONTAINER_NAME
     }
     'doctor' {
+        . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
         Assert-MemoryAllocation
         Invoke-Doctor -DoctorArgs $DoctorArgs
+    }
+    default {
+        $native = Join-Path $BASE_DIR 'manager.exe'
+        $hasNativeCommand = $false
+        if ($Command -and $Command -notlike '-*' -and (Test-Path -LiteralPath $native -PathType Leaf)) {
+            $nativeCommand = $Command.ToLowerInvariant()
+            try {
+                & $native $nativeCommand --help *> $null
+                $hasNativeCommand = $LASTEXITCODE -eq 0
+            } catch {
+                $hasNativeCommand = $false
+            }
+        }
+        if ($hasNativeCommand) {
+            if ($nativeCommand -eq 'doctor') {
+                & $native --agent-dir $BASE_DIR $nativeCommand '--' @DoctorArgs
+            } else {
+                & $native --agent-dir $BASE_DIR $nativeCommand @DoctorArgs
+            }
+            exit $LASTEXITCODE
+        }
+
+        # Older installations may run this script with an earlier manager or no binary.
+        switch ($Command) {
+            'status' {
+                . $loadAgent
+                docker ps -a --filter "name=$CONTAINER_NAME" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+            }
+            'update-manager' {
+                Update-Manager
+                exit 0
+            }
+            default {
+                Write-Host "Usage: $($MyInvocation.MyCommand.Name) {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}"
+                exit 1
+            }
+        }
     }
 }

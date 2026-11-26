@@ -8,15 +8,6 @@ set -euo pipefail
 
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# A manager from an older release can coexist with this script.
-case "${1:-}" in
-    status)
-        if [ -x "$BASE_DIR/manager" ] && "$BASE_DIR/manager" status --help >/dev/null 2>&1; then
-            exec "$BASE_DIR/manager" --agent-dir "$BASE_DIR" status
-        fi
-        ;;
-esac
-
 # PROXY_AGENT_IMAGE and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
 # test suite can run against a stub image and registry.
 IMAGE="${PROXY_AGENT_IMAGE:-us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent}"
@@ -288,74 +279,68 @@ run_doctor() {
 
 # ── Commands ─────────────────────────────────────────────────────────────────
 
-# Updating the manager does not require agent configuration or Docker. Exit in
-# this parsed block so Bash never resumes reading the replaced script.
-if [ "${1:-}" = "update-manager" ]; then
-    if [ -x "$BASE_DIR/manager" ] && "$BASE_DIR/manager" update-manager --help >/dev/null 2>&1; then
-        exec "$BASE_DIR/manager" --agent-dir "$BASE_DIR" "$@"
+load_agent() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "ERROR: Config file not found: $CONFIG_FILE"
+        exit 1
     fi
-    update_manager
-    exit 0
+
+    AGENT_ID=$(get_agent_id)
+    if [ -z "$AGENT_ID" ] || [ "$AGENT_ID" = "null" ]; then
+        echo "ERROR: 'agent_id' missing in $CONFIG_FILE"
+        exit 1
+    fi
+
+    CONTAINER_NAME="proxy-agent-${AGENT_ID}"
+
+    if [ ! -f "$VERSION_FILE" ]; then
+        echo "ERROR: $VERSION_FILE not found."
+        exit 1
+    fi
+    # Also strips the UTF-8 byte order mark an editor on Windows may add.
+    PINNED_VERSION=$(LC_ALL=C tr -d '[:space:]\357\273\277' < "$VERSION_FILE")
+    if [ -z "$PINNED_VERSION" ]; then
+        echo "ERROR: $VERSION_FILE is empty."
+        exit 1
+    fi
+
+    if [ -f "$SETTINGS_FILE" ]; then
+        # shellcheck disable=SC1090
+        source "$SETTINGS_FILE"
+    fi
+    MEMORY_ALLOCATION_MB="${MEMORY_ALLOCATION_MB:-5120}"
+
+    # Shared by the agent and doctor containers, so the doctor checks the agent's
+    # config, memory limit and log folder.
+    AGENT_RUN_ARGS=(
+        --memory="${MEMORY_ALLOCATION_MB}m"
+        --env IS_DOCKER=true
+        --env LOG_FOLDER_PATH="$CONTAINER_LOG_DIR"
+        -v "$BASE_DIR/config/config.json:$CONTAINER_CONFIG_FILE:ro"
+        -v "$BASE_DIR/logs:$CONTAINER_LOG_DIR"
+    )
+}
+
+command=${1:-}
+if [ "$#" -gt 0 ]; then
+    shift
 fi
 
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "ERROR: Config file not found: $CONFIG_FILE"
-    exit 1
-fi
-
-AGENT_ID=$(get_agent_id)
-if [ -z "$AGENT_ID" ] || [ "$AGENT_ID" = "null" ]; then
-    echo "ERROR: 'agent_id' missing in $CONFIG_FILE"
-    exit 1
-fi
-
-CONTAINER_NAME="proxy-agent-${AGENT_ID}"
-
-if [ ! -f "$VERSION_FILE" ]; then
-    echo "ERROR: $VERSION_FILE not found."
-    exit 1
-fi
-# Also strips the UTF-8 byte order mark an editor on Windows may add.
-PINNED_VERSION=$(LC_ALL=C tr -d '[:space:]\357\273\277' < "$VERSION_FILE")
-if [ -z "$PINNED_VERSION" ]; then
-    echo "ERROR: $VERSION_FILE is empty."
-    exit 1
-fi
-
-if [ -f "$SETTINGS_FILE" ]; then
-    # shellcheck disable=SC1090
-    source "$SETTINGS_FILE"
-fi
-MEMORY_ALLOCATION_MB="${MEMORY_ALLOCATION_MB:-5120}"
-
-# Shared by the agent and doctor containers, so the doctor checks the agent's
-# config, memory limit and log folder.
-AGENT_RUN_ARGS=(
-    --memory="${MEMORY_ALLOCATION_MB}m"
-    --env IS_DOCKER=true
-    --env LOG_FOLDER_PATH="$CONTAINER_LOG_DIR"
-    -v "$BASE_DIR/config/config.json:$CONTAINER_CONFIG_FILE:ro"
-    -v "$BASE_DIR/logs:$CONTAINER_LOG_DIR"
-)
-
-case "${1:-}" in
+case "$command" in
     start)
+        load_agent
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
         check_memory_allocation
         pin_version "$CURRENT_VERSION"
         start_agent "$CURRENT_VERSION"
         ;;
-
     stop)
+        load_agent
         log "Stopping ${CONTAINER_NAME}..."
         stop_agent
         ;;
-
-    status)
-        docker ps -a --filter "name=${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
-        ;;
-
     restart)
+        load_agent
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
         check_memory_allocation
         log "Restarting ${CONTAINER_NAME}..."
@@ -363,26 +348,46 @@ case "${1:-}" in
         pin_version "$CURRENT_VERSION"
         start_agent "$CURRENT_VERSION"
         ;;
-
     upgrade)
+        load_agent
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
         check_memory_allocation
         upgrade_agent
         ;;
-
     logs)
+        load_agent
         docker logs -f "${CONTAINER_NAME}"
         ;;
-
     doctor)
+        load_agent
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
         check_memory_allocation
-        shift
         run_doctor "$@"
         ;;
-
     *)
-        echo "Usage: $0 {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}"
-        exit 1
+        native="$BASE_DIR/manager"
+        if [[ -n "$command" && "$command" != -* && -x "$native" ]] &&
+            "$native" "$command" --help >/dev/null 2>&1; then
+            if [ "$command" = doctor ]; then
+                exec "$native" --agent-dir "$BASE_DIR" "$command" -- "$@"
+            fi
+            exec "$native" --agent-dir "$BASE_DIR" "$command" "$@"
+        fi
+
+        # Older installations may run this script with an earlier manager or no binary.
+        case "$command" in
+            status)
+                load_agent
+                docker ps -a --filter "name=${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
+                ;;
+            update-manager)
+                update_manager
+                exit 0
+                ;;
+            *)
+                echo "Usage: $0 {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}"
+                exit 1
+                ;;
+        esac
         ;;
 esac
