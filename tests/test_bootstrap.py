@@ -95,4 +95,4 @@ def test_bootstrap_checks_download_and_forwards_arguments(tmp_path, manager_exec
         if mode == 'path-override':
             assert Path(binary) == manager_executable.resolve()
         else:
-            assert Path(binary).parent.parent == scratch.resolve()
+            assert Path(binary).parent.parent.resolve() == scratch.resolve()
