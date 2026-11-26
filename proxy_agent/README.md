@@ -40,6 +40,8 @@ also respects `-Dhttp.nonProxyHosts`, `-DsocksNonProxyHosts`,
 
 ## Build
 
+CI uses Bash for the build steps, including Git Bash on Windows.
+
 Install Bazelisk and a GraalVM JDK with Native Image for the build host. On
 Windows, also install MSVC and the Windows SDK. CI builds Linux x86-64 and
 AArch64 binaries and a Windows x86-64 binary with GraalVM Community Edition
