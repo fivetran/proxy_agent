@@ -34,7 +34,7 @@ final class Installer {
     private static final Pattern DOCKER_VERSION = Pattern.compile("Docker version (" + VERSION + ")");
     private static final Set<String> WINDOWS_VERSIONS = Set.of("ltsc2019", "ltsc2022", "ltsc2025");
 
-    private final InstallHost host = new InstallHost();
+    private final CommandRunner commands = new CommandRunner();
     private final Operations operations;
     private final HttpClient http;
 
@@ -46,7 +46,7 @@ final class Installer {
     void install(@Nullable Path configPath, @Nullable Path installDir, String windowsVersionOverride)
             throws IOException, InterruptedException {
         operations.checkUser();
-        if (!InstallHost.env("RUNTIME", "").equals("docker")) {
+        if (!CommandRunner.env("RUNTIME", "").equals("docker")) {
             throw new IOException("RUNTIME must be set to 'docker'.");
         }
         var options = configurePaths(configPath, installDir, windowsVersionOverride);
@@ -89,14 +89,14 @@ final class Installer {
             throw new IllegalArgumentException("Invalid Windows version: " + windowsVersion);
         }
         if (directory == null) {
-            var home = InstallHost.env(operations.isWindows() ? "USERPROFILE" : "HOME", System.getProperty("user.home"));
+            var home = CommandRunner.env(operations.isWindows() ? "USERPROFILE" : "HOME", System.getProperty("user.home"));
             directory = Path.of(home, "fivetran-proxy-agent");
         }
         return new Options(directory.toAbsolutePath().normalize(), config, variant);
     }
 
     private Config readConfig(@Nullable Path path) throws IOException, InterruptedException {
-        var token = InstallHost.env("TOKEN", "");
+        var token = CommandRunner.env("TOKEN", "");
         if (path == null) {
             if (token.isEmpty()) {
                 throw new IOException("Provide a config.json file or set TOKEN.");
@@ -119,7 +119,7 @@ final class Installer {
     }
 
     private static int readMemoryMb() {
-        var memory = InstallHost.env("MEMORY_ALLOCATION_MB", "");
+        var memory = CommandRunner.env("MEMORY_ALLOCATION_MB", "");
         var console = System.console();
         if (memory.isEmpty() && console != null) {
             var response = console.readLine(
@@ -149,7 +149,7 @@ final class Installer {
         var dockerAvailable = checkDocker(warnings, errors);
         var containerOs = "linux";
         if (dockerAvailable && operations.isWindows()) {
-            var result = host.docker("info", "--format", "{{.OSType}}");
+            var result = commands.docker("info", "--format", "{{.OSType}}");
             containerOs = result.output().strip();
             if (!result.succeeded() || !(containerOs.equals("linux") || containerOs.equals("windows"))) {
                 errors.add("Unable to determine whether Docker is running Linux or Windows containers");
@@ -179,11 +179,11 @@ final class Installer {
     }
 
     private boolean checkDocker(List<String> warnings, List<String> errors) throws IOException, InterruptedException {
-        if (!host.hasCommand("docker", operations.isWindows())) {
+        if (!commands.hasCommand("docker", operations.isWindows())) {
             errors.add("docker is not installed");
             return false;
         }
-        var result = host.docker("--version");
+        var result = commands.docker("--version");
         if (!result.succeeded()) {
             errors.add("Failed to execute 'docker --version'. Docker may not be functioning properly");
             return false;
@@ -195,7 +195,7 @@ final class Installer {
             errors.add("Docker version " + matcher.group(1) + " does not meet the minimum requirement of "
                     + MIN_DOCKER_VERSION);
         }
-        if (!host.docker("info").succeeded()) {
+        if (!commands.docker("info").succeeded()) {
             errors.add("Docker is installed but the Docker daemon is not accessible. Ensure Docker is running and your"
                     + " user has permission to access the Docker daemon.");
             return false;
@@ -225,7 +225,7 @@ final class Installer {
     private void checkDisk(Path directory, boolean usesWindowsContainers, List<String> warnings)
             throws IOException, InterruptedException {
         if (usesWindowsContainers) {
-            var root = host.docker("info", "--format", "{{.DockerRootDir}}");
+            var root = commands.docker("info", "--format", "{{.DockerRootDir}}");
             var dataRoot = root.output().strip();
             if (root.succeeded() && !dataRoot.isEmpty()) {
                 directory = Path.of(dataRoot);
@@ -268,7 +268,7 @@ final class Installer {
         System.out.println("Downloading management script...");
         var temp = Files.createTempFile(manager.getParent(), manager.getFileName() + ".", ".tmp");
         try {
-            var url = InstallHost.env("PROXY_AGENT_SCRIPT_URL", SCRIPT_ROOT + manager.getFileName());
+            var url = CommandRunner.env("PROXY_AGENT_SCRIPT_URL", SCRIPT_ROOT + manager.getFileName());
             http.download(url, temp);
             operations.makeExecutable(temp);
             Files.move(temp, manager, ATOMIC_MOVE, REPLACE_EXISTING);
@@ -316,7 +316,7 @@ final class Installer {
         var contents = config.contents();
         var shouldFetch = contents == null;
         if (contents == null) {
-            var api = InstallHost.env("FIVETRAN_API_URL", "https://api.fivetran.com").replaceAll("/+$", "");
+            var api = CommandRunner.env("FIVETRAN_API_URL", "https://api.fivetran.com").replaceAll("/+$", "");
             System.out.println("Fetching agent config from Fivetran...");
             contents = http.configure(api + "/proxy-agent/configure", config.token());
             operations.validateFetchedConfig(contents);
@@ -335,7 +335,7 @@ final class Installer {
     }
 
     private String getLatestVersion(String suffix) throws IOException {
-        var tags = http.registryTags(InstallHost.env("PROXY_AGENT_REGISTRY_TAGS_URL", REGISTRY_URL));
+        var tags = http.registryTags(CommandRunner.env("PROXY_AGENT_REGISTRY_TAGS_URL", REGISTRY_URL));
         var pattern = Pattern.compile("(" + VERSION + ")" + Pattern.quote(suffix));
         var latest = "";
         for (var tag : tags) {
@@ -367,7 +367,7 @@ final class Installer {
     }
 
     private void installNativeBinary(Path directory) throws IOException {
-        var executable = InstallHost.env("PROXY_AGENT_INSTALLER_BINARY", "");
+        var executable = CommandRunner.env("PROXY_AGENT_INSTALLER_BINARY", "");
         if (executable.isEmpty() && "runtime".equals(System.getProperty("org.graalvm.nativeimage.imagecode"))) {
             executable = ProcessHandle.current().info().command().orElse("");
         }

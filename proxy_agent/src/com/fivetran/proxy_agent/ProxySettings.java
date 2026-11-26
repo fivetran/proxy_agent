@@ -1,6 +1,6 @@
 package com.fivetran.proxy_agent;
 
-import static com.fivetran.proxy_agent.InstallHost.env;
+import static com.fivetran.proxy_agent.CommandRunner.env;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import java.io.IOException;

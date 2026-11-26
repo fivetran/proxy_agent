@@ -14,8 +14,8 @@ import org.jspecify.annotations.Nullable;
 /** Windows host operations using PowerShell for Windows system APIs. */
 final class WindowsOperations implements Operations {
     private static final String POWERSHELL_SETUP = "/com/fivetran/proxy_agent/windows-installer.ps1";
-    private final InstallHost host = new InstallHost();
-    private final String powerShell = InstallHost.env("PROXY_AGENT_INSTALLER_POWERSHELL", "powershell.exe");
+    private final CommandRunner commands = new CommandRunner();
+    private final String powerShell = CommandRunner.env("PROXY_AGENT_INSTALLER_POWERSHELL", "powershell.exe");
 
     @Override
     public boolean isWindows() {
@@ -53,7 +53,7 @@ final class WindowsOperations implements Operations {
         if (lines[0].equalsIgnoreCase("true")) {
             System.out.println("WARNING: Running as Administrator is not recommended. Consider running as a regular user.");
         }
-        return lines.length > 1 ? InstallHost.parseSize(lines[1], 0) : 0;
+        return lines.length > 1 ? CommandRunner.parseSize(lines[1], 0) : 0;
     }
 
     @Override
@@ -135,15 +135,15 @@ final class WindowsOperations implements Operations {
 
     @Override
     public void start(Path manager) throws IOException, InterruptedException {
-        host.start(manager, List.of(powerShell, "-NoProfile", "-File", manager.toString(), "start"));
+        commands.start(manager, List.of(powerShell, "-NoProfile", "-File", manager.toString(), "start"));
     }
 
-    private InstallHost.Result runPowerShell(String command, String argument)
+    private CommandRunner.Result runPowerShell(String command, String argument)
             throws IOException, InterruptedException {
         return runPowerShell(command, argument, null);
     }
 
-    private InstallHost.Result runPowerShell(String command, String argument,
+    private CommandRunner.Result runPowerShell(String command, String argument,
             @Nullable String input) throws IOException, InterruptedException {
         var setup = Objects.requireNonNull(WindowsOperations.class.getResourceAsStream(POWERSHELL_SETUP));
         String script;
@@ -157,8 +157,8 @@ final class WindowsOperations implements Operations {
                 """;
         script += command + "\n} catch { exit 1 }\n";
         var encoded = Base64.getEncoder().encodeToString(script.getBytes(UTF_16LE));
-        var process = InstallHost.builder(List.of(powerShell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded));
+        var process = CommandRunner.builder(List.of(powerShell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded));
         process.environment().put("PROXY_AGENT_INSTALL_ARGUMENT", argument);
-        return InstallHost.capture(process, input);
+        return CommandRunner.capture(process, input);
     }
 }

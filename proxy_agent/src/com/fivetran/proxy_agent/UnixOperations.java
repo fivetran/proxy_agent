@@ -12,7 +12,7 @@ final class UnixOperations implements Operations {
     private static final Pattern LINUX_MEMORY = Pattern.compile("(?m)^MemTotal:\\s+([0-9]+)");
     private static final int BYTES_PER_MB = 1024 * 1024;
 
-    private final InstallHost host = new InstallHost();
+    private final CommandRunner commands = new CommandRunner();
     private final boolean isMac = System.getProperty("os.name").startsWith("Mac");
 
     @Override
@@ -22,7 +22,7 @@ final class UnixOperations implements Operations {
 
     @Override
     public void checkUser() throws IOException, InterruptedException {
-        var userId = host.capture("id", "-u");
+        var userId = commands.capture("id", "-u");
         if (!userId.succeeded()) {
             throw new IOException("Unable to determine the current user.");
         }
@@ -33,15 +33,15 @@ final class UnixOperations implements Operations {
 
     @Override
     public void checkAutoStart(List<String> warnings) throws IOException, InterruptedException {
-        if (isMac || !host.docker("info", "--format", "{{.SecurityOptions}}").output().contains("rootless")) {
+        if (isMac || !commands.docker("info", "--format", "{{.SecurityOptions}}").output().contains("rootless")) {
             return;
         }
-        if (!host.hasCommand("loginctl", false)) {
+        if (!commands.hasCommand("loginctl", false)) {
             warnings.add("Rootless Docker detected but loginctl is not available. Ensure the agent starts on boot.");
             return;
         }
-        var user = InstallHost.env("USER", System.getProperty("user.name"));
-        if (!host.capture("loginctl", "show-user", user, "-p", "Linger", "--value").output().strip().equals("yes")) {
+        var user = CommandRunner.env("USER", System.getProperty("user.name"));
+        if (!commands.capture("loginctl", "show-user", user, "-p", "Linger", "--value").output().strip().equals("yes")) {
             warnings.add("Rootless Docker detected but user linger is not enabled. Run 'sudo loginctl enable-linger "
                     + user + "' to ensure the agent starts automatically on system boot.");
         }
@@ -65,14 +65,14 @@ final class UnixOperations implements Operations {
     @Override
     public long totalMemoryMb() throws IOException, InterruptedException {
         if (isMac) {
-            var result = host.capture("sysctl", "-n", "hw.memsize");
-            return result.succeeded() ? InstallHost.parseSize(result.output().strip(), 0) / BYTES_PER_MB : 0;
+            var result = commands.capture("sysctl", "-n", "hw.memsize");
+            return result.succeeded() ? CommandRunner.parseSize(result.output().strip(), 0) / BYTES_PER_MB : 0;
         }
         var memInfo = Path.of("/proc/meminfo");
         if (Files.isReadable(memInfo)) {
             var matcher = LINUX_MEMORY.matcher(Files.readString(memInfo));
             if (matcher.find()) {
-                return InstallHost.parseSize(matcher.group(1), 0) / 1024;
+                return CommandRunner.parseSize(matcher.group(1), 0) / 1024;
             }
         }
         return 0;
@@ -110,6 +110,6 @@ final class UnixOperations implements Operations {
 
     @Override
     public void start(Path manager) throws IOException, InterruptedException {
-        host.start(manager, List.of(manager.toString(), "start"));
+        commands.start(manager, List.of(manager.toString(), "start"));
     }
 }
