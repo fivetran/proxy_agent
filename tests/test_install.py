@@ -8,6 +8,7 @@ assertions for both platforms without Docker or network access.
 """
 
 import stat
+from pathlib import Path
 
 import pytest
 from support.harness import EXT, WINDOWS
@@ -125,23 +126,19 @@ class TestInstall:
         assert sandbox.calls('manager') == starts == [['start']]
 
     @pytest.mark.parametrize(
-        'options,known_gap',
+        'options',
         [
-            pytest.param({'configure_failure': True}, None, id='connection-error'),
-            pytest.param({'configure_status': 503}, None, id='http-503'),
-            pytest.param({'configure_body': 'not-json'}, 'invalid-json', id='invalid-json'),
-            pytest.param({'configure_body': '{}'}, 'missing-agent-id', id='missing-agent-id'),
+            pytest.param({'configure_failure': True}, id='connection-error'),
+            pytest.param({'configure_status': 503}, id='http-503'),
+            pytest.param({'configure_body': 'not-json'}, id='invalid-json'),
+            pytest.param({'configure_body': '{}'}, id='missing-agent-id'),
         ],
     )
-    def test_invalid_configure_response_does_not_start(self, sandbox, options, known_gap, request):
+    def test_invalid_configure_response_does_not_start(self, sandbox, options):
         """An invalid configure response must not launch an agent."""
         sandbox.env['TOKEN'] = 'test-token'
         sandbox.options.update(options)
         result = sandbox.install(ConfigPath='')
-        if known_gap == 'missing-agent-id' or (known_gap == 'invalid-json' and not WINDOWS):
-            request.node.add_marker(
-                pytest.mark.xfail(reason='Installer does not validate this configure response', strict=True)
-            )
         assert result.returncode != 0, result.stdout
         assert not sandbox.calls('manager')
 
@@ -152,6 +149,7 @@ class TestInstall:
         assert f'below the recommended minimum of {minimum}MB' in output
         if sandbox.options['container_os'] == 'linux':
             assert "Docker's data root" not in output
+            assert sandbox.disk_check_path == sandbox.installed.parent
 
 
 @pytest.mark.skipif(not WINDOWS, reason='Windows host and container selection')
@@ -190,7 +188,7 @@ class TestWindowsInstall:
         sandbox.options.update(docker_root=root, free_mb=10000)
         output = install()
         drive = data.drive.rstrip(':')
-        assert sandbox.calls('drive')[-1] == [drive]
+        assert sandbox.disk_check_path == Path(root)
         assert f'drive {drive}: (10000MB) is below the recommended minimum of 12288MB' in output
         assert 'does not exist' not in output
 
@@ -199,7 +197,7 @@ class TestWindowsInstall:
         output = install()
         assert "Unable to determine Docker's data root" in output
         assert 'below the recommended minimum of 12288MB' in output
-        assert sandbox.calls('drive')[-1] == [sandbox.installed.drive.rstrip(':')]
+        assert sandbox.disk_check_path == sandbox.installed.parent
 
     def test_sufficient_docker_storage_has_no_warning(self, sandbox, install):
         sandbox.options['docker_root'] = sandbox.root.anchor

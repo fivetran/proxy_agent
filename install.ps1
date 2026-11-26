@@ -113,6 +113,9 @@ try {
         Unblock-File -LiteralPath $binary
     }
 
+    if (-not [IO.File]::Exists($binary)) {
+        $binary = (Get-Command -Name $binary -CommandType Application -ErrorAction Stop).Path
+    }
     $binary = (Resolve-Path -LiteralPath $binary).ProviderPath
     $env:PROXY_AGENT_INSTALLER_BINARY = $binary
     $program = if ($PSVersionTable.PSVersion.Major -ge 7) { 'pwsh.exe' } else { 'powershell.exe' }

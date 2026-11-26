@@ -17,3 +17,11 @@ java_binary(
     main_class = "com.fivetran.proxy_agent.Application",
     runtime_deps = [":proxy_agent"],
 )
+
+java_binary(
+    name = "test_manager",
+    testonly = True,
+    srcs = ["test/com/fivetran/proxy_agent/TestManager.java"],
+    main_class = "com.fivetran.proxy_agent.TestManager",
+    deps = [":proxy_agent"],
+)

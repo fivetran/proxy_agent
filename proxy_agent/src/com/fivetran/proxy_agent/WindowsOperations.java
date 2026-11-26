@@ -10,7 +10,7 @@ import java.util.List;
 import org.jspecify.annotations.Nullable;
 
 /** Windows host operations using PowerShell for Windows system APIs. */
-final class WindowsOperations implements OsOperations {
+class WindowsOperations implements OsOperations {
     private final CommandRunner commands;
     private final String powerShell = SystemEnvironment.get("PROXY_AGENT_INSTALLER_POWERSHELL", "powershell.exe");
 
@@ -164,7 +164,7 @@ final class WindowsOperations implements OsOperations {
         return commands.run(manager.getParent(), List.of(powerShell, "-NoProfile", "-File", manager.toString(), "start"));
     }
 
-    private CommandRunner.Result runPowerShell(String command, String argument)
+    CommandRunner.Result runPowerShell(String command, String argument)
             throws IOException, InterruptedException {
         // Pass paths as data so PowerShell never parses them as code.
         var script = """

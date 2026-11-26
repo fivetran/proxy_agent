@@ -35,18 +35,20 @@ final class Installer {
 
     private final Manager manager;
     private final OsOperations operations;
-    private final CommandRunner commands;
+    private final Docker docker;
+    private final DiskSpace diskSpace;
 
-    Installer(Manager manager) {
+    Installer(Manager manager, DiskSpace diskSpace) {
         this.manager = manager;
         this.operations = manager.operations();
-        this.commands = manager.commands();
+        this.docker = manager.docker();
+        this.diskSpace = diskSpace;
     }
 
     void install(@Nullable Path configPath, @Nullable Path installDir, String windowsVersionOverride)
             throws IOException, InterruptedException {
         operations.checkUser();
-        if (!SystemEnvironment.get("RUNTIME", "").equals("docker")) {
+        if (!Environment.get("RUNTIME", "").equals("docker")) {
             throw new IOException("RUNTIME must be set to 'docker'.");
         }
         var options = configurePaths(configPath, installDir, windowsVersionOverride);
@@ -113,7 +115,7 @@ final class Installer {
     }
 
     private static Config readConfig(@Nullable Path path) throws IOException {
-        var token = SystemEnvironment.get("TOKEN", "");
+        var token = Environment.get("TOKEN", "");
         if (path == null) {
             if (token.isEmpty()) {
                 throw new IOException("Provide a config.json file or set TOKEN.");
@@ -135,7 +137,7 @@ final class Installer {
     }
 
     private static int readMemoryMb() {
-        var memory = SystemEnvironment.get("MEMORY_ALLOCATION_MB", "");
+        var memory = Environment.get("MEMORY_ALLOCATION_MB", "");
         var console = System.console();
         if (memory.isEmpty() && console != null) {
             var response = console.readLine(
@@ -192,7 +194,7 @@ final class Installer {
             errors.add("docker is not installed");
             return false;
         }
-        var result = commands.capture("docker", "--version");
+        var result = docker.capture("--version");
         if (!result.succeeded()) {
             errors.add("Failed to execute 'docker --version'. Docker may not be functioning properly");
             return false;
@@ -204,7 +206,7 @@ final class Installer {
             errors.add("Docker version " + matcher.group(1) + " does not meet the minimum requirement of "
                     + MIN_DOCKER_VERSION);
         }
-        if (!commands.capture("docker", "info").succeeded()) {
+        if (!docker.capture("info").succeeded()) {
             errors.add("Docker is installed but the Docker daemon is not accessible. Ensure Docker is running and your"
                     + " user has permission to access the Docker daemon.");
             return false;
@@ -237,7 +239,7 @@ final class Installer {
     private void checkDisk(Path directory, String containerOs, List<String> warnings)
             throws IOException, InterruptedException {
         if (containerOs.equals("windows")) {
-            var root = commands.capture("docker", "info", "--format", "{{.DockerRootDir}}");
+            var root = docker.capture("info", "--format", "{{.DockerRootDir}}");
             var dataRoot = root.output().strip();
             if (root.succeeded() && !dataRoot.isEmpty()) {
                 directory = Path.of(dataRoot);
@@ -253,13 +255,14 @@ final class Installer {
         var minimumMb = containerOs.equals("windows") ? MIN_WINDOWS_DISK_MB : MIN_DISK_MB;
         long freeMb;
         try {
-            freeMb = Files.getFileStore(target).getUsableSpace() / (1024 * 1024);
+            freeMb = diskSpace.usableMb(target);
         } catch (IOException e) {
             warnings.add("Unable to determine available disk space for " + target);
             return;
         }
         if (freeMb < minimumMb) {
-            warnings.add("Available disk space for " + target + " (" + freeMb + "MB) is below the recommended minimum of "
+            var location = operations.diskLocation(target);
+            warnings.add("Available disk space" + location + "(" + freeMb + "MB) is below the recommended minimum of "
                     + minimumMb + "MB");
         }
     }
@@ -341,7 +344,7 @@ final class Installer {
     }
 
     private void stageNativeBinary(Path directory, StagedFiles files) throws IOException {
-        var executable = SystemEnvironment.get("PROXY_AGENT_INSTALLER_BINARY", "");
+        var executable = Environment.get("PROXY_AGENT_INSTALLER_BINARY", "");
         if (executable.isEmpty() && "runtime".equals(System.getProperty("org.graalvm.nativeimage.imagecode"))) {
             executable = ProcessHandle.current().info().command().orElse("");
         }
@@ -363,4 +366,14 @@ final class Installer {
 
     /** Config bytes for a local file, or a token for the configuration endpoint. */
     private record Config(byte @Nullable [] contents, String token) {}
+
+    /** Measures usable disk space at the selected installation or Docker data path. */
+    @FunctionalInterface
+    interface DiskSpace {
+        long usableMb(Path target) throws IOException;
+
+        static long fileStore(Path target) throws IOException {
+            return Files.getFileStore(target).getUsableSpace() / (1024 * 1024);
+        }
+    }
 }
