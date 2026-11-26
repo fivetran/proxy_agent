@@ -601,13 +601,6 @@ $loadAgent = {
 }
 
 switch ($Command) {
-    'upgrade' {
-        . $loadAgent
-        $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
-        Assert-MemoryAllocation
-        Set-WebProxyFromEnvironment -ProbeUri ([Uri]"https://$($IMAGE.Split('/')[0])/")
-        Invoke-Upgrade
-    }
     'doctor' {
         . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
@@ -654,6 +647,13 @@ switch ($Command) {
                 Assert-MemoryAllocation
                 Write-Log "Restarting $CONTAINER_NAME..."
                 if (-not (Start-CurrentProxyAgent)) { exit 1 }
+            }
+            'upgrade' {
+                . $loadAgent
+                $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
+                Assert-MemoryAllocation
+                Set-WebProxyFromEnvironment -ProbeUri ([Uri]"https://$($IMAGE.Split('/')[0])/")
+                Invoke-Upgrade
             }
             'status' {
                 . $loadAgent

@@ -12,6 +12,7 @@ The native executable also implements these manager commands.
 - `stop`
 - `start`
 - `restart`
+- `upgrade`
 It validates configuration fetched from Fivetran and stages replacements before
 changing the files in an existing installation.
 

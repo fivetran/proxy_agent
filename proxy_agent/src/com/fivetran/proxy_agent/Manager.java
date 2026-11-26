@@ -102,6 +102,50 @@ final class Manager {
         return startContainer(directory, agent, agent.version());
     }
 
+    /** Selects a compatible image and restores the old pin and container if the upgrade fails. */
+    int upgrade(Path directory) throws IOException, InterruptedException {
+        var agent = agentContainer(directory);
+        System.out.println("Checking for latest version...");
+        var registry = agent.repository().split("/", 2);
+        if (registry.length != 2) {
+            throw new IOException("Unable to determine image registry from PROXY_AGENT_IMAGE");
+        }
+        var latest = latestVersion("https://" + registry[0] + "/v2/" + registry[1] + "/tags/list", agent.suffix());
+        var current = agent.version();
+        if (ReleaseVersion.compare(latest, current) == 0) {
+            pinVersion(directory, current);
+            System.out.println("Already running the latest version (" + current + ").");
+            return 0;
+        }
+        log(directory, "Upgrading from " + current + " to " + latest + "...");
+        pinVersion(directory, latest);
+        try {
+            if (startContainer(directory, agent, latest) == 0) {
+                return 0;
+            }
+        } catch (IOException e) {
+            System.err.println("ERROR: " + e.getMessage());
+        } catch (InterruptedException e) {
+            try {
+                pinVersion(directory, current);
+            } catch (IOException restoreFailure) {
+                e.addSuppressed(restoreFailure);
+            }
+            throw e;
+        }
+        log(directory, "Upgrade failed, rolling back to " + current + "...");
+        pinVersion(directory, current);
+        try {
+            if (startContainer(directory, agent, current) == 0) {
+                return 1;
+            }
+        } catch (IOException e) {
+            System.err.println("ERROR: " + e.getMessage());
+        }
+        log(directory, "Rollback to " + current + " failed.");
+        return 1;
+    }
+
     private AgentContainer agentContainer(Path directory) throws IOException, InterruptedException {
         var agentId = agentId(directory);
         var pinned = pinnedVersion(directory);
@@ -325,8 +369,12 @@ final class Manager {
     }
 
     List<String> registryTags() throws IOException {
+        return registryTags(REGISTRY_URL);
+    }
+
+    private List<String> registryTags(String url) throws IOException {
         try {
-            var bytes = http.get(Environment.get("PROXY_AGENT_REGISTRY_TAGS_URL", REGISTRY_URL));
+            var bytes = http.get(Environment.get("PROXY_AGENT_REGISTRY_TAGS_URL", url));
             var tags = new ArrayList<String>();
             try (var parser = JSON.createParser(bytes)) {
                 if (parser.nextToken() != JsonToken.START_OBJECT) {
@@ -354,6 +402,22 @@ final class Manager {
         } catch (IOException e) {
             throw new IOException("Unable to query image registry for latest version", e);
         }
+    }
+
+    private String latestVersion(String url, String suffix) throws IOException {
+        var tags = registryTags(url);
+        var release = Pattern.compile("([0-9]+\\.[0-9]+\\.[0-9]+)" + Pattern.quote(suffix));
+        var latest = "";
+        for (var tag : tags) {
+            var match = release.matcher(tag);
+            if (match.matches() && (latest.isEmpty() || ReleaseVersion.compare(match.group(1), latest) > 0)) {
+                latest = match.group(1);
+            }
+        }
+        if (latest.isEmpty()) {
+            throw new IOException("Unable to determine latest version for " + suffix.substring(1));
+        }
+        return latest;
     }
 
     byte[] fetchConfiguration(String token) throws IOException {

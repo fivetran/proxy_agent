@@ -327,12 +327,6 @@ if [ "$#" -gt 0 ]; then
 fi
 
 case "$command" in
-    upgrade)
-        load_agent
-        CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
-        check_memory_allocation
-        upgrade_agent
-        ;;
     doctor)
         load_agent
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
@@ -375,6 +369,12 @@ case "$command" in
                 stop_agent
                 pin_version "$CURRENT_VERSION"
                 start_agent "$CURRENT_VERSION"
+                ;;
+            upgrade)
+                load_agent
+                CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
+                check_memory_allocation
+                upgrade_agent
                 ;;
             logs)
                 load_agent
