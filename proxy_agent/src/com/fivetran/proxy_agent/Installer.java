@@ -179,7 +179,7 @@ final class Installer {
     }
 
     private boolean checkDocker(List<String> warnings, List<String> errors) throws IOException, InterruptedException {
-        if (!commands.hasCommand("docker", operations.isWindows())) {
+        if (!operations.hasCommand("docker")) {
             errors.add("docker is not installed");
             return false;
         }

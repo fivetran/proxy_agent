@@ -25,10 +25,6 @@ final class CommandRunner {
         return capture(command);
     }
 
-    boolean hasCommand(String name, boolean isWindows) throws IOException, InterruptedException {
-        return isWindows ? capture("where.exe", "/q", name + ".exe").succeeded() : capture("which", name).succeeded();
-    }
-
     Result capture(String... command) throws IOException, InterruptedException {
         return capture(List.of(command));
     }

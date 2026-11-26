@@ -21,6 +21,11 @@ final class UnixOperations implements Operations {
     }
 
     @Override
+    public boolean hasCommand(String name) throws IOException, InterruptedException {
+        return commands.capture("which", name).succeeded();
+    }
+
+    @Override
     public void checkUser() throws IOException, InterruptedException {
         var userId = commands.capture("id", "-u");
         if (!userId.succeeded()) {
@@ -36,7 +41,7 @@ final class UnixOperations implements Operations {
         if (isMac || !commands.docker("info", "--format", "{{.SecurityOptions}}").output().contains("rootless")) {
             return;
         }
-        if (!commands.hasCommand("loginctl", false)) {
+        if (!hasCommand("loginctl")) {
             warnings.add("Rootless Docker detected but loginctl is not available. Ensure the agent starts on boot.");
             return;
         }

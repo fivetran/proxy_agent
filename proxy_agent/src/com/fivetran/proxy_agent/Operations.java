@@ -14,6 +14,9 @@ interface Operations {
 
     boolean isWindows();
 
+    /** Checks whether the named executable can be found on this host. */
+    boolean hasCommand(String name) throws IOException, InterruptedException;
+
     void checkUser() throws IOException, InterruptedException;
 
     void checkAutoStart(List<String> warnings) throws IOException, InterruptedException;
