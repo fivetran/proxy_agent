@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,7 +21,7 @@ env:
 # two Windows runners busy for up to 45 minutes. Runs on main are never
 # cancelled so every merged commit gets a full result.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -184,3 +185,29 @@ jobs:
         run: python -m pytest -v -m integration
         env:
           PROXY_AGENT_TEST_SHELL: ${{ matrix.shell }}
+
+  release-manager:
+    name: Publish native manager
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: [dependency-audit, shellcheck, psscriptanalyzer, native-manager, unit, integration-linux, integration-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-native-manager
+      queue: max
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          pattern: manager-*
+          path: dist
+          merge-multiple: true
+      - name: Publish the tested commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/publish_manager.py

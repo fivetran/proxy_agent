@@ -73,12 +73,15 @@ verified release binary if it is missing. It leaves the running container,
 configuration, and pinned agent version alone.
 This PR makes the native CLI available for testing and release preparation.
 
-## Release sequence
+## Releases
 
-1. Build and smoke-test all three native executables in CI. Each workflow
-   artifact contains the executable and a companion `.sha256` file.
-2. Publish the assets from the same tested commit as a versioned GitHub
-   release after reviewing native installer behavior on Linux and Windows.
-3. In a follow-up PR, switch the public bootstrap scripts to download and verify
-   those assets before running `manager install`. Verify the release URLs
-   and checksums before merging that PR.
+CI publishes a GitHub release after the checks on a commit on `main` pass.
+The first release is `manager-v0.1.0`. Later releases append the full commit
+SHA to that tag. Each release includes all three binaries, their `.sha256`
+files, and both matching manager scripts. Older CI runs can publish their
+assets without replacing a newer release as latest.
+
+Rerun the failed workflow to retry publishing the same commit, or run
+`gh workflow run ci.yml --ref main` to build, test, and release the current
+commit on `main`. Verify the initial release URLs before switching the public
+installers to the native manager.
