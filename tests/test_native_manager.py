@@ -7,12 +7,6 @@ from support.harness import REPO, WINDOWS
 from support.native_installer import installer_environment
 
 
-def test_logs_follow_the_installed_agent(sandbox, native_command):
-    result = native_command('logs')
-    assert result.returncode == 0, result.stdout
-    assert sandbox.calls('docker') == [['logs', '-f', 'proxy-agent-abc123']]
-
-
 @pytest.mark.skipif(WINDOWS, reason='Uses the Bash launcher fixture')
 def test_script_delegates_only_if_the_installed_manager_supports_status(sandbox):
     launcher = sandbox.agent / 'manager'

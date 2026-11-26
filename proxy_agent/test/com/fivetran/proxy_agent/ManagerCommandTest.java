@@ -49,6 +49,13 @@ public final class ManagerCommandTest {
         assertThat(docker.calls, is(empty()));
     }
 
+    @Test
+    public void logsFollowsTheConfiguredContainerAndReturnsTheDockerStatus() {
+        docker.status = 7;
+        assertThat(invoke("logs"), is(7));
+        assertThat(docker.calls, is(List.of(List.of("logs", "-f", "proxy-agent-abc123"))));
+    }
+
     private int invoke(String... command) {
         var arguments = new ArrayList<>(List.of("--agent-dir", directory.toString()));
         arguments.addAll(List.of(command));
@@ -59,6 +66,7 @@ public final class ManagerCommandTest {
 
     private static final class TestDocker extends Docker {
         private final List<List<String>> calls = new ArrayList<>();
+        private int status;
 
         private TestDocker(CommandRunner commands) {
             super(commands);
@@ -67,7 +75,7 @@ public final class ManagerCommandTest {
         @Override
         int run(Path directory, String... arguments) {
             calls.add(List.of(arguments));
-            return 0;
+            return status;
         }
 
         @Override
