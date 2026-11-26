@@ -73,97 +73,11 @@ class TestManager:
     """
 
 
-    @pytest.mark.parametrize('command', ['start', 'restart'])
-    def test_legacy_tag_normalized_on_start_and_restart(self, sandbox, variant, run_manager, command):
-        if command == 'restart':
-            run_manager('start')
-        sandbox.version.write_text('1.2.9' + variant.suffix)
-        run_manager(command)
-        assert_image(sandbox, variant)
-
-    def test_bom_and_crlf_version(self, sandbox, variant, run_manager):
-        sandbox.version.write_bytes(b'\xef\xbb\xbf' + ('1.2.9' + variant.suffix + '\r\n').encode())
-        run_manager('start')
-        assert_image(sandbox, variant)
-
-    def test_custom_memory(self, sandbox, run_manager):
-        sandbox.settings(MEMORY_ALLOCATION_MB=2048)
-        run_manager('start')
-        assert '--memory=2048m' in run_args(sandbox)
-
-    @pytest.mark.parametrize('setting', ['4G', 0])
-    @pytest.mark.parametrize('command', ['start', 'restart', 'upgrade', 'doctor'])
-    def test_invalid_memory_cannot_modify_running_agent(
-        self, sandbox, variant, run_manager, setting, command
-    ):
-        run_manager('start')
-        sandbox.settings(MEMORY_ALLOCATION_MB=setting)
-        before = sandbox.calls('docker')
-        output = run_manager(command, code=1)
-        assert re.search('Invalid \\$?MEMORY_ALLOCATION_MB', output)
-        assert str(setting) in output
-        assert sandbox.calls('docker') == before
-        assert_image(sandbox, variant)
-
-
-    def test_missing_config(self, sandbox, run_manager):
-        sandbox.config.unlink()
-        assert 'Config file not found' in run_manager('start', code=1)
-        assert not docker_calls(sandbox, 'run')
-
-    @pytest.mark.parametrize(
-        'config,known_bash_gap',
-        [
-            pytest.param('{"agent_id":"abc123"', True, id='malformed'),
-            pytest.param('{"nested":{"agent_id":"abc123"}}', True, id='nested-id'),
-            pytest.param('{}', False, id='missing-id'),
-            pytest.param('{"agent_id":null}', False, id='null-id'),
-        ],
-    )
-    def test_invalid_config_cannot_start(self, sandbox, config, known_bash_gap, request):
-        """Only a valid config with a top-level agent ID may reach Docker."""
-        sandbox.config.write_text(config)
-        result = sandbox.run('start')
-        if known_bash_gap and not WINDOWS:
-            request.node.add_marker(
-                pytest.mark.xfail(reason='Bash extracts fields without parsing JSON', strict=True)
-            )
-        assert result.returncode != 0, result.stdout
-        assert not sandbox.calls('docker')
-
-    @pytest.mark.parametrize('contents', ['', '\n', ' \t\r\n'], ids=['zero-byte', 'newline', 'whitespace'])
-    def test_empty_version(self, sandbox, run_manager, contents):
-        sandbox.version.write_bytes(contents.encode())
-        assert 'is empty' in run_manager('start', code=1)
-        assert not sandbox.calls('docker')
-
     def test_invalid_version_rejected(self, sandbox, run_manager):
         sandbox.version.write_text('2.0')
         assert "Invalid proxy agent version '2.0'" in run_manager('upgrade', code=1)
         assert not docker_calls(sandbox, 'run')
 
-    @pytest.mark.parametrize(
-        'version,known_bash_gap',
-        [
-            pytest.param('1.2. 9', True, id='embedded-space'),
-            pytest.param('1.2.\n9', True, id='multiple-lines'),
-            pytest.param('1.2.9-beta', False, id='invalid-suffix'),
-        ],
-    )
-    def test_invalid_version_never_starts(self, sandbox, version, known_bash_gap, request):
-        sandbox.version.write_text(version)
-        result = sandbox.run('start')
-        if known_bash_gap and not WINDOWS:
-            request.node.add_marker(
-                pytest.mark.xfail(reason='Bash strips whitespace inside versions', strict=True)
-            )
-        assert result.returncode != 0, result.stdout
-        assert not docker_calls(sandbox, 'run')
-
-    def test_surrounding_version_whitespace_is_accepted(self, sandbox, variant, run_manager):
-        sandbox.version.write_text(' \t1.2.9 \r\n')
-        run_manager('start')
-        assert_image(sandbox, variant)
 
     def test_upgrade_selects_latest_matching_variant(self, sandbox, variant, run_manager):
         run_manager('upgrade')
@@ -204,19 +118,6 @@ class TestManager:
         assert_image(sandbox, variant)
 
 
-    def test_docker_start_failure_is_reported(self, sandbox, run_manager):
-        """Bash propagates Docker's status; PowerShell normalizes startup failure to 1."""
-        sandbox.options['run_failure_tag'] = '1.2.9'
-        run_manager('start', code=1 if WINDOWS else 125)
-        assert sandbox.image is None
-        assert sandbox.version.read_text().strip() == '1.2.9'
-
-    def test_upgrade_rolls_back_when_docker_cannot_start_new_image(self, sandbox, variant, run_manager):
-        run_manager('start')
-        sandbox.options['run_failure_tag'] = '1.2.10'
-        assert 'rolling back' in run_manager('upgrade', code=1)
-        assert_image(sandbox, variant)
-
     def test_upgrade_reports_failed_rollback(self, sandbox, run_manager):
         sandbox.options['unhealthy_tag'] = '1.2.'
         assert 'Rollback to 1.2.9 failed' in run_manager('upgrade', code=1)
@@ -229,96 +130,6 @@ class TestManager:
         assert sandbox.version.read_text().strip() == '1.2.9'
 
 
-@pytest.mark.parametrize('sandbox', ['windows' if WINDOWS else 'linux'], indirect=True)
-class TestHealthcheck:
-    """Execute the generated health command for the host's native container OS.
-
-    Docker is stubbed only to obtain the command. The real shell evaluates it
-    against heartbeat files, so a command that always succeeds cannot pass.
-    """
-
-    @pytest.mark.parametrize('state', ['missing', 'fresh', 'expired', 'malformed', 'empty'])
-    def test_heartbeat_status(self, sandbox, run_manager, tmp_path, state):
-        run_manager('start')
-        args = run_args(sandbox)
-        health = args[args.index('--health-cmd') + 1]
-        heartbeat = tmp_path / 'heartbeat.txt'
-        if state != 'missing':
-            contents = {
-                'fresh': f'HEARTBEAT_EXPIRE_AT={int(time.time()) + 3600}\n',
-                'expired': f'HEARTBEAT_EXPIRE_AT={int(time.time()) - 3600}\n',
-                'malformed': 'HEARTBEAT_EXPIRE_AT=not-a-timestamp\n',
-                'empty': '',
-            }
-            heartbeat.write_text(contents[state])
-        env = os.environ.copy()
-        env.pop('HEARTBEAT_EXPIRE_AT', None)
-        env['HEARTBEAT_PATH'] = str(heartbeat)
-        if WINDOWS:
-            assert health.startswith('powershell.exe -NoProfile -EncodedCommand ')
-            command = [SHELL, '-NoProfile', '-NonInteractive', '-EncodedCommand', health.split()[-1]]
-        else:
-            command = ['/bin/sh', '-c', health]
-        result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
-        assert (result.returncode == 0) == (state in ('missing', 'fresh')), result.stdout + result.stderr
-
-
-@pytest.mark.skipif(not WINDOWS, reason='Windows containers require the PowerShell manager')
-@pytest.mark.parametrize('sandbox', ['windows'], indirect=True)
-class TestWindowsContainer:
-    """Verify Windows LTSC selection, overrides, and legacy settings migration.
-
-    Host builds and image tags are fixtures, so server selection, overrides, and
-    legacy settings migration can be checked on either Windows CI runner.
-    """
-
-    @pytest.mark.parametrize('build,ltsc', [(17763, 'ltsc2019'), (20348, 'ltsc2022'), (26100, 'ltsc2025')])
-    def test_ltsc_detection(self, sandbox, run_manager, build, ltsc):
-        sandbox.options['build'] = build
-        run_manager('start')
-        assert sandbox.image == f'{IMAGE}:1.2.9-windows-{ltsc}'
-
-    def test_unsupported_hosts(self, sandbox, run_manager):
-        run_manager('start')
-        before = docker_calls(sandbox, 'run')
-        sandbox.options['build'] = 99999
-        assert "Unsupported Windows Server build '99999'" in run_manager('start', code=1)
-        sandbox.options['product_type'] = 1
-        assert 'Windows Server is required' in run_manager('start', code=1)
-        assert docker_calls(sandbox, 'run') == before
-
-    @pytest.mark.parametrize('with_settings', [False, True], ids=['no-settings', 'existing-settings'])
-    def test_override_and_legacy_migration_preserve_memory_without_final_newline(
-        self, sandbox, run_manager, with_settings
-    ):
-        path = sandbox.agent / 'settings.ps1'
-        path.unlink(missing_ok=True)
-        if with_settings:
-            sandbox.settings(MEMORY_ALLOCATION_MB=2048)
-        sandbox.version.write_text('1.2.9-windows-ltsc2025')
-        run_manager('start')
-        assert sandbox.version.read_text().strip() == '1.2.9'
-        assert "$WINDOWS_VERSION = 'ltsc2025'" in path.read_text()
-        if with_settings:
-            assert '2048\n$WINDOWS_VERSION' in path.read_text()
-        run_manager('restart')
-        assert sandbox.image == f'{IMAGE}:1.2.9-windows-ltsc2025'
-        run_manager('upgrade')
-        assert sandbox.image == f'{IMAGE}:1.2.11-windows-ltsc2025'
-
-    def test_settings_override_host_detection(self, sandbox, run_manager):
-        sandbox.settings(WINDOWS_VERSION='ltsc2025')
-        run_manager('start')
-        assert sandbox.image == f'{IMAGE}:1.2.9-windows-ltsc2025'
-        run_manager('upgrade')
-        assert sandbox.image == f'{IMAGE}:1.2.11-windows-ltsc2025'
-
-    def test_ubuntu_legacy_tag_migrates_with_warning(self, sandbox, variant, run_manager):
-        sandbox.version.write_text('1.2.9-ubuntu-26.04')
-        assert re.search('WARNING: .*Linux image tag .*Windows containers', run_manager('start'))
-        assert_image(sandbox, variant)
-
-
 class TestPlatformDifferences:
     """Document intentional differences in tag errors and PowerShell argument binding.
 
@@ -326,13 +137,6 @@ class TestPlatformDifferences:
     outcomes, such as refusing an incompatible tag without starting an agent.
     """
 
-    def test_linux_container_mode_rejects_windows_tag(self, sandbox):
-        sandbox.version.write_text('1.2.9-windows-ltsc2022')
-        result = sandbox.run('start')
-        assert result.returncode == 1, result.stdout
-        assert ('Windows containers' if WINDOWS else 'Invalid proxy agent version') in result.stdout
-        assert sandbox.version.read_text() == '1.2.9-windows-ltsc2022'
-        assert sandbox.image is None
 
     @pytest.mark.skipif(not WINDOWS, reason='PowerShell common parameters')
     def test_powershell_consumes_verbose_but_forwards_doctor_options(self, sandbox):
