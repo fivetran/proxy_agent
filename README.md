@@ -32,6 +32,9 @@ For more information see the [Proxy Agent documentation](https://fivetran.com/do
 
 ## Installation
 
+The bootstrap scripts download the native manager and run its `install`
+subcommand. See the [native manager build and installation guide](proxy_agent/README.md).
+
 ### Linux
 
 Run the following as a non-root user:
@@ -236,7 +239,7 @@ CI (`.github/workflows/ci.yml`) runs on every pull request:
 
 Fixtures live in `tests/conftest.py`, sandbox setup and invocation in `tests/support/harness.py`, and mock commands in `tests/support/stub.py`. Windows fixtures use pythonnet to host the selected PowerShell engine in a spawned Python child, binding arguments as .NET values and reading native proxy or ACL observations. PowerShell 5.1 uses .NET Framework; PowerShell 7 uses its bundled CoreCLR. Mock commands use UTF-8 JSON over stdin to preserve quotes, empty strings, and Unicode under both PowerShell versions. Python tracks failed mocks independently, so they fail the test even if the script catches their exceptions.
 
-Use Python 3.11 or later and install the test dependency from `tests/requirements.txt`. Unix proxy tests also require curl. Run from the repository root:
+Use Python 3.11 or later and install the test dependency from `tests/requirements.txt`. Installer unit tests build the manager with Bazelisk and run it with Java 17 or later. Unix proxy tests also require curl. Run from the repository root:
 
 ```bash
 python3 -m pip install -r tests/requirements.txt

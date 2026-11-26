@@ -13,6 +13,6 @@ java_library(
 
 java_binary(
     name = "manager",
-    main_class = "com.fivetran.proxy_agent.Application",
+    main_class = "com.fivetran.proxy_agent.Manager",
     runtime_deps = [":proxy_agent"],
 )

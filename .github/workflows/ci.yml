@@ -8,14 +8,6 @@ on:
 permissions:
   contents: read
 
-defaults:
-  run:
-    shell: bash
-
-env:
-  # Git Bash would otherwise rewrite Bazel's //package:target arguments.
-  MSYS2_ARG_CONV_EXCL: '//'
-
 # A new push to a pull request cancels its previous run, which otherwise keeps
 # two Windows runners busy for up to 45 minutes. Runs on main are never
 # cancelled so every merged commit gets a full result.
@@ -52,9 +44,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Run PSScriptAnalyzer
+        shell: pwsh
         run: |
-          pwsh -NoProfile -NonInteractive -Command 'if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) { Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop }'
-          pwsh -NoProfile -NonInteractive -Command 'Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1 -EnableExit -ErrorAction Stop'
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
+            Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          }
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
+          $results | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+          if ($results) { exit 1 }
 
   native-manager:
     name: Native manager (${{ matrix.platform }})
@@ -64,46 +61,65 @@ jobs:
         include:
           - os: ubuntu-22.04
             platform: linux-x64
+            extension: tar.gz
+            sha256: d792848db26f1602f0a5cf2cd9279d9a652d32ab450d891ce616c9ca67e359d0
           - os: ubuntu-24.04-arm
             platform: linux-aarch64
+            extension: tar.gz
+            sha256: d8e6edf0009bb5d70c6a670eb030d36aa804795427306434c0f7f63c01435307
           - os: windows-2022
             platform: windows-x64
+            extension: zip
+            sha256: 1f534c46337f838880553c47f973a3d769b4058036288afcec930e2abddf06a1
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Build the manager JAR
         run: bazelisk build //proxy_agent:manager_deploy.jar
-      - uses: graalvm/setup-graalvm@v1.6.10
-        with:
-          distribution: graalvm-community
-          version: '25.6.5.1'
-          set-java-home: 'false'
       - name: Build the native manager
         env:
-          MANAGER_PLATFORM: ${{ matrix.platform }}
+          GRAALVM_ARCHIVE: graalvm-community-jdk-25i6-25.0.5.1_${{ matrix.platform }}_bin.${{ matrix.extension }}
+          GRAALVM_SHA256: ${{ matrix.sha256 }}
         run: |
-          compiler=native-image
-          extension=
-          if [[ "$RUNNER_OS" == Windows ]]; then
-            compiler=native-image.cmd
-            extension=.exe
-          fi
-          mkdir -p dist
-          binary="dist/manager-$MANAGER_PLATFORM"
-          "$compiler" -Ob -jar bazel-bin/proxy_agent/manager_deploy.jar "$binary"
-          sha256sum "$binary$extension" | cut -d ' ' -f 1 > "$binary$extension.sha256"
-      - name: Check native CLI usage
-        env:
-          MANAGER_PLATFORM: ${{ matrix.platform }}
-        run: |
-          manager="./dist/manager-$MANAGER_PLATFORM"
-          if [[ "$RUNNER_OS" == Windows ]]; then manager+=.exe; fi
-          "$manager" --help
+          $tools = Join-Path $env:RUNNER_TEMP 'graalvm'
+          $null = New-Item -ItemType Directory -Path $tools
+          $archive = Join-Path $tools $env:GRAALVM_ARCHIVE
+          $url = "https://github.com/graalvm/graalvm-ce-builds/releases/download/graal-25.6.5.1/$env:GRAALVM_ARCHIVE"
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive).Hash -ne $env:GRAALVM_SHA256) {
+            throw 'GraalVM archive SHA-256 does not match.'
+          }
+          if ($IsWindows) {
+            Expand-Archive -LiteralPath $archive -DestinationPath $tools
+            $program = 'bin/native-image.cmd'
+          } else {
+            tar -xzf $archive -C $tools
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $program = 'bin/native-image'
+          }
+          $homeDir = Get-ChildItem -LiteralPath $tools -Directory | Select-Object -First 1
+          $null = New-Item -ItemType Directory -Path dist
+          $compiler = Join-Path $homeDir.FullName $program
+          $jar = (Resolve-Path 'bazel-bin/proxy_agent/manager_deploy.jar').Path
+          $output = Join-Path (Resolve-Path 'dist').Path 'manager'
+          & $compiler -Ob -jar $jar $output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $extension = if ($IsWindows) { '.exe' } else { '' }
+          $binary = Join-Path (Resolve-Path 'dist').Path "manager$extension"
+          & $binary install --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $releaseName = "manager-${{ matrix.platform }}$extension"
+          $sha256 = (Get-FileHash -LiteralPath $binary).Hash.ToLowerInvariant()
+          Move-Item -LiteralPath $binary -Destination (Join-Path (Resolve-Path 'dist').Path $releaseName)
+          Set-Content -LiteralPath "dist/$releaseName.sha256" -Value $sha256 -Encoding ascii
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: manager-${{ matrix.platform }}
-          path: dist/manager-${{ matrix.platform }}*
+          path: dist/manager*
           if-no-files-found: error
 
   unit:
@@ -146,6 +162,7 @@ jobs:
       matrix:
         # The published Linux image is multi-architecture (amd64 and arm64).
         os: [ubuntu-latest, ubuntu-24.04-arm]
+    needs: native-manager
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -154,6 +171,18 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r tests/requirements.txt
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: ${{ runner.arch == 'ARM64' && 'manager-linux-aarch64' || 'manager-linux-x64' }}
+          path: dist
+      - run: |
+          case "$(uname -m)" in
+            x86_64) binary="$GITHUB_WORKSPACE/dist/manager-linux-x64" ;;
+            aarch64) binary="$GITHUB_WORKSPACE/dist/manager-linux-aarch64" ;;
+            *) exit 1 ;;
+          esac
+          chmod u+x "$binary"
+          echo "PROXY_AGENT_MANAGER_BIN=$binary" >> "$GITHUB_ENV"
       - run: python -m pytest -v -m integration
         env:
           PROXY_AGENT_TEST_SHELL: bash
@@ -165,26 +194,41 @@ jobs:
       matrix:
         os: [windows-2022, windows-2025]
         shell: [powershell, pwsh]
+    needs: native-manager
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    defaults:
+      run:
+        # Python launches the selected PowerShell executable for each script.
+        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.12'
       - run: python -m pip install -r tests/requirements.txt
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: manager-windows-x64
+          path: dist
       - name: Wait for the Docker daemon
         # The Docker service is not always running when a Windows job starts.
+        shell: powershell
         run: |
-          if ! docker info >/dev/null 2>&1; then
-            sc.exe start docker || true
-          fi
-          for _ in {1..30}; do
-            if docker info >/dev/null 2>&1; then exit 0; fi
-            sleep 2
-          done
+          # The default 'Stop' preference would turn docker's stderr into a
+          # terminating error on the first failed attempt.
+          $ErrorActionPreference = 'Continue'
+          $service = Get-Service docker -ErrorAction SilentlyContinue
+          if ($service -and $service.Status -ne 'Running') { Start-Service docker }
+          foreach ($attempt in 1..30) {
+            docker info *> $null
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Start-Sleep -Seconds 2
+          }
           docker info
+          exit 1
       - name: Run integration test
         run: python -m pytest -v -m integration
         env:
           PROXY_AGENT_TEST_SHELL: ${{ matrix.shell }}
+          PROXY_AGENT_MANAGER_BIN: ${{ github.workspace }}\dist\manager-windows-x64.exe
