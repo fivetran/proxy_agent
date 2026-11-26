@@ -41,6 +41,68 @@ class WindowsOperations implements OsOperations {
     }
 
     @Override
+    public String managerReleaseAsset() throws IOException {
+        if (!System.getProperty("os.arch").equals("amd64")) {
+            throw new IOException("No native manager is available for this host architecture.");
+        }
+        return "manager-windows-x64.exe";
+    }
+
+    @Override
+    public boolean validManagerScript(Path script) throws IOException, InterruptedException {
+        return runPowerShell("""
+                if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $argument -Raw))) { exit 1 }
+                $parseErrors = $null
+                $null = [System.Management.Automation.Language.Parser]::ParseFile($argument, [ref]$null, [ref]$parseErrors)
+                if ($parseErrors.Count -gt 0) { exit 1 }
+                """, script.toString()).succeeded();
+    }
+
+    @Override
+    public boolean publishManagerUpdate(Path directory, Path staging) throws IOException {
+        var binary = directory.resolve(managerBinaryName());
+        var current = ProcessHandle.current();
+        var command = current.info().command();
+        if (command.isEmpty() || !Files.exists(binary) || !Files.isSameFile(Path.of(command.orElseThrow()), binary)) {
+            return OsOperations.super.publishManagerUpdate(directory, staging);
+        }
+        // Windows holds the current executable open until this process exits.
+        var log = Files.createDirectories(directory.resolve("logs")).resolve("manager-update.log");
+        var script = """
+                $ErrorActionPreference = 'Stop'
+                $stage = $env:PROXY_AGENT_UPDATE_STAGE
+                $target = $env:PROXY_AGENT_UPDATE_TARGET
+                try {
+                    $manager = Get-Process -Id $env:PROXY_AGENT_UPDATE_PID -ErrorAction SilentlyContinue
+                    if ($manager) { Wait-Process -InputObject $manager -Timeout 60 }
+                    foreach ($name in @('manager.exe', 'proxy-agent-manager.ps1')) {
+                        $source = Join-Path $stage $name
+                        $destination = Join-Path $target $name
+                        if ([IO.File]::Exists($destination)) {
+                            [IO.File]::Replace($source, $destination, $null)
+                        } else {
+                            [IO.File]::Move($source, $destination)
+                        }
+                    }
+                    Write-Output 'Native manager updated.'
+                } catch {
+                    Write-Output 'Could not install the native manager update.'
+                    exit 1
+                } finally {
+                    Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                """;
+        var encoded = Base64.getEncoder().encodeToString(script.getBytes(UTF_16LE));
+        var process = commands.builder(List.of(powerShell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded));
+        process.environment().put("PROXY_AGENT_UPDATE_STAGE", staging.toString());
+        process.environment().put("PROXY_AGENT_UPDATE_TARGET", directory.toString());
+        process.environment().put("PROXY_AGENT_UPDATE_PID", Long.toString(current.pid()));
+        process.redirectErrorStream(true).redirectOutput(log.toFile()).start().getOutputStream().close();
+        System.out.println("Update log: " + log);
+        return true;
+    }
+
+    @Override
     public long reservedMemoryMb() {
         return 3072;
     }

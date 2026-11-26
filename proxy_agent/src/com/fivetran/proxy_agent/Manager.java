@@ -38,6 +38,14 @@ final class Manager {
         return docker;
     }
 
+    /** Downloads the native release and the corresponding platform script. */
+    int updateManager(Path directory) throws IOException, InterruptedException {
+        return new ManagerUpdate(operations, http).run(directory,
+                Environment.get("PROXY_AGENT_MANAGER_BINARY_URL", ""),
+                Environment.get("PROXY_AGENT_MANAGER_BINARY_SHA256", ""),
+                Environment.get("PROXY_AGENT_SCRIPT_URL", ""));
+    }
+
     void downloadManagerScript(Path target) throws IOException {
         var url = Environment.get("PROXY_AGENT_SCRIPT_URL", SCRIPT_ROOT + operations.managerScriptName());
         try {
