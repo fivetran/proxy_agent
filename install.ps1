@@ -474,6 +474,15 @@ try {
     [IO.File]::SetLastWriteTimeUtc($tmpScript, [DateTime]::UtcNow)
     Move-Item -LiteralPath $tmpScript -Destination $agentScript -Force
     Unblock-File -LiteralPath $agentScript
+    # Record the installed bytes so the manager can recognize local edits.
+    try {
+        $updateDir = Join-Path $InstallDir '.manager-auto-update'
+        $null = [IO.Directory]::CreateDirectory($updateDir)
+        [IO.File]::WriteAllLines($tmpScript, @((Get-FileHash -LiteralPath $agentScript).Hash))
+        Move-Item -LiteralPath $tmpScript -Destination (Join-Path $updateDir 'download') -Force
+    } catch {
+        Remove-Item -LiteralPath $tmpScript -Force -ErrorAction SilentlyContinue
+    }
 
     # Bootstrap or copy config
     $configDest  = Join-Path $InstallDir 'config\config.json'

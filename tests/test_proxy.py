@@ -150,16 +150,17 @@ class TestProxyContract:
         assert result.returncode == 0, result.stdout
         assert native_web_sandbox.manager.read_bytes() == source
 
-    def test_daily_update_reuses_etag_and_downloads_changed_script(self, native_web_sandbox, web_endpoints):
+    def test_daily_update_uses_etag_and_protects_local_edits(self, native_web_sandbox, web_endpoints):
         sandbox = native_web_sandbox
         sandbox.env['NO_PROXY'] = '*'
         web_endpoints.script_etag = '"original"'
         original = sandbox.manager.read_bytes()
 
-        def daily_check():
+        def daily_check(age_script=True):
             for stamp in sandbox.update_state.glob('????-??-??'):
                 stamp.unlink()
-            os.utime(sandbox.manager, (0, 0))
+            if age_script:
+                os.utime(sandbox.manager, (0, 0))
             result = sandbox.run('status')
             assert result.returncode == 0, result.stdout
             assert 'NAMES IMAGE STATUS' in result.stdout
@@ -176,9 +177,13 @@ class TestProxyContract:
         assert sandbox.manager.read_bytes() == web_endpoints.script_body
         assert 'already up to date' in daily_check()
 
-        # A changed local file invalidates the cached ETag.
+        # Automatic checks leave local edits in place. Explicit updates restore the download.
         edited = original + b'\n# Local edit\n'
         sandbox.manager.write_bytes(edited)
+        assert 'modified locally' in daily_check(age_script=False)
+        assert sandbox.manager.read_bytes() == edited
+        assert len(web_endpoints.requests['origin']) == 4
+
         result = sandbox.run('update-manager')
         assert result.returncode == 0, result.stdout
         assert 'Management script updated' in result.stdout
@@ -197,6 +202,13 @@ class TestProxyContract:
         web_endpoints.script_body = original + b'\n# Redirected version\n'
         assert 'Management script updated' in daily_check()
         assert sandbox.manager.read_bytes() == web_endpoints.script_body
+
+        # Downloads without a reusable ETag still establish a local hash.
+        request_count = len(web_endpoints.requests['origin'])
+        sandbox.manager.write_bytes(edited)
+        assert 'modified locally' in daily_check(age_script=False)
+        assert sandbox.manager.read_bytes() == edited
+        assert len(web_endpoints.requests['origin']) == request_count
 
     @pytest.mark.parametrize('credentials', [None, ('us@er', 'p:ss')], ids=['anonymous', 'basic-auth'])
     @pytest.mark.parametrize('no_proxy', ['', 'host', '*'], ids=['proxied', 'bypass-host', 'bypass-all'])

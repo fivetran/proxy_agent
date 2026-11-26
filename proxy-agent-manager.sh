@@ -60,7 +60,7 @@ manager_hash() {
 # Exit 0 after replacement, 2 if current, and 1 on failure.
 update_manager() (
     local script_url="${PROXY_AGENT_SCRIPT_URL:-https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh}"
-    local tmp_script tmp_headers response
+    local day="${1:-}" tmp_script tmp_headers response
     local current_hash='' saved_hash='' source_hash='' saved_source='' etag='' locally_modified=false
     local cache="$AUTO_UPDATE_DIR/download" etag_pattern='^"[!#-~]*"$'
     local -a headers=()
@@ -74,6 +74,18 @@ update_manager() (
     if [[ "$saved_hash" =~ ^[0-9a-f]{64}$ ]]; then
         current_hash=$(manager_hash < "$0" 2>/dev/null) || current_hash=''
         [ -z "$current_hash" ] || [ "$saved_hash" = "$current_hash" ] || locally_modified=true
+    fi
+    if [ -n "$day" ]; then
+        # A fresh download starts a cooldown. Local edits still warrant a warning.
+        if [ "$locally_modified" = false ] &&
+            [ -n "$(find -L "$BASE_DIR/${0##*/}" -mtime -1 -print)" ]; then
+            exit 2
+        fi
+        claim_manager_update_check "$day" || exit "$?"
+        if [ "$locally_modified" = true ]; then
+            echo "WARNING: Management script was modified locally. Automatic updates are paused. Run update-manager to restore automatic updates."
+            exit 2
+        fi
     fi
     if [ -n "$current_hash" ] && [ "$locally_modified" = false ] && [[ "$etag" =~ $etag_pattern ]]; then
         source_hash=$(printf '%s' "$script_url" | manager_hash 2>/dev/null) || source_hash=''
@@ -114,15 +126,14 @@ update_manager() (
         echo "ERROR: Downloaded management script is empty or has invalid syntax" >&2
         exit 1
     fi
-    # Save the validated download hash alongside the ETag.
-    local download_hash=''
-    source_hash=''
+    # Record the validated download even when the server supplies no usable ETag.
+    local download_hash
+    download_hash=$(manager_hash < "$tmp_script" 2>/dev/null) || download_hash=''
     etag=''
     if [ "$response" = '200 0' ]; then
         etag=$(awk 'tolower($1) == "etag:" { sub(/\r$/, "", $2); tag = $2 } /^HTTP\// { tag = "" } END { print tag }' "$tmp_headers")
         if [[ "$etag" =~ $etag_pattern ]]; then
             source_hash=$(printf '%s' "$script_url" | manager_hash 2>/dev/null) || source_hash=''
-            download_hash=$(manager_hash < "$tmp_script" 2>/dev/null) || download_hash=''
         fi
     fi
     local updated=false
@@ -142,14 +153,9 @@ update_manager() (
     echo "Management script updated."
 )
 
-# Claim the UTC day before downloading so concurrent invocations share one
-# attempt, including when the download fails.
-check_manager_update() {
-    local day stamp
-    day=$(date -u +%F) || return 1
-    [ -f "$AUTO_UPDATE_DIR/$day" ] && return 2
-    # A freshly downloaded manager already has the latest available script.
-    [ -n "$(find -L "$BASE_DIR/${0##*/}" -mtime -1 -print)" ] && return 2
+# Claim the UTC day so concurrent invocations share one attempt, including failures.
+claim_manager_update_check() {
+    local day="$1" stamp
     mkdir -p -- "$AUTO_UPDATE_DIR" || return 1
     if ! (set -C; : > "$AUTO_UPDATE_DIR/$day") 2>/dev/null; then
         [ -f "$AUTO_UPDATE_DIR/$day" ] && return 2
@@ -161,7 +167,13 @@ check_manager_update() {
             rm -f -- "$stamp"
         fi
     done
-    update_manager >&2
+}
+
+check_manager_update() {
+    local day
+    day=$(date -u +%F) || return 1
+    [ -f "$AUTO_UPDATE_DIR/$day" ] && return 2
+    update_manager "$day" >&2
 }
 
 get_latest_version() {

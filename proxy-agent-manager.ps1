@@ -119,6 +119,13 @@ function Get-ManagerSourceHash {
 
 # Validate the download before atomically replacing the installed script.
 function Update-Manager {
+    param([switch]$Automatic)
+
+    if ($Automatic) {
+        $now = [DateTime]::UtcNow
+        $day = $now.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+        if (Test-Path -LiteralPath (Join-Path $AUTO_UPDATE_DIR $day) -PathType Leaf) { return $false }
+    }
     $scriptUrl = if ($env:PROXY_AGENT_SCRIPT_URL) { $env:PROXY_AGENT_SCRIPT_URL } else { 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1' }
     $tmpScript = Join-Path $BASE_DIR ('.proxy-agent-manager.' + [guid]::NewGuid() + '.ps1')
     $tmpCache = "$tmpScript.etag"
@@ -128,10 +135,21 @@ function Update-Manager {
     try {
         $saved = [IO.File]::ReadAllLines($cache)
     } catch [IO.IOException], [UnauthorizedAccessException] {
-        # A missing or unreadable cache just means a full download.
+        # Older installations acquire a baseline on their first successful download.
     }
     $locallyModified = $saved.Count -ge 1 -and $saved[0] -match '^[0-9a-f]{64}$' -and
         $saved[0] -ne (Get-FileHash -LiteralPath $PSCommandPath).Hash
+    if ($Automatic) {
+        # A fresh download starts a cooldown. Local edits still warrant a warning.
+        if (-not $locallyModified -and [IO.File]::GetLastWriteTimeUtc($PSCommandPath) -gt $now.AddDays(-1)) {
+            return $false
+        }
+        if (-not (Register-ManagerUpdateCheck $day)) { return $false }
+        if ($locallyModified) {
+            Write-Warning 'Management script was modified locally. Automatic updates are paused. Run update-manager to restore automatic updates.'
+            return $false
+        }
+    }
     try {
         Set-WebProxyFromEnvironment -ProbeUri ([Uri]$scriptUrl)
         $sourceHash = Get-ManagerSourceHash $scriptUrl
@@ -195,14 +213,13 @@ function Update-Manager {
         $etag = if ($response.StatusCode -eq 200 -and $responseUri -eq [Uri]$scriptUrl) {
             @($response.Headers['ETag'])[0]
         }
-        if ($etag -cmatch $etagPattern) {
-            try {
-                $null = [IO.Directory]::CreateDirectory($AUTO_UPDATE_DIR)
-                [IO.File]::WriteAllLines($tmpCache, @($downloadHash, $sourceHash, $etag))
-                Move-Item -LiteralPath $tmpCache -Destination $cache -Force
-            } catch {
-                # An unwritable cache just means a full download next time.
-            }
+        if ($etag -cnotmatch $etagPattern) { $etag = '' }
+        try {
+            $null = [IO.Directory]::CreateDirectory($AUTO_UPDATE_DIR)
+            [IO.File]::WriteAllLines($tmpCache, @($downloadHash, $sourceHash, $etag))
+            Move-Item -LiteralPath $tmpCache -Destination $cache -Force
+        } catch {
+            # The downloaded script is usable even if the baseline could not be saved.
         }
         if (-not $updated) {
             Write-Host 'Management script is already up to date.'
@@ -215,15 +232,11 @@ function Update-Manager {
     }
 }
 
-# Claim the UTC day before downloading so simultaneous invocations share one check,
-# including when the download fails.
-function Invoke-ManagerUpdateCheck {
-    $now = [DateTime]::UtcNow
-    $day = $now.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+# Claim the UTC day so simultaneous invocations share one check, including failures.
+function Register-ManagerUpdateCheck {
+    param([string]$Day)
+
     $stamp = Join-Path $AUTO_UPDATE_DIR $day
-    if (Test-Path -LiteralPath $stamp -PathType Leaf) { return $false }
-    # A freshly downloaded manager already has the latest available script.
-    if ([IO.File]::GetLastWriteTimeUtc($PSCommandPath) -gt $now.AddDays(-1)) { return $false }
     $null = [IO.Directory]::CreateDirectory($AUTO_UPDATE_DIR)
     try {
         [IO.File]::Open($stamp, [IO.FileMode]::CreateNew).Dispose()
@@ -234,7 +247,7 @@ function Invoke-ManagerUpdateCheck {
     Get-ChildItem -LiteralPath $AUTO_UPDATE_DIR -File -Filter '????-??-??' |
         Where-Object { $_.Name -clt $day } |
         Remove-Item -ErrorAction SilentlyContinue
-    Update-Manager
+    return $true
 }
 
 function Get-ContainerOsType {
@@ -641,7 +654,7 @@ if ($Command -eq 'update-manager') {
 }
 $managerUpdated = $false
 try {
-    $managerUpdated = Invoke-ManagerUpdateCheck
+    $managerUpdated = Update-Manager -Automatic
 } catch {
     Write-Warning "Failed to update management script: $_"
 }

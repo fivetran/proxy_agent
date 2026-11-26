@@ -7,6 +7,7 @@ selects the host's script and translates installation arguments, allowing shared
 assertions for both platforms without Docker or network access.
 """
 
+import hashlib
 import stat
 import time
 
@@ -39,7 +40,10 @@ class TestInstall:
         started = int(time.time())
         sandbox.options['script_mtime_ns'] = (started - 2 * 86_400) * 10**9
         install()
-        assert (sandbox.installed / sandbox.manager.name).stat().st_mtime >= started
+        manager = sandbox.installed / sandbox.manager.name
+        assert manager.stat().st_mtime >= started
+        baseline = sandbox.installed / '.manager-auto-update/download'
+        assert baseline.read_text().splitlines()[0].lower() == hashlib.sha256(manager.read_bytes()).hexdigest()
         assert (sandbox.installed / 'version').read_text().strip() == '1.2.10'
         assert (sandbox.installed / 'config/config.json').read_bytes() == sandbox.config.read_bytes()
         settings = (sandbox.installed / f'settings.{EXT}').read_text()

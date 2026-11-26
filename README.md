@@ -152,7 +152,11 @@ repository's `main` branch for a changed script. After an update, the new script
 runs the original command with the same arguments. If the check fails, the installed
 script runs the command and tries again on the next day it is used. Automatic
 checks use the invoking user's proxy configuration. When the server supplies a
-strong ETag, later checks can skip downloading an unchanged script.
+strong ETag, later checks can skip downloading an unchanged script. The manager
+uses the hash of the last downloaded script to detect local edits. If it finds
+an edit, it warns you and pauses automatic updates. Run `update-manager` to
+replace the edited copy and resume automatic updates. Older installations
+without a recorded hash establish one on their first successful download.
 
 To update immediately, run `update-manager` as the user who installed the agent:
 
