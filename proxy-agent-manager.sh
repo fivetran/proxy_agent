@@ -288,11 +288,6 @@ run_native_manager() {
 }
 
 case "${1:-}" in
-    stop)
-        load_agent
-        log "Stopping ${CONTAINER_NAME}..."
-        stop_agent
-        ;;
     start)
         load_agent
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
