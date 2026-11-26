@@ -7,68 +7,65 @@ import java.io.IOException;
 import java.net.Authenticator;
 import java.net.HttpURLConnection;
 import java.net.PasswordAuthentication;
-import java.net.Proxy;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Locale;
+import java.util.stream.Stream;
 import org.jspecify.annotations.Nullable;
 
-/** Adapts installer proxy environment variables to the JDK's HTTP proxy selector. */
+/** Translates installer environment settings into JDK proxy properties. */
 final class InstallerProxy {
-    private static final String DISABLED_TUNNEL_SCHEMES = "jdk.http.auth.tunneling.disabledSchemes";
-    private static final String DISABLED_PROXY_SCHEMES = "jdk.http.auth.proxying.disabledSchemes";
+    private static final String SOCKS_HOST = "socksProxyHost";
+    private static final String SOCKS_PORT = "socksProxyPort";
+    private static final String SOCKS_VERSION = "socksProxyVersion";
+    private static final String SYSTEM_PROXIES = "java.net.useSystemProxies";
     private static final String INTEGRATED_SCHEMES = "NTLM,Negotiate,Kerberos";
 
     private final String http;
     private final String https;
-    private final List<String> exclusions;
-    private final boolean windows;
-    private final boolean customJdkSettings;
+    private final boolean environmentProxy;
+    private final @Nullable Authenticator defaultAuthenticator = Authenticator.getDefault();
 
-    private InstallerProxy(String http, String https, String exclusions, boolean windows) {
-        this.http = http;
-        this.https = https;
-        this.windows = windows;
-        this.customJdkSettings = hasJdkProxySettings() || System.getProperty("javax.net.ssl.trustStore") != null;
-        this.exclusions = Arrays.stream(exclusions.split(","))
-                .map(value -> value.strip().toLowerCase(Locale.ROOT))
-                .map(value -> value.startsWith(".") ? value.substring(1) : value)
-                .filter(value -> !value.isEmpty())
-                .toList();
-        if (!http.isEmpty() || !https.isEmpty()) {
-            // The JDK adds implicit loopback exclusions to nonempty http.nonProxyHosts.
-            // Apply the installer's exact bypass list per request instead.
-            System.setProperty("http.nonProxyHosts", "");
-            // Explicit credentials must not fall through to ambient Windows or Kerberos credentials.
-            disableIntegratedAuth(DISABLED_TUNNEL_SCHEMES);
-            disableIntegratedAuth(DISABLED_PROXY_SCHEMES);
+    private InstallerProxy(String http, String https, String exclusions) {
+        var explicitJdkProxy = Stream.of("http.proxyHost", "https.proxyHost", SOCKS_HOST)
+                .anyMatch(property -> !System.getProperty(property, "").isEmpty());
+        this.http = explicitJdkProxy ? "" : http;
+        this.https = explicitJdkProxy ? "" : https;
+        this.environmentProxy = !this.http.isEmpty() || !this.https.isEmpty();
+        if (environmentProxy) {
+            var bypass = Arrays.stream(exclusions.split(","))
+                    .map(String::strip)
+                    .filter(value -> !value.isEmpty() && !value.contains("/") && !value.contains("|"))
+                    .map(value -> value.startsWith(".") ? value.substring(1) : value)
+                    .filter(value -> !value.isEmpty())
+                    .flatMap(value -> value.equals("*") ? Stream.of(value) : Stream.of(value, "*." + value))
+                    .toList();
+            var patterns = String.join("|", bypass);
+            System.getProperties().putIfAbsent("http.nonProxyHosts", patterns);
+            System.getProperties().putIfAbsent("socksNonProxyHosts", patterns);
+        }
+        if (this.http.contains("@") || this.https.contains("@")) {
+            // Explicit credentials must take precedence over ambient credentials.
+            disableIntegratedAuth("jdk.http.auth.tunneling.disabledSchemes");
+            disableIntegratedAuth("jdk.http.auth.proxying.disabledSchemes");
         }
     }
 
-    /** Sets separate HTTP and HTTPS routes, following curl's variable precedence. */
+    /** Sets separate HTTP and HTTPS routes using the installer environment variables. */
     static InstallerProxy forUnix() {
         var all = env("all_proxy", env("ALL_PROXY", ""));
-        return new InstallerProxy(env("http_proxy", all),
-                env("https_proxy", env("HTTPS_PROXY", all)), env("no_proxy", env("NO_PROXY", "")), false);
+        return new InstallerProxy(env("http_proxy", all), env("https_proxy", env("HTTPS_PROXY", all)),
+                env("no_proxy", env("NO_PROXY", "")));
     }
 
-    /** Windows applies one explicit proxy to both protocols. */
-    static InstallerProxy forWindows(String address) {
-        return new InstallerProxy(address, address, env("NO_PROXY", ""), true);
-    }
-
-    /** Leaves explicitly supplied JDK settings in control of proxy selection and bypasses. */
-    static InstallerProxy forJdk() {
-        return new InstallerProxy("", "", "", false);
-    }
-
-    static boolean hasJdkProxySettings() {
-        return Boolean.getBoolean("java.net.useSystemProxies")
-                || !System.getProperty("http.proxyHost", "").isEmpty()
-                || !System.getProperty("https.proxyHost", "").isEmpty()
-                || !System.getProperty("socksProxyHost", "").isEmpty();
+    /** Uses Windows proxy discovery unless an explicit route is provided. */
+    static InstallerProxy forWindows() {
+        if (System.getProperty(SYSTEM_PROXIES) == null) {
+            System.setProperty(SYSTEM_PROXIES, "true");
+        }
+        var proxy = env("HTTPS_PROXY", env("HTTP_PROXY", ""));
+        return new InstallerProxy(proxy, proxy, env("NO_PROXY", ""));
     }
 
     private static void disableIntegratedAuth(String property) {
@@ -76,93 +73,81 @@ final class InstallerProxy {
         System.setProperty(property, disabled.isEmpty() ? INTEGRATED_SCHEMES : disabled + "," + INTEGRATED_SCHEMES);
     }
 
-    /**
-     * Opens the JDK connection with credentials scoped to the configured proxy.
-     * A bypass is passed explicitly so the JDK never supplies proxy credentials on a direct request.
-     */
+    /** Opens an HTTP connection using the default JDK proxy selector. */
     HttpURLConnection open(URI uri) throws IOException {
-        var scheme = uri.getScheme().toLowerCase(Locale.ROOT);
-        var address = proxyAddress(uri);
+        var protocol = uri.getScheme().toLowerCase(Locale.ROOT);
+        var address = protocol.equals("https") ? https : http;
+        if (environmentProxy) {
+            // Each installer request is completed before opening the next one. SOCKS properties are JVM-wide.
+            System.clearProperty(SOCKS_HOST);
+            Authenticator.setDefault(defaultAuthenticator);
+        }
         if (address.isEmpty()) {
             return (HttpURLConnection) uri.toURL().openConnection();
         }
-        if (bypasses(uri)) {
-            return (HttpURLConnection) uri.toURL().openConnection(Proxy.NO_PROXY);
-        }
-
-        var proxy = parseProxyUrl(address);
-        System.setProperty(scheme + ".proxyHost", proxy.getHost());
-        System.setProperty(scheme + ".proxyPort", Integer.toString(port(proxy)));
-        var connection = (HttpURLConnection) uri.toURL().openConnection();
-        if (proxy.getRawUserInfo() != null) {
-            connection.setAuthenticator(authenticator(proxy));
-        }
-        return connection;
-    }
-
-    boolean usesExplicitProxy(URI uri) {
-        return !proxyAddress(uri).isEmpty() && !bypasses(uri);
-    }
-
-    /** The JDK HTTP handler supports a plain HTTP forward proxy and host-based bypass rules. */
-    boolean requiresNativeTransport(URI uri) {
-        if (!usesExplicitProxy(uri)) {
-            return false;
-        }
-        var address = proxyAddress(uri);
-        var protocol = address.indexOf("://");
-        if (protocol >= 0 && !address.substring(0, protocol).equalsIgnoreCase("http")) {
-            return true;
-        }
-        var host = uri.getHost();
-        return !windows && (host.indexOf(':') >= 0 || host.matches("[0-9.]+"))
-                && exclusions.stream().anyMatch(rule -> rule.contains("/"));
-    }
-
-    boolean supportsNativeAuthentication() {
-        return windows;
-    }
-
-    boolean supportsNativeCertificateTrust() {
-        return !customJdkSettings;
-    }
-
-    private String proxyAddress(URI uri) {
-        return uri.getScheme().equalsIgnoreCase("https") ? https : http;
-    }
-
-    private boolean bypasses(URI uri) {
-        var host = uri.getHost().toLowerCase(Locale.ROOT);
-        return exclusions.stream().anyMatch(excluded ->
-                excluded.equals("*") || host.equals(excluded) || host.endsWith("." + excluded));
-    }
-
-    private static URI parseProxyUrl(String address) throws IOException {
-        try {
-            var proxy = URI.create(address.contains("://") ? address : "http://" + address);
-            if (proxy.getHost() != null && proxy.getPort() != 0 && proxy.getPort() <= 65535
-                    && "http".equalsIgnoreCase(proxy.getScheme())) {
-                return proxy;
+        var proxy = parse(address);
+        if (proxy.scheme().equals("http")) {
+            System.setProperty(protocol + ".proxyHost", proxy.host());
+            System.setProperty(protocol + ".proxyPort", Integer.toString(proxy.port()));
+            var connection = (HttpURLConnection) uri.toURL().openConnection();
+            if (proxy.userInfo() != null) {
+                connection.setAuthenticator(authenticator(proxy));
             }
+            return connection;
+        }
+
+        System.setProperty(SOCKS_HOST, proxy.host());
+        System.setProperty(SOCKS_PORT, Integer.toString(proxy.port()));
+        System.setProperty(SOCKS_VERSION, proxy.scheme().equals("socks4") ? "4" : "5");
+        if (proxy.userInfo() != null) {
+            // The JDK SOCKS socket uses the default authenticator, not the HTTP connection's authenticator.
+            Authenticator.setDefault(authenticator(proxy));
+        }
+        return (HttpURLConnection) uri.toURL().openConnection();
+    }
+
+    private static ProxyAddress parse(String address) throws ConfigurationException {
+        try {
+            var uri = URI.create(address.contains("://") ? address : "http://" + address);
+            var scheme = uri.getScheme().toLowerCase(Locale.ROOT);
+            var host = uri.getHost();
+            if (host == null || uri.getPort() == 0 || uri.getPort() > 65535) {
+                throw new ConfigurationException("Invalid proxy URL");
+            }
+            var port = uri.getPort();
+            var credentials = uri.getRawUserInfo();
+            return switch (scheme) {
+                case "http" -> new ProxyAddress(scheme, host, port < 0 ? 80 : port, credentials);
+                case "socks", "socks5" -> new ProxyAddress(scheme, host, port < 0 ? 1080 : port, credentials);
+                case "socks4" -> {
+                    if (credentials != null) {
+                        throw new ConfigurationException("SOCKS4 proxy URLs use the JDK's local username");
+                    }
+                    yield new ProxyAddress(scheme, host, port < 0 ? 1080 : port, null);
+                }
+                case "https" -> throw new ConfigurationException("The JDK does not support HTTPS proxy URLs");
+                case "socks4a", "socks5h" ->
+                        throw new ConfigurationException("The JDK cannot force proxy-side DNS for SOCKS URLs");
+                default -> throw new ConfigurationException("Unsupported proxy URL scheme");
+            };
         } catch (IllegalArgumentException e) {
             // URI diagnostics can contain the proxy password.
+            throw new ConfigurationException("Invalid proxy URL");
         }
-        throw new IOException("Invalid HTTP proxy URL");
     }
 
-    private static int port(URI proxy) {
-        return proxy.getPort() < 0 ? 80 : proxy.getPort();
-    }
-
-    private static Authenticator authenticator(URI proxy) {
-        var credentials = proxy.getRawUserInfo().split(":", 2);
+    private static Authenticator authenticator(ProxyAddress proxy) {
+        var credentials = proxy.userInfo().split(":", 2);
         var user = decode(credentials[0]);
         var password = credentials.length > 1 ? decode(credentials[1]) : "";
         return new Authenticator() {
             @Override
             protected @Nullable PasswordAuthentication getPasswordAuthentication() {
-                if (getRequestorType() != RequestorType.PROXY || !proxy.getHost().equalsIgnoreCase(getRequestingHost())
-                        || port(proxy) != getRequestingPort()) {
+                var proxyRequest = proxy.scheme().equals("http")
+                        ? getRequestorType() == RequestorType.PROXY
+                        : "SOCKS5".equals(getRequestingProtocol()) && getRequestingURL() == null;
+                if (!proxyRequest || !proxy.host().equalsIgnoreCase(getRequestingHost())
+                        || proxy.port() != getRequestingPort()) {
                     return null;
                 }
                 return new PasswordAuthentication(user, password.toCharArray());
@@ -172,5 +157,14 @@ final class InstallerProxy {
 
     private static String decode(String value) {
         return URLDecoder.decode(value.replace("+", "%2B"), UTF_8);
+    }
+
+    private record ProxyAddress(String scheme, String host, int port, @Nullable String userInfo) {}
+
+    /** A sanitized proxy setting error that can be displayed to the installer user. */
+    static final class ConfigurationException extends IOException {
+        private ConfigurationException(String message) {
+            super(message);
+        }
     }
 }
