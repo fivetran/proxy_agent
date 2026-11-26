@@ -18,7 +18,7 @@ from types import SimpleNamespace
 from urllib.parse import quote, urlsplit
 
 import pytest
-from support.harness import EXT, REPO, TAGS, WINDOWS, Sandbox
+from support.harness import EXT, IMAGE, REPO, TAGS, WINDOWS, Sandbox
 
 
 @pytest.fixture
@@ -47,9 +47,12 @@ def web_endpoints():
     non-loopback IPv4 address so .NET Framework cannot bypass it automatically.
     """
     endpoints = SimpleNamespace(
-        requests={'origin': [], 'proxy': []}, expected_auth=None, registry_body=None, script_body=None
+        requests={'origin': [], 'proxy': []}, expected_auth=None, registry_body=None, script_body=None,
+        configure_status=200,
     )
     script_path = f'/proxy-agent-manager.{EXT}'
+    configure_path = '/proxy-agent/configure'
+    endpoints.config = {'agent_id': 'configured-agent'}
     responses = {
         '/v2/stub/tags/list': ('application/json', json.dumps({'tags': TAGS}).encode()),
         script_path: ('text/plain', (REPO / script_path.lstrip('/')).read_bytes()),
@@ -60,6 +63,13 @@ def web_endpoints():
             """Serve fixtures while recording proxy and origin authentication headers."""
 
             def do_GET(self):
+                self.serve_response(responses)
+
+            def do_POST(self):
+                self.serve_response({configure_path: ('application/json', json.dumps(endpoints.config).encode())},
+                                    status=endpoints.configure_status)
+
+            def serve_response(self, fixtures, status=200):
                 authorization = self.headers.get('Proxy-Authorization')
                 endpoints.requests[role].append(
                     {
@@ -75,15 +85,15 @@ def web_endpoints():
                     self.end_headers()
                     return
                 path = urlsplit(self.path).path
-                if path not in responses:
+                if path not in fixtures:
                     self.send_error(404)
                     return
-                content_type, body = responses[path]
+                content_type, body = fixtures[path]
                 if path == '/v2/stub/tags/list' and endpoints.registry_body is not None:
                     body = endpoints.registry_body
                 if path == script_path and endpoints.script_body is not None:
                     body = endpoints.script_body
-                self.send_response(200)
+                self.send_response(status)
                 self.send_header('Content-Type', content_type)
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers()
@@ -113,7 +123,46 @@ def web_endpoints():
             setattr(endpoints, f'{role}_url', f'http://{host}:{server.server_port}')
         endpoints.registry_url = endpoints.origin_url + '/v2/stub/tags/list'
         endpoints.script_url = endpoints.origin_url + script_path
+        endpoints.configure_path = configure_path
         yield endpoints
+
+
+@pytest.mark.parametrize('source', ['token', 'websocket-config', 'rejected-token'])
+def test_install_configures_agent(native_web_sandbox, web_endpoints, source):
+    sandbox = native_web_sandbox
+    sandbox.env['NO_PROXY'] = '*'
+    secret = 'fixture-configure-secret'
+    token = base64.b64encode(f'abc123:{secret}'.encode()).decode()
+    config_path = ''
+    if source == 'websocket-config':
+        sandbox.config.write_text(json.dumps({
+            'agent_id': 'abc123', 'auth_token': secret, 'proxy_server_uri': 'wss://example.invalid',
+        }))
+        config_path = str(sandbox.config)
+    else:
+        sandbox.env['TOKEN'] = token
+    if source == 'rejected-token':
+        web_endpoints.configure_status = 401
+
+    result = sandbox.install(ConfigPath=config_path)
+
+    requests = web_endpoints.requests['origin']
+    assert [(request['path'], request['authorization']) for request in requests if request['authorization']] == [
+        (web_endpoints.configure_path, f'Basic {token}')
+    ]
+    transcript = result.stdout + ''.join(
+        path.read_text(encoding='utf-8-sig') for path in (sandbox.installed / 'logs').glob('*.log')
+    )
+    assert token not in transcript
+    assert secret not in transcript
+    if source == 'rejected-token':
+        assert result.returncode == 1, result.stdout
+        assert 'HTTP 401' in result.stdout
+        assert sandbox.image is None
+    else:
+        assert result.returncode == 0, result.stdout
+        assert json.loads((sandbox.installed / 'config/config.json').read_text()) == web_endpoints.config
+        assert sandbox.image == f'{IMAGE}:1.2.10-ubuntu-26.04'
 
 
 class TestProxyContract:

@@ -108,6 +108,22 @@ class TestInstall:
         assert (sandbox.installed / 'version').read_text().strip() == '1.2.10'
         assert (sandbox.installed / 'config/config.json').read_bytes() == sandbox.config.read_bytes()
 
+    def test_rejected_reinstall_preserves_the_working_config_and_version(self, sandbox, install):
+        install()
+        config = sandbox.installed / 'config/config.json'
+        original_config = config.read_bytes()
+        version = sandbox.installed / 'version'
+        original_version = version.read_bytes()
+        starts = sandbox.calls('manager')
+
+        sandbox.env['TOKEN'] = 'fixture-invalid-token'
+        sandbox.options['configure_status'] = 401
+        assert 'HTTP 401' in install(code=1, ConfigPath='')
+
+        assert config.read_bytes() == original_config
+        assert version.read_bytes() == original_version
+        assert sandbox.calls('manager') == starts == [['start']]
+
     @pytest.mark.parametrize(
         'options,known_gap',
         [
