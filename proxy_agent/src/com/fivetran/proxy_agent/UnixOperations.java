@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 /** Host operations shared by Linux and macOS. */
-final class UnixOperations implements OsOperations {
+class UnixOperations implements OsOperations {
     private static final Pattern LINUX_MEMORY = Pattern.compile("(?m)^MemTotal:\\s+([0-9]+)");
     private static final int BYTES_PER_MB = 1024 * 1024;
 
