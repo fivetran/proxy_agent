@@ -27,7 +27,7 @@ else
         die "Failed to download the native manager SHA-256 digest."
 fi
 
-scratch=$(mktemp -d)
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/proxy-agent-manager.XXXXXX")
 binary="$scratch/manager"
 trap 'rm -f -- "$binary"; rmdir -- "$scratch"' EXIT
 curl -fSsL --max-time 120 --url "$url" -o "$binary" || die "Failed to download the native manager."

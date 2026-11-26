@@ -59,7 +59,9 @@ def installer_environment(repo, root, env, *, windows):
     if not launcher.exists():
         launch_dir.mkdir()
         jar = installer_jar(repo)
-        java_home = os.environ.get('JAVA_HOME_17_X64') or os.environ.get('JAVA_HOME_17_ARM64')
+        java_home = (os.environ.get('JAVA_HOME_17_X64')
+                     or os.environ.get('JAVA_HOME_17_ARM64')
+                     or os.environ.get('JAVA_HOME_17_arm64'))
         if windows:
             framework = Path(os.environ['SystemRoot']) / 'Microsoft.NET/Framework64/v4.0.30319'
             source = launch_dir / 'DockerStub.cs'
