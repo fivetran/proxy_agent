@@ -334,11 +334,6 @@ case "$command" in
         pin_version "$CURRENT_VERSION"
         start_agent "$CURRENT_VERSION"
         ;;
-    stop)
-        load_agent
-        log "Stopping ${CONTAINER_NAME}..."
-        stop_agent
-        ;;
     restart)
         load_agent
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
@@ -372,6 +367,11 @@ case "$command" in
 
         # Older installations may run this script with an earlier manager or no binary.
         case "$command" in
+            stop)
+                load_agent
+                log "Stopping ${CONTAINER_NAME}..."
+                stop_agent
+                ;;
             status)
                 load_agent
                 docker ps -a --filter "name=${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"

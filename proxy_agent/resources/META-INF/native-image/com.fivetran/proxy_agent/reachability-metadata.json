@@ -33,6 +33,10 @@
       "methods": [{"name": "<init>", "parameterTypes": []}]
     },
     {
+      "type": "com.fivetran.proxy_agent.StopCommand",
+      "methods": [{"name": "<init>", "parameterTypes": []}]
+    },
+    {
       "type": "sun.net.www.protocol.http.Handler",
       "methods": [{"name": "<init>", "parameterTypes": []}]
     },
