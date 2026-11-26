@@ -10,11 +10,16 @@ the source-consistency check runs everywhere.
 import base64
 import hashlib
 import json
+import os
 import re
+import shutil
 import socket
+import subprocess
 import threading
+import time
 from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote, urlsplit
 
@@ -130,6 +135,53 @@ def web_endpoints():
         endpoints.script_url = endpoints.origin_url + script_path
         endpoints.configure_path = configure_path
         yield endpoints
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('bypass', ['', 'host', '*'], ids=['proxy', 'bypass-host', 'bypass-all'])
+def test_native_update_replaces_itself_and_migrates_an_existing_wrapper(tmp_path, web_endpoints, bypass):
+    binary = tmp_path / ('manager.exe' if WINDOWS else 'manager')
+    shutil.copy2(Path(os.environ['PROXY_AGENT_MANAGER_BIN']), binary)
+    wrapper = tmp_path / f'proxy-agent-manager.{EXT}'
+    if not bypass:
+        wrapper.write_text('# old manager script\n')
+
+    replacement = b'replacement native manager fixture'
+    web_endpoints.manager_binary = replacement
+    username, password = 'fixture-proxy-user', 'fixture-proxy-password'
+    web_endpoints.expected_auth = 'Basic ' + base64.b64encode(f'{username}:{password}'.encode()).decode()
+    env = {key: value for key, value in os.environ.items() if not key.upper().endswith('_PROXY')}
+    env.update(
+        PROXY_AGENT_MANAGER_BINARY_URL=web_endpoints.origin_url + '/native-manager',
+        PROXY_AGENT_MANAGER_BINARY_SHA256=hashlib.sha256(replacement).hexdigest(),
+        NO_PROXY=web_endpoints.origin_host if bypass == 'host' else bypass,
+    )
+    env['HTTP_PROXY' if WINDOWS else 'http_proxy'] = web_endpoints.proxy_url.replace(
+        'http://', f'http://{username}:{password}@'
+    )
+    result = subprocess.run([str(binary), 'update-manager'], env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert username not in result.stdout + result.stderr
+    assert password not in result.stdout + result.stderr
+
+    # Windows completes the replacement after the original process exits.
+    deadline = time.monotonic() + 15
+    template = REPO / 'proxy_agent/resources/com/fivetran/proxy_agent/compat' / wrapper.name
+    while time.monotonic() < deadline:
+        if binary.stat().st_size == len(replacement) and (bypass or wrapper.read_text() == template.read_text()):
+            break
+        time.sleep(0.1)
+    log = tmp_path / 'logs/manager-update.log'
+    assert binary.read_bytes() == replacement, log.read_text() if log.exists() else result.stdout
+    if bypass:
+        assert not wrapper.exists()
+        assert not web_endpoints.requests['proxy']
+        assert [request['path'] for request in web_endpoints.requests['origin']] == ['/native-manager']
+    else:
+        assert wrapper.read_text() == template.read_text()
+        assert not web_endpoints.requests['origin']
+        assert sum(request['proxy_authorization'] == web_endpoints.expected_auth
+                   for request in web_endpoints.requests['proxy']) == 1
 
 
 @pytest.mark.parametrize('source', ['token', 'websocket-config', 'rejected-token'])
