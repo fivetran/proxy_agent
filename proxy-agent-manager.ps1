@@ -554,13 +554,6 @@ function Invoke-NativeManager {
 }
 
 switch ($Command) {
-    'restart' {
-        . $loadAgent
-        $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
-        Assert-MemoryAllocation
-        Write-Log "Restarting $CONTAINER_NAME..."
-        if (-not (Start-CurrentProxyAgent)) { exit 1 }
-    }
     'upgrade' {
         . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
