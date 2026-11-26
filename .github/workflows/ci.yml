@@ -44,7 +44,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7.0.1
-      - run: shellcheck --severity=warning install.sh proxy-agent-manager.sh tests/stub/heartbeat.sh
+      - run: shellcheck --severity=warning install.sh proxy-agent-manager.sh tests/stub/heartbeat.sh .github/scripts/publish_manager.sh
 
   psscriptanalyzer:
     runs-on: ubuntu-latest
