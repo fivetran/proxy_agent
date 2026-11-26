@@ -168,7 +168,8 @@ without the native manager.
 downloads the platform binary and verifies its SHA-256. If the installation
 still has an older platform script, the update replaces it with a bundled
 forwarder at the same path. Run the native manager directly or keep using the
-`.sh` or `.ps1` path. The installed forwarder passes all arguments through.
+`.sh` or `.ps1` path. The installed forwarder downloads and verifies a
+missing native binary, then passes all arguments through.
 On Windows, updates from the installed executable complete after that process
 exits and report their outcome in `logs/manager-update.log`.
 

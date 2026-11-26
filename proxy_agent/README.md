@@ -4,8 +4,9 @@ The Java host CLI implements `manager install`. Installation checks
 prerequisites, prepares the installation directory, configures the agent, and
 pins the compatible image version, and starts the agent through the native
 manager. The installer places a small forwarding script beside the binary for
-callers that use the old path. It passes all arguments through and returns the
-native command's exit status.
+callers that use the old path. The forwarder downloads and verifies a missing
+binary, passes through all arguments, and returns the native command's exit
+status.
 
 The native executable also implements these manager commands.
 
