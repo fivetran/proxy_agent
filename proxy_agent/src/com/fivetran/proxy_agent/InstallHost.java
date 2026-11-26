@@ -59,6 +59,9 @@ final class InstallHost {
     }
 
     static byte[] configBody(String status, String body) throws IOException {
+        if (status.equals("401")) {
+            throw new IOException("Authentication failed (HTTP 401). Ensure your TOKEN is valid.");
+        }
         if (!status.equals("200")) {
             throw new IOException("Configure endpoint returned HTTP "
                     + (status.matches("[0-9]{3}") ? status : "unknown"));

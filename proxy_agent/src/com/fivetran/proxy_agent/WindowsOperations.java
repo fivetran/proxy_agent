@@ -9,12 +9,26 @@ import java.nio.file.Path;
 import java.util.Base64;
 import java.util.List;
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 
 /** Windows host operations using PowerShell for native authentication and system APIs. */
 final class WindowsOperations implements Operations {
     private static final String POWERSHELL_SETUP = "/com/fivetran/proxy_agent/windows-installer.ps1";
     private final InstallHost host = new InstallHost();
     private final String powerShell = InstallHost.env("PROXY_AGENT_INSTALLER_POWERSHELL", "powershell.exe");
+
+    private @Nullable InstallerHttp http;
+
+    @Override
+    public void configureProxy() throws IOException {
+        var address = InstallHost.env("HTTPS_PROXY", InstallHost.env("HTTP_PROXY", ""));
+        var explicitProxy = address.isEmpty() ? null : InstallerProxy.parseProxyUrl(address);
+        // Internet Options includes system bypass rules and PAC. Keep those requests on Windows.
+        var proxy = InstallerProxy.forWindows(explicitProxy);
+        if (explicitProxy != null && "http".equalsIgnoreCase(explicitProxy.getScheme())) {
+            http = new InstallerHttp(proxy);
+        }
+    }
 
     @Override
     public boolean isWindows() {
@@ -94,6 +108,15 @@ final class WindowsOperations implements Operations {
 
     @Override
     public void download(String url, Path target) throws IOException, InterruptedException {
+        InstallerHttp.parseUrl(url);
+        if (http != null) {
+            try {
+                http.download(url, target);
+                return;
+            } catch (InstallerHttp.WindowsTransportRequired e) {
+                // Windows handles integrated authentication and enterprise CA trust.
+            }
+        }
         var result = runPowerShell("""
                 Invoke-WebRequest -Uri $argument -OutFile $value -TimeoutSec 30 -UseBasicParsing
                 Unblock-File -LiteralPath $value
@@ -105,6 +128,14 @@ final class WindowsOperations implements Operations {
 
     @Override
     public List<String> getTags(String url) throws IOException, InterruptedException {
+        InstallerHttp.parseUrl(url);
+        if (http != null) {
+            try {
+                return http.registryTags(url);
+            } catch (InstallerHttp.WindowsTransportRequired e) {
+                // Windows handles integrated authentication and enterprise CA trust.
+            }
+        }
         var result = runPowerShell("""
                 $response = Invoke-RestMethod -Uri $argument -Method Get -TimeoutSec 30
                 foreach ($tag in $response.tags) { [Console]::WriteLine($tag) }
@@ -117,9 +148,25 @@ final class WindowsOperations implements Operations {
 
     @Override
     public byte[] configure(String url, String token) throws IOException, InterruptedException {
+        InstallerHttp.parseUrl(url);
+        InstallerHttp.checkToken(token);
+        if (http != null) {
+            try {
+                var config = http.configure(url, token);
+                var checked = runPowerShell("[Console]::InputEncoding = [Text.Encoding]::UTF8; "
+                                + "$null = [Console]::In.ReadToEnd() | ConvertFrom-Json",
+                        "", "", false, new String(config, UTF_8));
+                if (!checked.succeeded()) {
+                    throw new IOException("Configure endpoint returned an invalid JSON response");
+                }
+                return config;
+            } catch (InstallerHttp.WindowsTransportRequired e) {
+                // The proxy rejected the connection or TLS failed before the POST was sent.
+            }
+        }
         var result = runPowerShell("""
                 try {
-                    $response = Invoke-WebRequest -Uri $argument -Method Post -TimeoutSec 30 -UseBasicParsing `
+                    $response = Invoke-WebRequest -Uri $argument -Method Post -TimeoutSec 30 -UseBasicParsing -MaximumRedirection 0 `
                         -Headers @{ Authorization = "Basic $value"; Accept = 'application/json' }
                 } catch {
                     if (-not $_.Exception.Response) { exit 1 }
@@ -142,9 +189,6 @@ final class WindowsOperations implements Operations {
             throw new IOException("Failed to connect to configure endpoint");
         }
         var status = result.output().substring(0, endOfStatus).strip();
-        if (status.equals("401")) {
-            throw new IOException("Authentication failed (HTTP 401). Ensure your TOKEN is valid.");
-        }
         return InstallHost.configBody(status, result.output().substring(endOfStatus + 1));
     }
 
@@ -184,6 +228,11 @@ final class WindowsOperations implements Operations {
 
     private InstallHost.Result runPowerShell(String command, String argument, String value, boolean usesProxy)
             throws IOException, InterruptedException {
+        return runPowerShell(command, argument, value, usesProxy, null);
+    }
+
+    private InstallHost.Result runPowerShell(String command, String argument, String value, boolean usesProxy,
+            @Nullable String input) throws IOException, InterruptedException {
         var setup = Objects.requireNonNull(WindowsOperations.class.getResourceAsStream(POWERSHELL_SETUP));
         String script;
         try (setup) {
@@ -196,17 +245,13 @@ final class WindowsOperations implements Operations {
                 try {
                 """;
         if (usesProxy) {
-            script += "Set-WebProxyFromEnvironment -ProbeUri ([Uri]$argument)\n";
+            script += "Set-WebProxyFromEnvironment\n";
         }
         script += command + "\n} catch { exit 1 }\n";
         var encoded = Base64.getEncoder().encodeToString(script.getBytes(UTF_16LE));
         var process = InstallHost.builder(List.of(powerShell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded));
         process.environment().put("PROXY_AGENT_INSTALL_ARGUMENT", argument);
         process.environment().put("PROXY_AGENT_INSTALL_VALUE", value);
-        if (usesProxy) {
-            // The proxy setup logs only the proxy address, with credentials removed.
-            process.redirectError(ProcessBuilder.Redirect.INHERIT);
-        }
-        return InstallHost.capture(process, null);
+        return InstallHost.capture(process, input);
     }
 }

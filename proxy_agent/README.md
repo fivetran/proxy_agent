@@ -10,13 +10,17 @@ uses shared Java code for installation and delegates host operations to
 `UnixOperations` or `WindowsOperations`. macOS uses `UnixOperations` for
 engineering tests.
 
-On Unix, the native installer uses the JDK HTTP APIs. Set `http_proxy` for
-HTTP, `https_proxy` or `HTTPS_PROXY` for HTTPS, and `all_proxy` or
-`ALL_PROXY` as a fallback. The proxy URL uses `http://` and may include
-credentials. Set `no_proxy` or `NO_PROXY` to a comma-separated list of
-hosts or domain suffixes. On Windows, Java invokes PowerShell to preserve
-system proxy settings and integrated authentication, query CIM, and set
-config ACLs.
+On Unix, set `http_proxy` for HTTP, `https_proxy` or `HTTPS_PROXY` for
+HTTPS, and `all_proxy` or `ALL_PROXY` as a fallback. The Java installer
+uses these settings for HTTP forward proxies. Set `no_proxy` or `NO_PROXY`
+to a comma-separated list of hosts or domain suffixes.
+
+On Windows, set `HTTPS_PROXY` or its fallback `HTTP_PROXY` for both HTTP
+and HTTPS requests. `NO_PROXY` applies when a proxy is set in the
+environment. Java handles explicit HTTP proxies and uses the Windows web
+client for Internet Options and when Windows proxy authentication or
+certificate trust is needed. A proxy URL can contain credentials. When it
+omits them, Windows proxy authentication uses the current Windows identity.
 
 ## Build
 

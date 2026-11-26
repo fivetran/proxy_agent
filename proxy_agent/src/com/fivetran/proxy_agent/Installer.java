@@ -49,6 +49,7 @@ final class Installer {
         System.out.println("Installing Fivetran Proxy Agent...\n");
         var windowsVersion = checkPrerequisites(options, memoryMb);
 
+        operations.configureProxy();
         var directory = options.directory();
         if (Files.isDirectory(directory)) {
             System.out.println(directory + " already exists, will re-use it.");
