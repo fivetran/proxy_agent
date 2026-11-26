@@ -8,8 +8,6 @@ import subprocess
 import sys
 import tempfile
 
-from support.native_installer import installer_environment
-
 REPO = Path(__file__).resolve().parents[2]
 WINDOWS = sys.platform == 'win32'
 SHELL = os.environ.get('PROXY_AGENT_TEST_SHELL', 'powershell' if WINDOWS else 'bash')
@@ -96,13 +94,10 @@ class Sandbox:
     def run(self, *arguments, install=False, parameters=None):
         (self.root / 'options.json').write_text(json.dumps(self.options))
         script = REPO / f'install.{EXT}' if install else self.manager
-        env = self.env
-        if install:
-            env = installer_environment(REPO, self.root, env, windows=WINDOWS, stub_http=self.stub_http)
         if WINDOWS:
             return self.windows_runner(self.windows_request(script, arguments, parameters or {}),
-                                       shell=SHELL, env=env)
-        return invoke(script, arguments, parameters=parameters, env=env)
+                                       shell=SHELL, env=self.env)
+        return invoke(script, arguments, parameters=parameters, env=self.env)
 
     def windows_request(self, script, arguments, parameters):
         """Prepare the native host's arguments and requested Windows observations."""

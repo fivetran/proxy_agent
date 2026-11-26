@@ -1,40 +1,375 @@
 #!/usr/bin/env bash
+#
+#  Installer for Fivetran Proxy Agent on Linux using Docker
+#
+#  For more information:
+#     https://github.com/fivetran/proxy_agent
+#
 set -euo pipefail
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-if [ -n "${PROXY_AGENT_MANAGER_BIN:-}" ]; then
-    export PROXY_AGENT_INSTALLER_BINARY="$PROXY_AGENT_MANAGER_BIN"
-    exec "$PROXY_AGENT_MANAGER_BIN" install "$@"
+extract_json_string() {
+    grep -m1 -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$2" \
+        | sed "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/" || true
+}
+
+DEFAULT_FIVETRAN_API_URL="https://api.fivetran.com"
+
+usage() {
+    cat <<'EOF'
+Usage:
+  RUNTIME=docker ./install.sh <config.json> [--install-dir <dir>]
+  TOKEN="<token>" RUNTIME=docker ./install.sh [--install-dir <dir>]
+
+Options:
+  --install-dir <dir>   Installation directory (default: ~/fivetran-proxy-agent)
+EOF
+    exit 1
+}
+
+# ── Early checks ─────────────────────────────────────────────────────────────
+
+if [ "$(id -u)" -eq 0 ]; then
+    die "This script should not be run as root. Please run as a regular user."
 fi
 
-url="${PROXY_AGENT_MANAGER_BINARY_URL:-}"
-expected_hash="${PROXY_AGENT_MANAGER_BINARY_SHA256:-}"
-if [ -n "$url" ] || [ -n "$expected_hash" ]; then
-    if [ -z "$url" ] || ! [[ "$expected_hash" =~ ^[0-9a-fA-F]{64}$ ]]; then
-        die "Native manager download requires a URL and its SHA-256 digest."
+if [ "${RUNTIME:-}" != "docker" ]; then
+    die "RUNTIME must be set to 'docker' (got: '${RUNTIME:-}')."
+fi
+
+# ── Constants ────────────────────────────────────────────────────────────────
+
+DEFAULT_INSTALL_DIR="$HOME/fivetran-proxy-agent"
+MIN_DOCKER_VERSION="20.10.17"
+MIN_RECOMMENDED_CPU_COUNT=4
+DEFAULT_CONTAINER_MEMORY_MB=5120  # default memory (5GB) allocated to the proxy agent container
+MIN_RECOMMENDED_CONTAINER_MEMORY_MB=5120  # proxy agent container should get at least 5GB
+HOST_RESERVED_MEMORY_MB=1024  # leave at least this much RAM for the host on Linux
+MIN_RECOMMENDED_DISK_SPACE_MB=2048
+AGENT_SCRIPT="proxy-agent-manager.sh"
+# PROXY_AGENT_SCRIPT_URL and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
+# test suite can install the checked-out management script against a stub registry.
+AGENT_SCRIPT_URL="${PROXY_AGENT_SCRIPT_URL:-https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh}"
+REGISTRY_TAGS_URL="${PROXY_AGENT_REGISTRY_TAGS_URL:-https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list}"
+SETTINGS_FILE="settings.sh"
+
+WARNINGS=()
+ERRORS=()
+
+# ── Validation ───────────────────────────────────────────────────────────────
+
+check_dependencies() {
+    if ! command -v curl >/dev/null 2>&1; then
+        ERRORS+=("Required dependency 'curl' is not installed or not found in PATH. Please install curl and re-run this installer.")
     fi
-else
-    case "$(uname -m)" in
-        x86_64) platform=linux-x64 ;;
-        aarch64|arm64) platform=linux-aarch64 ;;
-        *) die "No native manager is available for this host architecture." ;;
-    esac
-    url="https://github.com/fivetran/proxy_agent/releases/download/manager-v0.1.0/manager-$platform"
-    expected_hash=$(curl -fSsL --max-time 30 --url "$url.sha256") ||
-        die "Failed to download the native manager SHA-256 digest."
-fi
+}
 
-scratch=$(mktemp -d)
-binary="$scratch/manager"
-trap 'rm -f -- "$binary"; rmdir -- "$scratch"' EXIT
-curl -fSsL --max-time 120 --url "$url" -o "$binary" || die "Failed to download the native manager."
-if command -v sha256sum >/dev/null; then
-    digest=$(sha256sum < "$binary")
-else
-    digest=$(shasum -a 256 < "$binary")
-fi
-expected_hash=$(printf '%s' "$expected_hash" | tr '[:upper:]' '[:lower:]')
-[ "${digest%% *}" = "$expected_hash" ] || die "Native manager SHA-256 does not match."
-chmod u+x "$binary"
-PROXY_AGENT_INSTALLER_BINARY="$binary" "$binary" install "$@"
+check_docker_version() {
+    if ! command -v docker &> /dev/null; then
+        ERRORS+=("docker is not installed")
+        return
+    fi
+
+    local version_output
+    if ! version_output=$(docker --version 2>&1); then
+        ERRORS+=("Failed to execute 'docker --version'. Docker may not be functioning properly")
+        return
+    fi
+
+    local version
+    version=$(echo "$version_output" | awk '{print $3}' | sed 's/,$//')
+    if [ -z "$version" ]; then
+        WARNINGS+=("Unable to determine Docker version")
+        return
+    fi
+
+    if [ "$(printf '%s\n' "$MIN_DOCKER_VERSION" "$version" | sort -V | head -n1)" != "$MIN_DOCKER_VERSION" ]; then
+        ERRORS+=("Docker version $version does not meet the minimum requirement of $MIN_DOCKER_VERSION")
+    fi
+
+    if ! docker info >/dev/null 2>&1; then
+        ERRORS+=("Docker is installed but the Docker daemon is not accessible. Ensure that Docker is running and that your user has permission to access the Docker daemon (for example, by adding your user to the 'docker' group and then logging out and back in).")
+        return
+    fi
+}
+
+check_rootless_linger() {
+    if ! docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -qw "rootless"; then
+        return
+    fi
+
+    if ! command -v loginctl &> /dev/null; then
+        WARNINGS+=("Rootless Docker detected but loginctl is not available. The Proxy Agent officially supports systemd as the init system. Ensure the agent is configured to start on boot for your init system.")
+        return
+    fi
+
+    local user
+    user=${USER:-$(id -un)}
+
+    local linger_status
+    linger_status=$(loginctl show-user "$user" -p Linger --value 2>/dev/null || true)
+    if [ "$linger_status" != "yes" ]; then
+        WARNINGS+=("Rootless Docker detected but user linger is not enabled. Run 'sudo loginctl enable-linger $user' to ensure the agent starts automatically on system boot.")
+    fi
+}
+
+prompt_memory_mb() {
+    local mb="${MEMORY_ALLOCATION_MB:-}"
+    if [ -z "$mb" ]; then
+        if [ -t 0 ]; then
+            local input
+            read -r -p "How much memory (in MB) should the proxy agent container use? [$DEFAULT_CONTAINER_MEMORY_MB]: " input
+            mb="${input:-$DEFAULT_CONTAINER_MEMORY_MB}"
+        else
+            mb="$DEFAULT_CONTAINER_MEMORY_MB"
+        fi
+    fi
+    if ! [[ "$mb" =~ ^[0-9]+$ ]] || [ "$mb" -lt 1 ]; then
+        die "Invalid memory amount: $mb (must be a positive integer, in MB)"
+    fi
+    echo "$mb"
+}
+
+check_resources() {
+    local memory_mb="$1"
+
+    local cpu_count
+    local total_mem_kb
+
+    if [ -f /proc/cpuinfo ]; then
+        cpu_count=$(grep -c "^processor" /proc/cpuinfo)
+    elif command -v nproc &> /dev/null; then
+        cpu_count=$(nproc)
+    else
+        WARNINGS+=("Unable to determine CPU count")
+        cpu_count=0
+    fi
+
+    if [ -f /proc/meminfo ]; then
+        total_mem_kb=$(grep "MemTotal" /proc/meminfo | awk '{print $2}')
+    else
+        WARNINGS+=("Unable to determine available memory")
+        total_mem_kb=0
+    fi
+
+    if [ "$cpu_count" -gt 0 ] && [ "$cpu_count" -lt "$MIN_RECOMMENDED_CPU_COUNT" ]; then
+        WARNINGS+=("CPU count ($cpu_count) is below the recommended minimum of $MIN_RECOMMENDED_CPU_COUNT")
+    fi
+
+    if [ "$memory_mb" -lt "$MIN_RECOMMENDED_CONTAINER_MEMORY_MB" ]; then
+        WARNINGS+=("Configured container memory (${memory_mb}MB) is below the recommended minimum of ${MIN_RECOMMENDED_CONTAINER_MEMORY_MB}MB")
+    fi
+
+    local total_mem_mb
+    if [ "$total_mem_kb" -gt 0 ]; then
+        total_mem_mb=$((total_mem_kb / 1024))
+        local max_recommended_mb=$((total_mem_mb - HOST_RESERVED_MEMORY_MB))
+        if [ "$memory_mb" -gt "$max_recommended_mb" ]; then
+            WARNINGS+=("Configured container memory (${memory_mb}MB) leaves less than ${HOST_RESERVED_MEMORY_MB}MB for the host (total RAM: ${total_mem_mb}MB)")
+        fi
+    fi
+}
+
+check_disk_space() {
+    local install_dir="$1"
+    local parent_dir
+    parent_dir=$(dirname "$install_dir")
+
+    if [ ! -d "$parent_dir" ]; then
+        return
+    fi
+
+    local df_output
+    if ! df_output=$(df -m "$parent_dir" 2>/dev/null); then
+        WARNINGS+=("Unable to determine available disk space for $parent_dir")
+        return
+    fi
+
+    local space_mb
+    space_mb=$(echo "$df_output" | awk 'NR==2 {print $4}')
+    if [ -z "$space_mb" ]; then
+        WARNINGS+=("Unable to determine available disk space for $parent_dir")
+        return
+    fi
+
+    if [ "$space_mb" -lt "$MIN_RECOMMENDED_DISK_SPACE_MB" ]; then
+        WARNINGS+=("Available disk space (${space_mb}MB) is below the recommended minimum of ${MIN_RECOMMENDED_DISK_SPACE_MB}MB")
+    fi
+}
+
+report_warnings_and_errors() {
+    if [ ${#WARNINGS[@]} -gt 0 ] || [ ${#ERRORS[@]} -gt 0 ]; then
+        if [ ${#WARNINGS[@]} -gt 0 ]; then
+            echo -e "\nWARNINGS:"
+            for warning in "${WARNINGS[@]}"; do
+                echo "  - $warning"
+            done
+        fi
+        if [ ${#ERRORS[@]} -gt 0 ]; then
+            echo -e "\nERRORS:"
+            for error in "${ERRORS[@]}"; do
+                echo "  - $error"
+            done
+            echo ""
+            die "Please resolve the above errors before proceeding."
+        fi
+        echo ""
+    fi
+}
+
+# ── Version resolution ───────────────────────────────────────────────────────
+
+get_latest_version() {
+    local tags_json
+    tags_json=$(curl -s -f --max-time 30 "$REGISTRY_TAGS_URL") || die "Unable to query image registry for latest version"
+
+    local version
+    version=$(echo "$tags_json" \
+        | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+-ubuntu-26\.04"' \
+        | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' \
+        | sort -V \
+        | tail -1 \
+        || true)
+    [ -n "$version" ] || die "Unable to determine latest Ubuntu 26.04 proxy agent version"
+    echo "$version"
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+main() {
+    local config_path=""
+    local install_dir="$DEFAULT_INSTALL_DIR"
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help)
+                usage
+                ;;
+            --install-dir)
+                [ $# -ge 2 ] || die "--install-dir requires a value"
+                install_dir="$2"
+                shift 2
+                ;;
+            -*)
+                die "Unknown option: $1"
+                ;;
+            *)
+                [ -z "$config_path" ] || die "Unexpected argument: $1"
+                config_path="$1"
+                shift
+                ;;
+        esac
+    done
+
+    if [ -z "${config_path:-}" ] && [ -z "${TOKEN:-}" ]; then
+        usage
+    fi
+    if [ -n "${config_path:-}" ] && [ ! -r "$config_path" ]; then
+        die "Config file not found or not readable: $config_path"
+    fi
+
+    # WebSocket agents (identified by proxy_server_uri) need a fresh gRPC-compatible config.
+    # Construct TOKEN from existing credentials to fetch one via the configure endpoint.
+    if [ -n "${config_path:-}" ] && [ -z "${TOKEN:-}" ] && grep -q '"proxy_server_uri"' "$config_path"; then
+        local agent_id auth_token
+        agent_id=$(extract_json_string "agent_id" "$config_path")
+        auth_token=$(extract_json_string "auth_token" "$config_path")
+        if [ -z "$agent_id" ] || [ -z "$auth_token" ]; then
+            die "Could not extract credentials from WebSocket config"
+        fi
+        TOKEN=$(printf '%s:%s' "$agent_id" "$auth_token" | base64 | tr -d '\n')
+        config_path=""
+        echo "Detected WebSocket agent configuration. Fetching updated config from Fivetran..."
+    fi
+
+    echo -e "Installing Fivetran Proxy Agent...\n"
+
+    local memory_mb
+    memory_mb=$(prompt_memory_mb)
+
+    # Pre-flight checks
+    echo -n "Checking prerequisites... "
+    check_dependencies
+    check_docker_version
+    check_rootless_linger
+    check_resources "$memory_mb"
+    check_disk_space "$install_dir"
+
+    if [ ${#WARNINGS[@]} -eq 0 ] && [ ${#ERRORS[@]} -eq 0 ]; then
+        echo -e "OK\n"
+    else
+        echo ""
+        report_warnings_and_errors
+    fi
+
+    # Directory setup
+    if [ -d "$install_dir" ]; then
+        echo "$install_dir already exists, will re-use it."
+    else
+        mkdir -p "$install_dir"
+    fi
+
+    if [ ! -w "$install_dir" ]; then
+        die "Insufficient permissions to write to $install_dir"
+    fi
+
+    mkdir -p "$install_dir/config" "$install_dir/logs"
+
+    # Persist chosen container memory for proxy-agent-manager.sh to read
+    echo "MEMORY_ALLOCATION_MB=${memory_mb}" > "$install_dir/$SETTINGS_FILE"
+
+    # Download management script from public repo
+    local tmp_script
+    tmp_script=$(mktemp "${install_dir}/${AGENT_SCRIPT}.XXXXXX")
+    if ! curl -fSsL --max-time 30 "$AGENT_SCRIPT_URL" -o "$tmp_script"; then
+        rm -f "$tmp_script"
+        die "Failed to download management script from $AGENT_SCRIPT_URL"
+    fi
+    chmod u+x "$tmp_script"
+    mv "$tmp_script" "$install_dir/$AGENT_SCRIPT"
+
+    # Bootstrap or copy config
+    if [ -z "${config_path:-}" ]; then
+        local api_url="${FIVETRAN_API_URL:-$DEFAULT_FIVETRAN_API_URL}"
+        echo "Fetching agent config from $api_url..."
+        local response
+        response=$(curl -sS -w "\n%{http_code}" \
+            -X POST \
+            -H "Authorization: Basic ${TOKEN}" \
+            -H "Accept: application/json" \
+            "${api_url}/proxy-agent/configure") || die "Failed to connect to configure endpoint"
+        # Extract status code (after last newline) and body (before last newline) using bash builtins
+        local http_code="${response##*$'\n'}"
+        local body="${response%$'\n'*}"
+        [ "$http_code" = "200" ] || die "Configure endpoint returned HTTP $http_code"
+        # umask 177 ensures the file is created with 600 permissions (no read/write for group/other)
+        (umask 177 && printf '%s' "$body" > "$install_dir/config/config.json")
+    else
+        (umask 177 && cat "$config_path" > "$install_dir/config/config.json")
+        echo "Config copied to $install_dir/config/config.json"
+    fi
+
+    # Resolve and pin version
+    echo "Resolving latest proxy agent version..."
+    local version
+    version=$(get_latest_version)
+    echo "$version" > "$install_dir/version"
+    echo "Using version $version"
+
+    # Start agent
+    echo "Changing current directory to $install_dir"
+    cd "$install_dir"
+    if ! ./$AGENT_SCRIPT start; then
+        echo "Installation complete, but agent failed to start."
+        echo "To try to start the agent again, run: ./$AGENT_SCRIPT start"
+        exit 1
+    fi
+
+    echo -e "\nInstallation complete."
+    echo "Install directory: $install_dir"
+}
+
+main "$@"
