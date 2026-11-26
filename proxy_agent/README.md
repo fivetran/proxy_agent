@@ -79,14 +79,13 @@ Windows also accepts `--windows-version ltsc2019|ltsc2022|ltsc2025` in
 Windows-container mode.
 
 On older script-only installations, updating the management script retrieves
-the latest full legacy manager from `main`. When that script runs
-`update-manager`, it checks for the native manager beside it and installs the
-verified release binary if it is missing. It leaves the running container,
+the platform wrapper from `main`. That wrapper downloads and verifies the
+native manager if it is missing. It leaves the running container,
 configuration, and pinned agent version alone.
 
 Both bootstrap scripts fetch the binary and SHA-256 digest from the latest
-manager release and install the platform script from the same release. They also accept `PROXY_AGENT_MANAGER_BIN` for a
-local native binary. For a different hosted binary, set
+manager release and install the platform script from the same release. They
+also accept `PROXY_AGENT_MANAGER_BIN` for a local native binary. For a different hosted binary, set
 `PROXY_AGENT_MANAGER_BINARY_URL` and
 `PROXY_AGENT_MANAGER_BINARY_SHA256` together. The bootstrapper verifies the
 download before invoking `manager install`. Use a digest from a trusted
