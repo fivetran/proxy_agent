@@ -4,6 +4,8 @@ The Java host CLI currently implements `manager install`. It checks
 prerequisites, prepares the installation directory, configures the agent, and
 pins the compatible image version. It installs and invokes the existing
 platform manager for `start`. The legacy manager handles the other commands.
+It validates configuration fetched from Fivetran and stages replacements before
+changing the files in an existing installation.
 
 The Java sources live under `src/com/fivetran/proxy_agent`. The installer
 uses shared Java code for installation and delegates host operations to

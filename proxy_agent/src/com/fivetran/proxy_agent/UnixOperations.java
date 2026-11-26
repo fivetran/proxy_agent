@@ -8,16 +8,59 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 /** Host operations shared by Linux and macOS. */
-final class UnixOperations implements Operations {
+final class UnixOperations implements OsOperations {
     private static final Pattern LINUX_MEMORY = Pattern.compile("(?m)^MemTotal:\\s+([0-9]+)");
     private static final int BYTES_PER_MB = 1024 * 1024;
 
-    private final CommandRunner commands = new CommandRunner();
+    private final CommandRunner commands;
+    private final Docker docker;
     private final boolean isMac = System.getProperty("os.name").startsWith("Mac");
 
+    UnixOperations(CommandRunner commands, Docker docker) {
+        this.commands = commands;
+        this.docker = docker;
+    }
+
     @Override
-    public boolean isWindows() {
-        return false;
+    public ProxySettings proxySettings() {
+        return ProxySettings.forUnix();
+    }
+
+    @Override
+    public Path defaultInstallDirectory() {
+        return Path.of(Environment.get("HOME", System.getProperty("user.home")), "fivetran-proxy-agent");
+    }
+
+    @Override
+    public String managerScriptName() {
+        return "proxy-agent-manager.sh";
+    }
+
+    @Override
+    public String managerBinaryName() {
+        return "manager";
+    }
+
+    @Override
+    public long reservedMemoryMb() {
+        return 1024;
+    }
+
+    @Override
+    public Settings settings(int memoryMb, String windowsVersion) {
+        return new Settings("settings.sh", "MEMORY_ALLOCATION_MB=" + memoryMb + "\n");
+    }
+
+    @Override
+    public void checkWindowsVersionOverride(String version) {
+        if (!version.isEmpty()) {
+            throw new IllegalArgumentException("Invalid Windows version: " + version);
+        }
+    }
+
+    @Override
+    public String containerOs(List<String> errors) {
+        return "linux";
     }
 
     @Override
@@ -38,14 +81,14 @@ final class UnixOperations implements Operations {
 
     @Override
     public void checkAutoStart(List<String> warnings) throws IOException, InterruptedException {
-        if (isMac || !commands.docker("info", "--format", "{{.SecurityOptions}}").output().contains("rootless")) {
+        if (isMac || !docker.capture("info", "--format", "{{.SecurityOptions}}").output().contains("rootless")) {
             return;
         }
         if (!hasCommand("loginctl")) {
             warnings.add("Rootless Docker detected but loginctl is not available. Ensure the agent starts on boot.");
             return;
         }
-        var user = CommandRunner.env("USER", System.getProperty("user.name"));
+        var user = Environment.get("USER", System.getProperty("user.name"));
         if (!commands.capture("loginctl", "show-user", user, "-p", "Linger", "--value").output().strip().equals("yes")) {
             warnings.add("Rootless Docker detected but user linger is not enabled. Run 'sudo loginctl enable-linger "
                     + user + "' to ensure the agent starts automatically on system boot.");
@@ -71,35 +114,29 @@ final class UnixOperations implements Operations {
     public long totalMemoryMb() throws IOException, InterruptedException {
         if (isMac) {
             var result = commands.capture("sysctl", "-n", "hw.memsize");
-            return result.succeeded() ? CommandRunner.parseSize(result.output().strip(), 0) / BYTES_PER_MB : 0;
+            return result.succeeded() ? parseMemory(result.output().strip()) / BYTES_PER_MB : 0;
         }
         var memInfo = Path.of("/proc/meminfo");
         if (Files.isReadable(memInfo)) {
             var matcher = LINUX_MEMORY.matcher(Files.readString(memInfo));
             if (matcher.find()) {
-                return CommandRunner.parseSize(matcher.group(1), 0) / 1024;
+                return parseMemory(matcher.group(1)) / 1024;
             }
         }
         return 0;
     }
 
+    private static long parseMemory(String value) {
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
     @Override
     public String windowsImageVariant() {
         throw new UnsupportedOperationException("Windows containers require a Windows host");
-    }
-
-    @Override
-    public String legacyCredential(Path path, String config) throws IOException {
-        return readConfigString(config, "agent_id") + ":" + readConfigString(config, "auth_token");
-    }
-
-    // Match the credential format accepted by the legacy Unix installer.
-    private static String readConfigString(String config, String key) throws IOException {
-        var matcher = Pattern.compile("\"" + key + "\"\\s*:\\s*\"([^\"]+)\"").matcher(config);
-        if (!matcher.find()) {
-            throw new IOException("Could not extract credentials from WebSocket config");
-        }
-        return matcher.group(1);
     }
 
     @Override
@@ -114,7 +151,7 @@ final class UnixOperations implements Operations {
     }
 
     @Override
-    public void start(Path manager) throws IOException, InterruptedException {
-        commands.start(manager, List.of(manager.toString(), "start"));
+    public int start(Path manager) throws IOException, InterruptedException {
+        return commands.run(manager.getParent(), List.of(manager.toString(), "start"));
     }
 }

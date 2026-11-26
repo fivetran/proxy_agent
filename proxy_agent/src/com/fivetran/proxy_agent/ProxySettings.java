@@ -1,6 +1,6 @@
 package com.fivetran.proxy_agent;
 
-import static com.fivetran.proxy_agent.CommandRunner.env;
+import static com.fivetran.proxy_agent.Environment.get;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import java.io.IOException;
@@ -52,24 +52,19 @@ final class ProxySettings {
         }
     }
 
-    /** Initializes proxy settings once before executing a manager command. */
-    static ProxySettings initialize(boolean windows) {
-        return windows ? forWindows() : forUnix();
-    }
-
-    private static ProxySettings forUnix() {
-        var all = env("all_proxy", env("ALL_PROXY", ""));
-        return new ProxySettings(env("http_proxy", all), env("https_proxy", env("HTTPS_PROXY", all)),
-                env("no_proxy", env("NO_PROXY", "")));
+    static ProxySettings forUnix() {
+        var all = get("all_proxy", get("ALL_PROXY", ""));
+        return new ProxySettings(get("http_proxy", all), get("https_proxy", get("HTTPS_PROXY", all)),
+                get("no_proxy", get("NO_PROXY", "")));
     }
 
     /** Uses Windows proxy discovery unless an explicit route is provided. */
-    private static ProxySettings forWindows() {
+    static ProxySettings forWindows() {
         if (System.getProperty(SYSTEM_PROXIES) == null) {
             System.setProperty(SYSTEM_PROXIES, "true");
         }
-        var proxy = env("HTTPS_PROXY", env("HTTP_PROXY", ""));
-        return new ProxySettings(proxy, proxy, env("NO_PROXY", ""));
+        var proxy = get("HTTPS_PROXY", get("HTTP_PROXY", ""));
+        return new ProxySettings(proxy, proxy, get("NO_PROXY", ""));
     }
 
     private static void disableIntegratedAuth(String property) {

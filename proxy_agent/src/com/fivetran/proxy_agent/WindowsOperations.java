@@ -1,25 +1,90 @@
 package com.fivetran.proxy_agent;
 
 import static java.nio.charset.StandardCharsets.UTF_16LE;
-import static java.nio.charset.StandardCharsets.UTF_8;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
 import java.util.List;
-import java.util.Objects;
 import org.jspecify.annotations.Nullable;
 
 /** Windows host operations using PowerShell for Windows system APIs. */
-final class WindowsOperations implements Operations {
-    private static final String POWERSHELL_SETUP = "/com/fivetran/proxy_agent/windows-installer.ps1";
-    private final CommandRunner commands = new CommandRunner();
-    private final String powerShell = CommandRunner.env("PROXY_AGENT_INSTALLER_POWERSHELL", "powershell.exe");
+final class WindowsOperations implements OsOperations {
+    private final CommandRunner commands;
+    private final Docker docker;
+    private final String powerShell = Environment.get("PROXY_AGENT_INSTALLER_POWERSHELL", "powershell.exe");
+
+    WindowsOperations(CommandRunner commands, Docker docker) {
+        this.commands = commands;
+        this.docker = docker;
+    }
 
     @Override
-    public boolean isWindows() {
-        return true;
+    public ProxySettings proxySettings() {
+        return ProxySettings.forWindows();
+    }
+
+    @Override
+    public Path defaultInstallDirectory() {
+        return Path.of(Environment.get("USERPROFILE", System.getProperty("user.home")), "fivetran-proxy-agent");
+    }
+
+    @Override
+    public String managerScriptName() {
+        return "proxy-agent-manager.ps1";
+    }
+
+    @Override
+    public String managerBinaryName() {
+        return "manager.exe";
+    }
+
+    @Override
+    public long reservedMemoryMb() {
+        return 3072;
+    }
+
+    @Override
+    public Settings settings(int memoryMb, String windowsVersion) {
+        var contents = "$MEMORY_ALLOCATION_MB = " + memoryMb + "\r\n";
+        if (!windowsVersion.isEmpty()) {
+            contents += "$WINDOWS_VERSION = '" + windowsVersion + "'\r\n";
+        }
+        return new Settings("settings.ps1", contents);
+    }
+
+    @Override
+    public void checkWindowsVersionOverride(String version) {}
+
+    @Override
+    public String containerOs(List<String> errors) throws IOException, InterruptedException {
+        var result = docker.capture("info", "--format", "{{.OSType}}");
+        var containerOs = result.output().strip();
+        if (!result.succeeded() || !(containerOs.equals("linux") || containerOs.equals("windows"))) {
+            errors.add("Unable to determine whether Docker is running Linux or Windows containers");
+        }
+        return containerOs;
+    }
+
+    @Override
+    public void describeLinuxImage() {
+        System.out.println("Using Linux container image");
+    }
+
+    @Override
+    public @Nullable Path diskCheckTarget(Path directory) {
+        return Files.exists(directory) ? directory : directory.getParent();
+    }
+
+    @Override
+    public void warnMissingDiskTarget(@Nullable Path target, List<String> warnings) {
+        warnings.add("Unable to determine available disk space: directory " + target + " does not exist");
+    }
+
+    @Override
+    public String diskLocation(Path target) {
+        return " on drive " + target.getRoot().toString().substring(0, 2) + " ";
     }
 
     @Override
@@ -58,7 +123,11 @@ final class WindowsOperations implements Operations {
         if (lines[0].equalsIgnoreCase("true")) {
             System.out.println("WARNING: Running as Administrator is not recommended. Consider running as a regular user.");
         }
-        return lines.length > 1 ? CommandRunner.parseSize(lines[1], 0) : 0;
+        try {
+            return lines.length > 1 ? Long.parseLong(lines[1]) : 0;
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     @Override
@@ -82,31 +151,6 @@ final class WindowsOperations implements Operations {
             case "26100" -> "ltsc2025";
             default -> throw new IOException("Unsupported Windows Server build '" + lines[1] + "'.");
         };
-    }
-
-    @Override
-    public String legacyCredential(Path path, String config) throws IOException, InterruptedException {
-        var result = runPowerShell("""
-                $config = Get-Content -LiteralPath $argument -Raw | ConvertFrom-Json
-                if (-not $config.agent_id -or -not $config.auth_token) { exit 1 }
-                $credential = "$($config.agent_id):$($config.auth_token)"
-                [Console]::Write($credential)
-                """, path.toAbsolutePath().toString());
-        if (!result.succeeded()) {
-            throw new IOException("Could not extract credentials from WebSocket config");
-        }
-        return result.output();
-    }
-
-    @Override
-    public void validateFetchedConfig(byte[] config) throws IOException, InterruptedException {
-        var checked = runPowerShell("""
-                [Console]::InputEncoding = [Text.Encoding]::UTF8
-                $null = [Console]::In.ReadToEnd() | ConvertFrom-Json
-                """, "", new String(config, UTF_8));
-        if (!checked.succeeded()) {
-            throw new IOException("Configure endpoint returned an invalid JSON response");
-        }
     }
 
     @Override
@@ -139,31 +183,23 @@ final class WindowsOperations implements Operations {
     }
 
     @Override
-    public void start(Path manager) throws IOException, InterruptedException {
-        commands.start(manager, List.of(powerShell, "-NoProfile", "-File", manager.toString(), "start"));
+    public int start(Path manager) throws IOException, InterruptedException {
+        return commands.run(manager.getParent(), List.of(powerShell, "-NoProfile", "-File", manager.toString(), "start"));
     }
 
     private CommandRunner.Result runPowerShell(String command, String argument)
             throws IOException, InterruptedException {
-        return runPowerShell(command, argument, null);
-    }
-
-    private CommandRunner.Result runPowerShell(String command, String argument,
-            @Nullable String input) throws IOException, InterruptedException {
-        var setup = Objects.requireNonNull(WindowsOperations.class.getResourceAsStream(POWERSHELL_SETUP));
-        String script;
-        try (setup) {
-            script = new String(setup.readAllBytes(), UTF_8);
-        }
-        // Keep paths and credentials as data so PowerShell never parses them as code.
-        script += """
+        // Pass paths as data so PowerShell never parses them as code.
+        var script = """
+                $ErrorActionPreference = 'Stop'
+                $ProgressPreference = 'SilentlyContinue'
+                [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
                 $argument = $env:PROXY_AGENT_INSTALL_ARGUMENT
                 try {
-                """;
-        script += command + "\n} catch { exit 1 }\n";
+                """ + command + "\n} catch { exit 1 }\n";
         var encoded = Base64.getEncoder().encodeToString(script.getBytes(UTF_16LE));
-        var process = CommandRunner.builder(List.of(powerShell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded));
+        var process = commands.builder(List.of(powerShell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded));
         process.environment().put("PROXY_AGENT_INSTALL_ARGUMENT", argument);
-        return CommandRunner.capture(process, input);
+        return commands.capture(process);
     }
 }

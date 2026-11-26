@@ -4,69 +4,44 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
-import org.jspecify.annotations.Nullable;
+import java.util.Set;
 
-/** Launches local commands and keeps installation credentials out of unrelated processes. */
+/** Runs local processes with a caller-specified environment filter. */
 final class CommandRunner {
-    private static final String DOCKER = "docker";
-    private static final String TOKEN = "TOKEN";
+    private final Set<String> excludedEnvironment;
 
-    static String env(String name, String fallback) {
-        var value = System.getenv(name);
-        return value == null || value.isEmpty() ? fallback : value;
-    }
-
-    Result docker(String... arguments) throws IOException, InterruptedException {
-        var command = new ArrayList<String>();
-        command.add(DOCKER);
-        command.addAll(List.of(arguments));
-        return capture(command);
+    CommandRunner(Set<String> excludedEnvironment) {
+        this.excludedEnvironment = Set.copyOf(excludedEnvironment);
     }
 
     Result capture(String... command) throws IOException, InterruptedException {
         return capture(List.of(command));
     }
 
-    private Result capture(List<String> command) throws IOException, InterruptedException {
-        return capture(builder(command), null);
+    Result capture(List<String> command) throws IOException, InterruptedException {
+        return capture(builder(command));
     }
 
-    void start(Path manager, List<String> command) throws IOException, InterruptedException {
-        var process = builder(command).directory(manager.getParent().toFile()).inheritIO().start();
+    int run(Path directory, List<String> command) throws IOException, InterruptedException {
+        var process = builder(command).directory(directory.toFile()).inheritIO().start();
         try {
-            if (process.waitFor() != 0) {
-                throw new IOException("Installation complete, but agent failed to start.");
-            }
+            return process.waitFor();
         } finally {
             process.destroy();
         }
     }
 
-    static long parseSize(String size, long fallback) {
-        try {
-            return Long.parseLong(size);
-        } catch (NumberFormatException e) {
-            return fallback;
-        }
-    }
-
-    static ProcessBuilder builder(List<String> command) {
+    ProcessBuilder builder(List<String> command) {
         var builder = new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.DISCARD);
-        builder.environment().remove(TOKEN);
+        excludedEnvironment.forEach(builder.environment()::remove);
         return builder;
     }
 
-    static Result capture(ProcessBuilder builder, @Nullable String input)
-            throws IOException, InterruptedException {
+    Result capture(ProcessBuilder builder) throws IOException, InterruptedException {
         var process = builder.start();
         try (var stdout = process.getInputStream()) {
-            try (var stdin = process.getOutputStream()) {
-                if (input != null) {
-                    stdin.write(input.getBytes(UTF_8));
-                }
-            }
+            process.getOutputStream().close();
             var output = new String(stdout.readAllBytes(), UTF_8);
             return new Result(process.waitFor(), output);
         } finally {
