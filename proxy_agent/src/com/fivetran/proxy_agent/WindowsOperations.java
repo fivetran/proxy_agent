@@ -79,7 +79,7 @@ class WindowsOperations implements OsOperations {
                         $source = Join-Path $stage $name
                         $destination = Join-Path $target $name
                         if ([IO.File]::Exists($destination)) {
-                            [IO.File]::Replace($source, $destination, $null)
+                            [IO.File]::Replace($source, $destination, [NullString]::Value)
                         } else {
                             [IO.File]::Move($source, $destination)
                         }
