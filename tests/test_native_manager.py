@@ -52,3 +52,24 @@ def test_script_delegates_only_if_the_installed_manager_supports_status(sandbox)
     assert second.returncode == 1, second.stdout
     assert "'agent_id' missing" in second.stdout
     assert len(sandbox.calls('docker')) == 1
+
+
+@pytest.mark.skipif(WINDOWS, reason='Uses the Bash launcher fixture')
+def test_script_forwards_a_native_command_from_the_default_case(sandbox):
+    launcher = sandbox.agent / 'manager'
+    launcher.write_text(
+        '#!/bin/sh\n'
+        'if [ "$1" = future-command ] && [ "$2" = --help ]; then exit 0; fi\n'
+        'printf "%s\\n" "$@"\n'
+        'exit 7\n'
+    )
+    launcher.chmod(0o700)
+    sandbox.config.unlink()
+
+    result = sandbox.run('future-command', '--option', 'value with spaces')
+
+    assert result.returncode == 7, result.stdout
+    assert result.stdout.splitlines() == [
+        '--agent-dir', str(sandbox.agent), 'future-command', '--option', 'value with spaces',
+    ]
+    assert not sandbox.calls('docker')
