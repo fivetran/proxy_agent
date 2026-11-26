@@ -288,10 +288,6 @@ run_native_manager() {
 }
 
 case "${1:-}" in
-    logs)
-        load_agent
-        docker logs -f "${CONTAINER_NAME}"
-        ;;
     stop)
         load_agent
         log "Stopping ${CONTAINER_NAME}..."
