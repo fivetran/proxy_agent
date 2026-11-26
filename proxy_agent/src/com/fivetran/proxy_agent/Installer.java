@@ -34,11 +34,13 @@ final class Installer {
     private final Manager manager;
     private final OsOperations operations;
     private final Docker docker;
+    private final DiskSpace diskSpace;
 
-    Installer(Manager manager) {
+    Installer(Manager manager, DiskSpace diskSpace) {
         this.manager = manager;
         this.operations = manager.operations();
         this.docker = manager.docker();
+        this.diskSpace = diskSpace;
     }
 
     void install(@Nullable Path configPath, @Nullable Path installDir, String windowsVersionOverride)
@@ -248,7 +250,7 @@ final class Installer {
         var minimumMb = containerOs.equals("windows") ? MIN_WINDOWS_DISK_MB : MIN_DISK_MB;
         long freeMb;
         try {
-            freeMb = Files.getFileStore(target).getUsableSpace() / (1024 * 1024);
+            freeMb = diskSpace.usableMb(target);
         } catch (IOException e) {
             warnings.add("Unable to determine available disk space for " + target);
             return;
@@ -359,4 +361,14 @@ final class Installer {
 
     /** Config bytes for a local file, or a token for the configuration endpoint. */
     private record Config(byte @Nullable [] contents, String token) {}
+
+    /** Measures usable disk space at the selected installation or Docker data path. */
+    @FunctionalInterface
+    interface DiskSpace {
+        long usableMb(Path target) throws IOException;
+
+        static long fileStore(Path target) throws IOException {
+            return Files.getFileStore(target).getUsableSpace() / (1024 * 1024);
+        }
+    }
 }

@@ -4,8 +4,10 @@ set -euo pipefail
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 if [ -n "${PROXY_AGENT_MANAGER_BIN:-}" ]; then
-    export PROXY_AGENT_INSTALLER_BINARY="$PROXY_AGENT_MANAGER_BIN"
-    exec "$PROXY_AGENT_MANAGER_BIN" install "$@"
+    binary=$(type -P -- "$PROXY_AGENT_MANAGER_BIN") || die "Native manager executable not found."
+    binary=$(cd -- "$(dirname -- "$binary")" && pwd -P)/$(basename -- "$binary")
+    export PROXY_AGENT_INSTALLER_BINARY="$binary"
+    exec "$binary" install "$@"
 fi
 
 url="${PROXY_AGENT_MANAGER_BINARY_URL:-}"

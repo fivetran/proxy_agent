@@ -16,19 +16,26 @@ public final class Application implements Callable<Integer> {
     private CommandLine.Model.@Nullable CommandSpec spec;
 
     private final Manager manager;
+    private final Installer installer;
 
-    private Application() {
-        var commands = new CommandRunner(Set.of("TOKEN"));
-        var docker = new Docker(commands);
-        var operations = OsOperations.forCurrentHost(commands, docker);
-        this.manager = new Manager(operations, docker, new HttpClient(operations.proxySettings()));
+    Application(Manager manager, Installer.DiskSpace diskSpace) {
+        this.manager = manager;
+        this.installer = new Installer(manager, diskSpace);
     }
 
     /** Runs the requested management command and returns its exit status to the caller. */
     public static void main(String[] args) {
-        var commandLine = new CommandLine(new Application());
+        var commands = new CommandRunner(Set.of("TOKEN"));
+        var docker = new Docker(commands);
+        var operations = OsOperations.forCurrentHost(commands, docker);
+        var manager = new Manager(operations, docker, new HttpClient(operations.proxySettings()));
+        System.exit(new Application(manager, Installer.DiskSpace::fileStore).execute(args));
+    }
+
+    int execute(String[] args) {
+        var commandLine = new CommandLine(this);
         commandLine.setExpandAtFiles(false);
-        System.exit(commandLine.execute(args));
+        return commandLine.execute(args);
     }
 
     @Override
@@ -39,5 +46,9 @@ public final class Application implements Callable<Integer> {
 
     Manager manager() {
         return manager;
+    }
+
+    Installer installer() {
+        return installer;
     }
 }
