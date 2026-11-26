@@ -1,0 +1,18 @@
+module(name = "proxy_agent")
+
+bazel_dep(name = "rules_java", version = "8.16.0")
+
+# Match engineering's Java 17 toolchain.
+single_version_override(module_name = "rules_java", version = "8.16.0")
+
+http_jar = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_jar")
+http_jar(
+    name = "jspecify",
+    sha256 = "1fad6e6be7557781e4d33729d49ae1cdc8fdda6fe477bb0cc68ce351eafdfbab",
+    urls = ["https://repo.maven.apache.org/maven2/org/jspecify/jspecify/1.0.0/jspecify-1.0.0.jar"],
+)
+http_jar(
+    name = "picocli",
+    sha256 = "f86e30fffd10d2b13b8caa8d4b237a7ee61f2ffccf5b1941de718b765d235bf8",
+    urls = ["https://repo.maven.apache.org/maven2/info/picocli/picocli/4.7.7/picocli-4.7.7.jar"],
+)
