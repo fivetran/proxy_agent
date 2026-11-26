@@ -1,10 +1,10 @@
 package com.fivetran.proxy_agent;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.nio.file.StandardOpenOption.TRUNCATE_EXISTING;
-import static java.nio.file.StandardOpenOption.WRITE;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.nio.file.Files;
@@ -24,83 +24,67 @@ final class InstallerHttp {
     private static final Pattern TAGS = Pattern.compile("\"tags\"\\s*:\\s*\\[([^]]*)]");
     private static final Pattern QUOTED_TAG = Pattern.compile("\"([0-9]+\\.[0-9]+\\.[0-9]+-[a-z0-9.-]+)\"");
 
-    private final InstallerProxy proxy;
+    private final @Nullable InstallerProxy proxy;
+    private final NativeRequest nativeRequest;
 
-    InstallerHttp(InstallerProxy proxy) {
+    InstallerHttp(@Nullable InstallerProxy proxy, NativeRequest nativeRequest) {
         this.proxy = proxy;
+        this.nativeRequest = nativeRequest;
+        // A dropped response does not tell us whether Fivetran processed the POST.
+        System.setProperty("sun.net.http.retryPost", "false");
     }
 
-    void download(String url, Path target) throws IOException {
+    /** Native transport for routing or authentication that the JDK cannot provide. */
+    interface NativeRequest {
+        Response request(URI uri, @Nullable String token) throws IOException, InterruptedException;
+    }
+
+    record Response(int status, byte[] body) {}
+
+    private interface BodyReader<T> {
+        T read(InputStream body) throws IOException;
+    }
+
+    void download(String url, Path target) throws IOException, InterruptedException {
         try {
-            var connection = openDownload(url);
-            try (var body = connection.getInputStream(); var file = Files.newOutputStream(target, WRITE, TRUNCATE_EXISTING)) {
-                body.transferTo(file);
-            } finally {
-                connection.disconnect();
-            }
-        } catch (WindowsTransportRequired e) {
-            throw e;
+            get(url, body -> {
+                try (var file = Files.newOutputStream(target)) {
+                    return body.transferTo(file);
+                }
+            });
         } catch (IOException e) {
             throw new IOException("Failed to download management script", e);
         }
     }
 
-    List<String> registryTags(String url) throws IOException {
+    List<String> registryTags(String url) throws IOException, InterruptedException {
         try {
-            var connection = openDownload(url);
-            try (var body = connection.getInputStream()) {
-                var tags = TAGS.matcher(new String(body.readAllBytes(), UTF_8));
-                if (tags.find()) {
-                    return QUOTED_TAG.matcher(tags.group(1)).results().map(match -> match.group(1)).toList();
-                }
-                return List.of();
-            } finally {
-                connection.disconnect();
-            }
-        } catch (WindowsTransportRequired e) {
-            throw e;
+            var tags = TAGS.matcher(get(url, body -> new String(body.readAllBytes(), UTF_8)));
+            return tags.find()
+                    ? QUOTED_TAG.matcher(tags.group(1)).results().map(match -> match.group(1)).toList()
+                    : List.of();
         } catch (IOException e) {
             throw new IOException("Unable to query image registry for latest version", e);
         }
     }
 
-    byte[] configure(String url, String token) throws IOException {
-        checkToken(token);
-        int status;
-        String contents = "";
-        try {
-            var connection = open(parseUrl(url));
-            try {
-                connection.setRequestMethod("POST");
-                connection.setRequestProperty("Authorization", "Basic " + token);
-                connection.setRequestProperty("Accept", "application/json");
-                status = responseCode(connection);
-                if (status == 200) {
-                    try (var body = connection.getInputStream()) {
-                        contents = new String(body.readAllBytes(), UTF_8);
-                    }
-                }
-            } finally {
-                connection.disconnect();
-            }
-        } catch (WindowsTransportRequired e) {
-            throw e;
-        } catch (IOException e) {
-            throw new IOException("Failed to connect to configure endpoint", e);
-        }
-        return InstallHost.configBody(Integer.toString(status), contents);
-    }
-
-    private HttpURLConnection openDownload(String url) throws IOException {
-        var uri = parseUrl(url);
+    private <T> T get(String url, BodyReader<T> read) throws IOException, InterruptedException {
+        var uri = parseUrl(null, url);
         for (var redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
-            var connection = open(uri);
-            var success = false;
+            if (proxy == null || proxy.requiresNativeTransport(uri)) {
+                return readNative(uri, read);
+            }
+            var connection = open(uri, proxy);
             try {
-                var status = responseCode(connection);
+                connectHttps(connection);
+                var status = connection.getResponseCode();
+                if (status == 407 && connection.usingProxy() && connection.getHeaderField("Proxy-Authenticate") != null) {
+                    throw new ProxyConnectionFailure(false);
+                }
                 if (status >= 200 && status < 300) {
-                    success = true;
-                    return connection;
+                    try (var body = connection.getInputStream()) {
+                        return read.read(body);
+                    }
                 }
                 var location = connection.getHeaderField("Location");
                 if (status < 300 || status >= 400 || location == null) {
@@ -111,16 +95,83 @@ final class InstallerHttp {
                     throw new IOException("Download redirected from HTTPS to HTTP");
                 }
                 uri = destination;
-            } finally {
-                if (!success) {
-                    connection.disconnect();
+            } catch (ProxyConnectionFailure e) {
+                if (!e.canUseNativeTransport(proxy)) {
+                    throw e;
                 }
+                connection.disconnect();
+                return readNative(uri, read);
+            } finally {
+                connection.disconnect();
             }
         }
         throw new IOException("Too many redirects");
     }
 
-    private HttpURLConnection open(URI uri) throws IOException {
+    private <T> T readNative(URI uri, BodyReader<T> read) throws IOException, InterruptedException {
+        var response = nativeRequest.request(uri, null);
+        if (response.status() < 200 || response.status() >= 300) {
+            throw new IOException("Download returned HTTP " + response.status());
+        }
+        return read.read(new ByteArrayInputStream(response.body()));
+    }
+
+    byte[] configure(String url, String token) throws IOException, InterruptedException {
+        checkToken(token);
+        Response response;
+        try {
+            var uri = parseUrl(null, url);
+            response = post(uri, token);
+        } catch (IOException e) {
+            throw new IOException("Failed to connect to configure endpoint", e);
+        }
+        if (response.status() == 401) {
+            throw new IOException("Authentication failed (HTTP 401). Ensure your TOKEN is valid.");
+        }
+        if (response.status() != 200) {
+            throw new IOException("Configure endpoint returned HTTP " + response.status());
+        }
+        return response.body();
+    }
+
+    private Response post(URI uri, String token) throws IOException, InterruptedException {
+        // Plain HTTP has no CONNECT handshake. Use the native transport up front where it
+        // may need to authenticate a proxy, since a forwarded 407 could come from the origin.
+        if (proxy == null || proxy.requiresNativeTransport(uri)
+                || (proxy.supportsNativeAuthentication() && uri.getScheme().equalsIgnoreCase("http")
+                        && proxy.usesExplicitProxy(uri))) {
+            return nativeRequest.request(uri, token);
+        }
+        try {
+            return postJava(uri, token, proxy);
+        } catch (ProxyConnectionFailure e) {
+            if (!e.canUseNativeTransport(proxy)) {
+                throw e;
+            }
+            return nativeRequest.request(uri, token);
+        }
+    }
+
+    private static Response postJava(URI uri, String token, InstallerProxy proxy) throws IOException {
+        var connection = open(uri, proxy);
+        try {
+            connection.setRequestMethod("POST");
+            connection.setRequestProperty("Authorization", "Basic " + token);
+            connection.setRequestProperty("Accept", "application/json");
+            connectHttps(connection);
+            var status = connection.getResponseCode();
+            if (status == 200) {
+                try (var body = connection.getInputStream()) {
+                    return new Response(status, body.readAllBytes());
+                }
+            }
+            return new Response(status, new byte[0]);
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    private static HttpURLConnection open(URI uri, InstallerProxy proxy) throws IOException {
         var connection = proxy.open(uri);
         connection.setConnectTimeout(TIMEOUT_MILLIS);
         connection.setReadTimeout(TIMEOUT_MILLIS);
@@ -128,7 +179,7 @@ final class InstallerHttp {
         return connection;
     }
 
-    private static int responseCode(HttpURLConnection connection) throws IOException {
+    private static void connectHttps(HttpURLConnection connection) throws IOException {
         // HTTPS connect establishes the tunnel and validates the certificate before sending any
         // origin authorization or POST. Only failures at this stage may fall back to Windows.
         if (connection.getURL().getProtocol().equals("https")) {
@@ -136,39 +187,36 @@ final class InstallerHttp {
                 connection.connect();
             } catch (SSLHandshakeException e) {
                 if (e.getCause() instanceof CertificateException) {
-                    throw new WindowsTransportRequired();
+                    throw new ProxyConnectionFailure(true);
                 }
                 throw e;
             } catch (IOException e) {
                 if (e.getMessage() != null && PROXY_CONNECT_REJECTED.matcher(e.getMessage()).matches()) {
-                    throw new WindowsTransportRequired();
+                    throw new ProxyConnectionFailure(false);
                 }
                 throw e;
             }
         }
-        var status = connection.getResponseCode();
-        if (status == 407 && connection.getURL().getProtocol().equals("http") && connection.usingProxy()
-                && connection.getHeaderField("Proxy-Authenticate") != null) {
-            throw new WindowsTransportRequired();
-        }
-        return status;
     }
 
-    /** A Windows backend can handle this proxy or certificate failure without replaying an origin POST. */
-    static final class WindowsTransportRequired extends IOException {
-        private WindowsTransportRequired() {
+    /** A proxy or certificate failure eligible for native transport. */
+    private static final class ProxyConnectionFailure extends IOException {
+        private final boolean certificateFailure;
+
+        private ProxyConnectionFailure(boolean certificateFailure) {
             super("Unable to authenticate the proxy or verify the HTTPS certificate");
+            this.certificateFailure = certificateFailure;
+        }
+
+        private boolean canUseNativeTransport(InstallerProxy proxy) {
+            return certificateFailure ? proxy.supportsNativeCertificateTrust() : proxy.supportsNativeAuthentication();
         }
     }
 
-    static void checkToken(String token) throws IOException {
+    private static void checkToken(String token) throws IOException {
         if (token.indexOf('\r') >= 0 || token.indexOf('\n') >= 0) {
             throw new IOException("Invalid TOKEN");
         }
-    }
-
-    static URI parseUrl(String url) throws IOException {
-        return parseUrl(null, url);
     }
 
     private static URI parseUrl(@Nullable URI base, String url) throws IOException {

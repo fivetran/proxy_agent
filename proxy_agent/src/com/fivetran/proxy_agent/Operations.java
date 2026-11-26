@@ -26,14 +26,9 @@ interface Operations {
 
     String legacyCredential(Path path, String config) throws IOException, InterruptedException;
 
-    /** Configures Java proxy properties before opening any installer connection. */
-    void configureProxy() throws IOException;
+    InstallerHttp installerHttp() throws IOException;
 
-    void download(String url, Path target) throws IOException, InterruptedException;
-
-    List<String> getTags(String url) throws IOException, InterruptedException;
-
-    byte[] configure(String url, String token) throws IOException, InterruptedException;
+    default void validateFetchedConfig(byte[] config) throws IOException, InterruptedException {}
 
     Path createProtectedConfig(Path directory) throws IOException, InterruptedException;
 
