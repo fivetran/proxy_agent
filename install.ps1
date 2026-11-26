@@ -82,15 +82,25 @@ $scratch = $null
 $checksum = $null
 $previousBinary = $env:PROXY_AGENT_INSTALLER_BINARY
 $previousPowerShell = $env:PROXY_AGENT_INSTALLER_POWERSHELL
+$previousScriptUrl = $env:PROXY_AGENT_SCRIPT_URL
 try {
     if (-not $binary) {
-        $release = 'https://github.com/fivetran/proxy_agent/releases/download/manager-v0.1.0'
         $url = $env:PROXY_AGENT_MANAGER_BINARY_URL
         $expectedHash = $env:PROXY_AGENT_MANAGER_BINARY_SHA256
         if (($url -or $expectedHash) -and (-not $url -or $expectedHash -notmatch '^[0-9a-f]{64}$')) {
             throw 'Native manager download requires a URL and its SHA-256 digest.'
         }
-        if (-not $url) { $url = "$release/manager-windows-x64.exe" }
+        if (-not $url) {
+            $latest = [Uri]'https://api.github.com/repos/fivetran/proxy_agent/releases/latest'
+            Set-WebProxyFromEnvironment -ProbeUri $latest
+            $releaseInfo = Invoke-RestMethod -Uri $latest -UseBasicParsing -TimeoutSec 30
+            if ($releaseInfo.tag_name -cnotmatch '^manager-v[0-9][0-9A-Za-z._-]*$') {
+                throw 'Invalid native manager release tag.'
+            }
+            $release = "https://github.com/fivetran/proxy_agent/releases/download/$($releaseInfo.tag_name)"
+            $url = "$release/manager-windows-x64.exe"
+            if (-not $env:PROXY_AGENT_SCRIPT_URL) { $env:PROXY_AGENT_SCRIPT_URL = "$release/proxy-agent-manager.ps1" }
+        }
 
         $scratch = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())
         $null = [IO.Directory]::CreateDirectory($scratch)
@@ -132,6 +142,7 @@ try {
 } finally {
     $env:PROXY_AGENT_INSTALLER_BINARY = $previousBinary
     $env:PROXY_AGENT_INSTALLER_POWERSHELL = $previousPowerShell
+    $env:PROXY_AGENT_SCRIPT_URL = $previousScriptUrl
     Remove-Item Env:\TOKEN -ErrorAction SilentlyContinue
     if ($scratch) {
         Remove-Item -LiteralPath $binary -Force -ErrorAction SilentlyContinue
