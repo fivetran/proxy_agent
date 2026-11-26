@@ -23,6 +23,11 @@ final class WindowsOperations implements Operations {
     }
 
     @Override
+    public boolean hasCommand(String name) throws IOException, InterruptedException {
+        return commands.capture("where.exe", "/q", name + ".exe").succeeded();
+    }
+
+    @Override
     public void checkUser() {
         // Windows permits administrators. The host probe reports a warning.
     }
