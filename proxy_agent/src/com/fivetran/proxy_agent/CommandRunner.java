@@ -2,13 +2,10 @@ package com.fivetran.proxy_agent;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
-import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
 
 /** Launches local commands and keeps installation credentials out of unrelated processes. */
@@ -28,15 +25,8 @@ final class CommandRunner {
         return capture(command);
     }
 
-    boolean hasCommand(String name, boolean isWindows) {
-        var path = env("PATH", "");
-        for (var directory : path.split(Pattern.quote(File.pathSeparator))) {
-            var candidate = Path.of(directory, name + (isWindows ? ".exe" : ""));
-            if (Files.isRegularFile(candidate) && Files.isExecutable(candidate)) {
-                return true;
-            }
-        }
-        return false;
+    boolean hasCommand(String name, boolean isWindows) throws IOException, InterruptedException {
+        return isWindows ? capture("where.exe", "/q", name + ".exe").succeeded() : capture("which", name).succeeded();
     }
 
     Result capture(String... command) throws IOException, InterruptedException {
