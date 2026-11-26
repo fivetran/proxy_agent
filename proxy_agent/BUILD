@@ -18,6 +18,18 @@ java_binary(
     runtime_deps = [":proxy_agent"],
 )
 
+java_test(
+    name = "tests",
+    size = "small",
+    srcs = ["test/com/fivetran/proxy_agent/ManagerCommandTest.java"],
+    test_class = "com.fivetran.proxy_agent.ManagerCommandTest",
+    deps = [
+        ":proxy_agent",
+        "@hamcrest//jar",
+        "@junit4//jar",
+    ],
+)
+
 java_binary(
     name = "test_manager",
     testonly = True,

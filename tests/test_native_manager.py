@@ -1,38 +1,10 @@
-"""Check the Java manager's command contracts with isolated installations."""
+"""Check the script dispatch against an isolated manager."""
 
-import json
 import shutil
 
 import pytest
 from support.harness import REPO, WINDOWS
-from support.native_installer import installer_environment, invoke_manager
-
-
-@pytest.fixture
-def native_command(sandbox):
-    def run(*arguments):
-        (sandbox.root / 'options.json').write_text(json.dumps(sandbox.options))
-        return invoke_manager(REPO, sandbox.root, sandbox.env,
-                              ['--agent-dir', str(sandbox.agent), *arguments], windows=WINDOWS)
-    return run
-
-
-def test_status_filters_for_the_installed_agent(sandbox, native_command):
-    sandbox.version.write_text('invalid version')
-    result = native_command('status')
-    assert result.returncode == 0, result.stdout
-    assert 'NAMES IMAGE STATUS' in result.stdout
-    assert sandbox.calls('docker') == [
-        ['ps', '-a', '--filter', 'name=proxy-agent-abc123', '--format', r'table {{.Names}}\t{{.Image}}\t{{.Status}}'],
-    ]
-
-
-def test_status_rejects_a_missing_config_before_running_docker(sandbox, native_command):
-    sandbox.config.unlink()
-    result = native_command('status')
-    assert result.returncode == 1, result.stdout
-    assert 'Config file not found' in result.stdout
-    assert not sandbox.calls('docker')
+from support.native_installer import installer_environment
 
 
 @pytest.mark.skipif(WINDOWS, reason='Uses the Bash launcher fixture')
