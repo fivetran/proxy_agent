@@ -45,29 +45,100 @@ check_memory_allocation() {
     fi
 }
 
+manager_hash() {
+    local digest
+    local -a hash_command=(sha256sum)
+    if ! command -v sha256sum >/dev/null; then
+        hash_command=(shasum -a 256)
+    fi
+    digest=$("${hash_command[@]}") || return 1
+    printf '%s\n' "${digest%% *}"
+}
+
 # Download beside the installed script so rename replaces it atomically.
 # The subshell confines the cleanup trap to this command.
 # Exit 0 after replacement, 2 if current, and 1 on failure.
 update_manager() (
     local script_url="${PROXY_AGENT_SCRIPT_URL:-https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh}"
-    local tmp_script
-    tmp_script=$(mktemp "$BASE_DIR/.proxy-agent-manager.XXXXXX") || exit 1
-    trap 'rm -f "$tmp_script"' EXIT
-
-    echo "Downloading management script..."
-    if ! curl -fSsL --max-time 30 "$script_url" -o "$tmp_script"; then
-        echo "ERROR: Failed to download management script" >&2
-        exit 1
+    local tmp_script tmp_headers response
+    local current_hash='' saved_hash='' source_hash='' saved_source='' etag='' locally_modified=false
+    local cache="$AUTO_UPDATE_DIR/download" etag_pattern='^"[!#-~]*"$'
+    local -a headers=()
+    if [ -f "$cache" ]; then
+        {
+            IFS= read -r saved_hash
+            IFS= read -r saved_source
+            IFS= read -r etag
+        } < "$cache" 2>/dev/null || true
     fi
+    if [[ "$saved_hash" =~ ^[0-9a-f]{64}$ ]]; then
+        current_hash=$(manager_hash < "$0" 2>/dev/null) || current_hash=''
+        [ -z "$current_hash" ] || [ "$saved_hash" = "$current_hash" ] || locally_modified=true
+    fi
+    if [ -n "$current_hash" ] && [ "$locally_modified" = false ] && [[ "$etag" =~ $etag_pattern ]]; then
+        source_hash=$(printf '%s' "$script_url" | manager_hash 2>/dev/null) || source_hash=''
+        if [ -n "$source_hash" ] && [ "$saved_source" = "$source_hash" ]; then
+            headers=(-H "If-None-Match: $etag")
+        fi
+    fi
+
+    tmp_script=$(mktemp "$BASE_DIR/.proxy-agent-manager.XXXXXX") || exit 1
+    tmp_headers="$tmp_script.headers"
+    trap 'rm -f "$tmp_script" "$tmp_headers"' EXIT
+
+    echo "Checking for management script updates..."
+    while :; do
+        if ! response=$(curl -fSsL --max-time 30 "${headers[@]+"${headers[@]}"}" \
+            -D "$tmp_headers" -w '%{http_code} %{num_redirects}' -o "$tmp_script" "$script_url"); then
+            echo "ERROR: Failed to download management script" >&2
+            exit 1
+        fi
+        case "$response" in
+            '304 0')
+                if [ -n "${headers[0]:-}" ]; then
+                    echo "Management script is already up to date."
+                    exit 2
+                fi
+                ;;
+            '304 '*)
+                # The redirected resource can reuse the same tag for different bytes.
+                if [ -n "${headers[0]:-}" ]; then
+                    headers=()
+                    continue
+                fi
+                ;;
+        esac
+        break
+    done
     if [ ! -s "$tmp_script" ] || ! bash -n "$tmp_script"; then
         echo "ERROR: Downloaded management script is empty or has invalid syntax" >&2
         exit 1
     fi
-    if cmp -s "$tmp_script" "$0"; then
+    # Save the validated download hash alongside the ETag.
+    local download_hash=''
+    source_hash=''
+    etag=''
+    if [ "$response" = '200 0' ]; then
+        etag=$(awk 'tolower($1) == "etag:" { sub(/\r$/, "", $2); tag = $2 } /^HTTP\// { tag = "" } END { print tag }' "$tmp_headers")
+        if [[ "$etag" =~ $etag_pattern ]]; then
+            source_hash=$(printf '%s' "$script_url" | manager_hash 2>/dev/null) || source_hash=''
+            download_hash=$(manager_hash < "$tmp_script" 2>/dev/null) || download_hash=''
+        fi
+    fi
+    local updated=false
+    if ! cmp -s "$tmp_script" "$0"; then
+        chmod u+x "$tmp_script" && mv -f -- "$tmp_script" "$0" || exit 1
+        updated=true
+    fi
+    if [ -n "$download_hash" ]; then
+        (mkdir -p -- "$AUTO_UPDATE_DIR" &&
+            printf '%s\n' "$download_hash" "$source_hash" "$etag" > "$tmp_headers" &&
+            mv -f -- "$tmp_headers" "$cache") 2>/dev/null || true
+    fi
+    if [ "$updated" = false ]; then
         echo "Management script is already up to date."
         exit 2
     fi
-    chmod u+x "$tmp_script" && mv -f -- "$tmp_script" "$0" || exit 1
     echo "Management script updated."
 )
 

@@ -69,7 +69,7 @@ def powershell_parameters(command, args):
     """Bind the small cmdlet interfaces used by the scripts, failing on unknown options."""
     positional, allowed = {
         'Invoke-RestMethod': ('uri', {'uri', 'method', 'timeoutsec'}),
-        'Invoke-WebRequest': ('uri', {'uri', 'method', 'timeoutsec', 'headers', 'outfile', 'usebasicparsing'}),
+        'Invoke-WebRequest': ('uri', {'uri', 'method', 'timeoutsec', 'headers', 'outfile', 'usebasicparsing', 'passthru'}),
         'Get-CimInstance': ('classname', {'classname'}),
         'Get-PSDrive': ('name', {'name'}),
     }[command]
@@ -80,7 +80,7 @@ def powershell_parameters(command, args):
             name = argument[1:].lower()
             if name not in allowed | {'erroraction'}:
                 raise ValueError(f'Unexpected {command} parameter: {argument}')
-            if name == 'usebasicparsing':
+            if name in {'usebasicparsing', 'passthru'}:
                 parameters[name] = True
             else:
                 try:
@@ -211,6 +211,9 @@ def main():
             # The installer downloads a manager that only records its arguments.
             default_script = '#!/usr/bin/env bash\nexec "$AGENT_TEST_PYTHON" "$AGENT_TEST_STUB" manager "$@"\n'
             write_script(args[args.index("-o") + 1], options, default_script)
+            if '-D' in args:
+                Path(args[args.index('-D') + 1]).write_text('HTTP/1.1 200 OK\r\n\r\n')
+                print('200 0', end='')
             return options.get('download_exit', 0)
         elif any("/proxy-agent/configure" in arg for arg in args):
             if options.get('configure_failure'):

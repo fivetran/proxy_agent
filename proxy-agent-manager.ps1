@@ -106,14 +106,72 @@ function Set-WebProxyFromEnvironment {
     Write-Log "Using proxy $proxyAddress from the environment"
 }
 
+function Get-ManagerSourceHash {
+    param([string]$Url)
+
+    $stream = [IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($Url))
+    try {
+        (Get-FileHash -InputStream $stream).Hash
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 # Validate the download before atomically replacing the installed script.
 function Update-Manager {
     $scriptUrl = if ($env:PROXY_AGENT_SCRIPT_URL) { $env:PROXY_AGENT_SCRIPT_URL } else { 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1' }
     $tmpScript = Join-Path $BASE_DIR ('.proxy-agent-manager.' + [guid]::NewGuid() + '.ps1')
+    $tmpCache = "$tmpScript.etag"
+    $cache = Join-Path $AUTO_UPDATE_DIR 'download'
+    $etagPattern = '^"[!#-~]*"$'
+    $saved = @()
+    try {
+        $saved = [IO.File]::ReadAllLines($cache)
+    } catch [IO.IOException], [UnauthorizedAccessException] {
+        # A missing or unreadable cache just means a full download.
+    }
+    $locallyModified = $saved.Count -ge 1 -and $saved[0] -match '^[0-9a-f]{64}$' -and
+        $saved[0] -ne (Get-FileHash -LiteralPath $PSCommandPath).Hash
     try {
         Set-WebProxyFromEnvironment -ProbeUri ([Uri]$scriptUrl)
-        Write-Host "Downloading management script..."
-        Invoke-WebRequest -Uri $scriptUrl -OutFile $tmpScript -UseBasicParsing -TimeoutSec 30
+        $sourceHash = Get-ManagerSourceHash $scriptUrl
+        $request = @{
+            Uri = $scriptUrl
+            OutFile = $tmpScript
+            UseBasicParsing = $true
+            TimeoutSec = 30
+            PassThru = $true
+        }
+        # A cache entry only applies to the same source and exact installed bytes.
+        if ($saved.Count -eq 3 -and $saved[0] -match '^[0-9a-f]{64}$' -and -not $locallyModified -and
+            $saved[1] -eq $sourceHash -and $saved[2] -cmatch $etagPattern) {
+            $request.Headers = @{ 'If-None-Match' = $saved[2] }
+        }
+
+        Write-Host 'Checking for management script updates...'
+        try {
+            $response = Invoke-WebRequest @request
+        } catch {
+            $failedResponse = $_.Exception.Response
+            if (-not $request.ContainsKey('Headers') -or $failedResponse.StatusCode -ne 304) { throw }
+            $responseUri = if ($PSVersionTable.PSVersion.Major -ge 7) {
+                $failedResponse.RequestMessage.RequestUri
+            } else {
+                $failedResponse.ResponseUri
+            }
+            if ($responseUri -eq [Uri]$scriptUrl) {
+                Write-Host 'Management script is already up to date.'
+                return $false
+            }
+            # A redirected resource can reuse the same tag for different bytes.
+            $request.Remove('Headers')
+            $response = Invoke-WebRequest @request
+        }
+        # Some PowerShell versions return the body only in memory with -PassThru.
+        if ($response.RawContentStream.Length -gt 0 -and
+            (-not [IO.File]::Exists($tmpScript) -or [IO.FileInfo]::new($tmpScript).Length -eq 0)) {
+            [IO.File]::WriteAllBytes($tmpScript, $response.RawContentStream.ToArray())
+        }
         if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $tmpScript -Raw))) {
             throw 'Downloaded management script is empty.'
         }
@@ -122,17 +180,38 @@ function Update-Manager {
         if ($parseErrors.Count -gt 0) {
             throw 'Downloaded management script has invalid syntax.'
         }
-        if ((Get-FileHash -LiteralPath $tmpScript).Hash -eq (Get-FileHash -LiteralPath $PSCommandPath).Hash) {
+        $downloadHash = (Get-FileHash -LiteralPath $tmpScript).Hash
+        $updated = $downloadHash -ne (Get-FileHash -LiteralPath $PSCommandPath).Hash
+        if ($updated) {
+            Unblock-File -LiteralPath $tmpScript
+            # $null binds to an empty string here; Replace requires a null backup path.
+            [System.IO.File]::Replace($tmpScript, $PSCommandPath, [NullString]::Value)
+        }
+        $responseUri = if ($PSVersionTable.PSVersion.Major -ge 7) {
+            $response.BaseResponse.RequestMessage.RequestUri
+        } else {
+            $response.BaseResponse.ResponseUri
+        }
+        $etag = if ($response.StatusCode -eq 200 -and $responseUri -eq [Uri]$scriptUrl) {
+            @($response.Headers['ETag'])[0]
+        }
+        if ($etag -cmatch $etagPattern) {
+            try {
+                $null = [IO.Directory]::CreateDirectory($AUTO_UPDATE_DIR)
+                [IO.File]::WriteAllLines($tmpCache, @($downloadHash, $sourceHash, $etag))
+                Move-Item -LiteralPath $tmpCache -Destination $cache -Force
+            } catch {
+                # An unwritable cache just means a full download next time.
+            }
+        }
+        if (-not $updated) {
             Write-Host 'Management script is already up to date.'
             return $false
         }
-        Unblock-File -LiteralPath $tmpScript
-        # $null binds to an empty string here; Replace requires a null backup path.
-        [System.IO.File]::Replace($tmpScript, $PSCommandPath, [NullString]::Value)
         Write-Host 'Management script updated.'
         return $true
     } finally {
-        Remove-Item -LiteralPath $tmpScript -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpScript, $tmpCache -Force -ErrorAction SilentlyContinue
     }
 }
 
