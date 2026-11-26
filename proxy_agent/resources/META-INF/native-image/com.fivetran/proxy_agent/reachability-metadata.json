@@ -10,6 +10,14 @@
       "fields": [{"name": "application"}, {"name": "help"}]
     },
     {
+      "type": "com.fivetran.proxy_agent.AgentCommand",
+      "fields": [{"name": "application"}, {"name": "help"}]
+    },
+    {
+      "type": "com.fivetran.proxy_agent.StatusCommand",
+      "methods": [{"name": "<init>", "parameterTypes": []}]
+    },
+    {
       "type": "com.fivetran.proxy_agent.InstallCommand",
       "methods": [{"name": "<init>", "parameterTypes": []}],
       "fields": [
