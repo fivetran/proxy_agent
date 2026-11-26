@@ -64,47 +64,34 @@ jobs:
         include:
           - os: ubuntu-22.04
             platform: linux-x64
-            extension: tar.gz
-            sha256: d792848db26f1602f0a5cf2cd9279d9a652d32ab450d891ce616c9ca67e359d0
           - os: ubuntu-24.04-arm
             platform: linux-aarch64
-            extension: tar.gz
-            sha256: d8e6edf0009bb5d70c6a670eb030d36aa804795427306434c0f7f63c01435307
           - os: windows-2022
             platform: windows-x64
-            extension: zip
-            sha256: 1f534c46337f838880553c47f973a3d769b4058036288afcec930e2abddf06a1
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Build the manager JAR
         run: bazelisk build //proxy_agent:manager_deploy.jar
+      - uses: graalvm/setup-graalvm@v1.6.10
+        with:
+          distribution: graalvm-community
+          version: '25.6.5.1'
+          set-java-home: 'false'
       - name: Build the native manager
         env:
-          GRAALVM_ARCHIVE: graalvm-community-jdk-25i6-25.0.5.1_${{ matrix.platform }}_bin.${{ matrix.extension }}
-          GRAALVM_SHA256: ${{ matrix.sha256 }}
           PLATFORM: ${{ matrix.platform }}
         run: |
-          tools=$(mktemp -d)
-          trap 'rm -rf "$tools"' EXIT
-          archive="$tools/$GRAALVM_ARCHIVE"
-          curl -fsSL "https://github.com/graalvm/graalvm-ce-builds/releases/download/graal-25.6.5.1/$GRAALVM_ARCHIVE" -o "$archive"
-          printf '%s  %s\n' "$GRAALVM_SHA256" "$archive" | sha256sum --check
-
           compiler=native-image
           extension=
           if [[ "$RUNNER_OS" == Windows ]]; then
-            "$WINDIR/System32/tar.exe" -xf "$(cygpath -w "$archive")" -C "$(cygpath -w "$tools")"
             compiler=native-image.cmd
             extension=.exe
-          else
-            tar -xf "$archive" -C "$tools"
           fi
-          compilers=("$tools"/*/bin/"$compiler")
           mkdir -p dist
           binary="dist/manager-$PLATFORM"
-          "${compilers[0]}" -Ob -jar bazel-bin/proxy_agent/manager_deploy.jar "$binary"
+          "$compiler" -Ob -jar bazel-bin/proxy_agent/manager_deploy.jar "$binary"
           sha256sum "$binary$extension" | cut -d ' ' -f 1 > "$binary$extension.sha256"
       - name: Check native installer failure handling
         if: matrix.platform == 'linux-x64'
