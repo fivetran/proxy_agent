@@ -3,6 +3,9 @@ package com.fivetran.proxy_agent;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.empty;
+import static org.hamcrest.Matchers.endsWith;
+import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 
@@ -23,6 +26,8 @@ public final class ManagerCommandTest {
 
     private final CommandRunner commands = new CommandRunner(Set.of());
     private final TestDocker docker = new TestDocker(commands);
+    private String memory = "4096";
+    private OsOperations operations = new TestUnixOperations();
     private Path directory;
     private Path config;
     private Path version;
@@ -78,10 +83,62 @@ public final class ManagerCommandTest {
         assertThat(log, not(containsString("Stopped proxy-agent-abc123")));
     }
 
+    @Test
+    public void startNormalizesLegacyPinsAndUsesMemoryAndHeartbeatSettings() throws Exception {
+        Files.writeString(version, "1.2.9-ubuntu-26.04");
+        assertThat(invoke("start"), is(0));
+        assertThat(Files.readString(version).strip(), is("1.2.9"));
+        assertThat(docker.lastRun, hasItems("--memory=4096m", "HEARTBEAT_PATH=/tmp/proxy-agent-heartbeat.txt",
+                "-i", "/config/config.json"));
+        assertThat(docker.lastRun, hasItem(endsWith(":1.2.9-ubuntu-26.04")));
+        assertThat(docker.operations(), is(List.of("inspect", "run", "inspect", "ps")));
+    }
+
+    @Test
+    public void startWithInvalidMemoryLeavesTheRunningContainerAlone() {
+        memory = "0";
+        docker.running = true;
+        assertThat(invoke("start"), is(1));
+        assertThat(docker.calls, is(empty()));
+        assertThat(docker.running, is(true));
+    }
+
+    @Test
+    public void startMigratesAWindowsImageTagAndMountsTheConfigDirectory() throws Exception {
+        Files.writeString(version, "1.2.9-windows-ltsc2022");
+        operations = new WindowsOperations(commands, docker) {
+            @Override
+            public String containerOs(List<String> errors) {
+                return "windows";
+            }
+
+            @Override
+            public ContainerSettings containerSettings(Path path) {
+                return new ContainerSettings(memory, "");
+            }
+        };
+        assertThat(invoke("start"), is(0));
+        assertThat(Files.readString(version).strip(), is("1.2.9"));
+        assertThat(Files.readString(directory.resolve("settings.ps1")), containsString("$WINDOWS_VERSION = 'ltsc2022'"));
+        assertThat(docker.lastRun, hasItems("HEARTBEAT_PATH=C:/app/logs/proxy-agent-heartbeat.txt",
+                directory.resolve("config").toString().replace('\\', '/') + ":C:/config:ro"));
+        assertThat(docker.lastRun, hasItem(endsWith(":1.2.9-windows-ltsc2022")));
+    }
+
+    private class TestUnixOperations extends UnixOperations {
+        private TestUnixOperations() {
+            super(commands, docker);
+        }
+
+        @Override
+        public ContainerSettings containerSettings(Path path) {
+            return new ContainerSettings(memory, "");
+        }
+    }
+
     private int invoke(String... command) {
         var arguments = new ArrayList<>(List.of("--agent-dir", directory.toString()));
         arguments.addAll(List.of(command));
-        var operations = new UnixOperations(commands, docker);
         var manager = new Manager(operations, docker, new HttpClient(operations.proxySettings()));
         return new Application(manager, path -> 0).execute(arguments.toArray(String[]::new));
     }
@@ -90,6 +147,7 @@ public final class ManagerCommandTest {
         private final List<List<String>> calls = new ArrayList<>();
         private int status;
         private boolean running;
+        private List<String> lastRun = List.of();
 
         private TestDocker(CommandRunner commands) {
             super(commands);
@@ -98,6 +156,10 @@ public final class ManagerCommandTest {
         @Override
         int run(Path directory, String... arguments) {
             calls.add(List.of(arguments));
+            if (arguments[0].equals("run")) {
+                lastRun = List.of(arguments);
+                running = true;
+            }
             return status;
         }
 
@@ -109,7 +171,7 @@ public final class ManagerCommandTest {
         CommandRunner.Result capture(String... arguments) {
             calls.add(List.of(arguments));
             return switch (arguments[0]) {
-                case "inspect" -> new CommandRunner.Result(running ? 0 : 1, "");
+                case "inspect" -> new CommandRunner.Result(running ? 0 : 1, arguments.length > 2 ? "healthy" : "");
                 case "stop" -> new CommandRunner.Result(0, "");
                 case "rm" -> {
                     running = false;
