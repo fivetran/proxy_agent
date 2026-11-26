@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /** Runs Docker commands on the host. */
-final class Docker {
+class Docker {
     private final CommandRunner commands;
 
     Docker(CommandRunner commands) {
