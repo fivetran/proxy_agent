@@ -61,7 +61,7 @@ manager_hash() {
 update_manager() (
     local script_url="${PROXY_AGENT_SCRIPT_URL:-https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh}"
     local day="${1:-}" tmp_script tmp_headers response
-    local current_hash='' saved_hash='' source_hash='' saved_source='' etag='' locally_modified=false
+    local current_hash='' saved_hash='' saved_source='' etag='' locally_modified=false
     local cache="$AUTO_UPDATE_DIR/download" etag_pattern='^"[!#-~]*"$'
     local -a headers=()
     if [ -f "$cache" ]; then
@@ -87,11 +87,11 @@ update_manager() (
             exit 2
         fi
     fi
-    if [ -n "$current_hash" ] && [ "$locally_modified" = false ] && [[ "$etag" =~ $etag_pattern ]]; then
-        source_hash=$(printf '%s' "$script_url" | manager_hash 2>/dev/null) || source_hash=''
-        if [ -n "$source_hash" ] && [ "$saved_source" = "$source_hash" ]; then
-            headers=(-H "If-None-Match: $etag")
-        fi
+    local source_hash
+    source_hash=$(printf '%s' "$script_url" | manager_hash 2>/dev/null) || source_hash=''
+    if [ -n "$current_hash" ] && [ "$locally_modified" = false ] && [ -n "$source_hash" ] &&
+        [ "$saved_source" = "$source_hash" ] && [[ "$etag" =~ $etag_pattern ]]; then
+        headers=(-H "If-None-Match: $etag")
     fi
 
     tmp_script=$(mktemp "$BASE_DIR/.proxy-agent-manager.XXXXXX") || exit 1
@@ -105,22 +105,13 @@ update_manager() (
             echo "ERROR: Failed to download management script" >&2
             exit 1
         fi
-        case "$response" in
-            '304 0')
-                if [ -n "${headers[0]:-}" ]; then
-                    echo "Management script is already up to date."
-                    exit 2
-                fi
-                ;;
-            '304 '*)
-                # The redirected resource can reuse the same tag for different bytes.
-                if [ -n "${headers[0]:-}" ]; then
-                    headers=()
-                    continue
-                fi
-                ;;
-        esac
-        break
+        [[ "$response" != '304 '* || -z "${headers[0]:-}" ]] && break
+        if [ "$response" = '304 0' ]; then
+            echo "Management script is already up to date."
+            exit 2
+        fi
+        # A redirected resource can reuse the same tag for different bytes.
+        headers=()
     done
     if [ ! -s "$tmp_script" ] || ! bash -n "$tmp_script"; then
         echo "ERROR: Downloaded management script is empty or has invalid syntax" >&2
@@ -132,9 +123,6 @@ update_manager() (
     etag=''
     if [ "$response" = '200 0' ]; then
         etag=$(awk 'tolower($1) == "etag:" { sub(/\r$/, "", $2); tag = $2 } /^HTTP\// { tag = "" } END { print tag }' "$tmp_headers")
-        if [[ "$etag" =~ $etag_pattern ]]; then
-            source_hash=$(printf '%s' "$script_url" | manager_hash 2>/dev/null) || source_hash=''
-        fi
     fi
     local updated=false
     if ! cmp -s "$tmp_script" "$0"; then

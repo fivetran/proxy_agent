@@ -119,8 +119,6 @@ function Update-Manager {
         if (Test-Path -LiteralPath (Join-Path $AUTO_UPDATE_DIR $day) -PathType Leaf) { return $false }
     }
     $scriptUrl = if ($env:PROXY_AGENT_SCRIPT_URL) { $env:PROXY_AGENT_SCRIPT_URL } else { 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1' }
-    $tmpScript = Join-Path $BASE_DIR ('.proxy-agent-manager.' + [guid]::NewGuid() + '.ps1')
-    $tmpCache = "$tmpScript.etag"
     $cache = Join-Path $AUTO_UPDATE_DIR 'download'
     $etagPattern = '^"[!#-~]*"$'
     $saved = @()
@@ -129,7 +127,8 @@ function Update-Manager {
     } catch [IO.IOException], [UnauthorizedAccessException] {
         # Older installations acquire a baseline on their first successful download.
     }
-    $locallyModified = $saved.Count -ge 1 -and $saved[0] -match '^[0-9a-f]{64}$' -and
+    $hasBaseline = $saved.Count -gt 0 -and $saved[0] -match '^[0-9a-f]{64}$'
+    $locallyModified = $hasBaseline -and
         $saved[0] -ne (Get-FileHash -LiteralPath $PSCommandPath).Hash
     if ($Automatic) {
         # A fresh download starts a cooldown. Local edits still warrant a warning.
@@ -142,41 +141,40 @@ function Update-Manager {
             return $false
         }
     }
+    $tmpScript = Join-Path $BASE_DIR ('.proxy-agent-manager.' + [guid]::NewGuid() + '.ps1')
+    $tmpCache = "$tmpScript.etag"
     try {
         Set-WebProxyFromEnvironment -ProbeUri ([Uri]$scriptUrl)
         $sourceHash = Get-ManagerSourceHash $scriptUrl
-        $request = @{
-            Uri = $scriptUrl
-            OutFile = $tmpScript
-            UseBasicParsing = $true
-            TimeoutSec = 30
-            PassThru = $true
-        }
+        $headers = @{}
         # A cache entry only applies to the same source and exact installed bytes.
-        if ($saved.Count -eq 3 -and $saved[0] -match '^[0-9a-f]{64}$' -and -not $locallyModified -and
+        if ($saved.Count -eq 3 -and $hasBaseline -and -not $locallyModified -and
             $saved[1] -eq $sourceHash -and $saved[2] -cmatch $etagPattern) {
-            $request.Headers = @{ 'If-None-Match' = $saved[2] }
+            $headers['If-None-Match'] = $saved[2]
         }
 
         Write-Host 'Checking for management script updates...'
-        try {
-            $response = Invoke-WebRequest @request
-        } catch {
-            $failedResponse = $_.Exception.Response
-            if (-not $request.ContainsKey('Headers') -or $failedResponse.StatusCode -ne 304) { throw }
-            $responseUri = if ($PSVersionTable.PSVersion.Major -ge 7) {
-                $failedResponse.RequestMessage.RequestUri
-            } else {
-                $failedResponse.ResponseUri
+        do {
+            try {
+                $response = Invoke-WebRequest -Uri $scriptUrl -OutFile $tmpScript -UseBasicParsing -TimeoutSec 30 -PassThru -Headers $headers
+                $rawResponse = $response.BaseResponse
+            } catch {
+                $rawResponse = $_.Exception.Response
+                if ($headers.Count -eq 0 -or $rawResponse.StatusCode -ne 304) { throw }
             }
+            $responseUri = if ($PSVersionTable.PSVersion.Major -ge 7) {
+                $rawResponse.RequestMessage.RequestUri
+            } else {
+                $rawResponse.ResponseUri
+            }
+            if ($rawResponse.StatusCode -ne 304) { break }
             if ($responseUri -eq [Uri]$scriptUrl) {
                 Write-Host 'Management script is already up to date.'
                 return $false
             }
             # A redirected resource can reuse the same tag for different bytes.
-            $request.Remove('Headers')
-            $response = Invoke-WebRequest @request
-        }
+            $headers.Clear()
+        } while ($true)
         # Some PowerShell versions return the body only in memory with -PassThru.
         if ($response.RawContentStream.Length -gt 0 -and
             (-not [IO.File]::Exists($tmpScript) -or [IO.FileInfo]::new($tmpScript).Length -eq 0)) {
@@ -196,11 +194,6 @@ function Update-Manager {
             Unblock-File -LiteralPath $tmpScript
             # $null binds to an empty string here; Replace requires a null backup path.
             [System.IO.File]::Replace($tmpScript, $PSCommandPath, [NullString]::Value)
-        }
-        $responseUri = if ($PSVersionTable.PSVersion.Major -ge 7) {
-            $response.BaseResponse.RequestMessage.RequestUri
-        } else {
-            $response.BaseResponse.ResponseUri
         }
         $etag = if ($response.StatusCode -eq 200 -and $responseUri -eq [Uri]$scriptUrl) {
             @($response.Headers['ETag'])[0]
