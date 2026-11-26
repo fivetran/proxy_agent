@@ -567,10 +567,6 @@ function Invoke-NativeManager {
 }
 
 switch ($Command) {
-    'logs' {
-        . $loadAgent
-        docker logs -f $CONTAINER_NAME
-    }
     'stop' {
         . $loadAgent
         Write-Log "Stopping $CONTAINER_NAME..."
