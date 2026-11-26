@@ -30,7 +30,7 @@ final class InstallCommand implements Callable<Integer> {
     @Override
     public Integer call() {
         try {
-            new Installer(Objects.requireNonNull(application).manager()).install(config, installDir, windowsVersion);
+            Objects.requireNonNull(application).installer().install(config, installDir, windowsVersion);
             return 0;
         } catch (IOException | IllegalArgumentException e) {
             System.err.println("ERROR: " + e.getMessage());

@@ -95,6 +95,7 @@ Rerun the failed workflow to retry publishing the same commit, or run
 commit on `main`. Verify the initial release URLs before switching the public
 installers to the native manager.
 
-The Python tests remain in place. Installer unit tests use the Bazel-built JAR
-with the existing dependency stubs. CI exercises the native executable through
-the existing Docker integration suite.
+Installer unit tests use a Bazel-built test JAR with controlled host probes and
+local HTTP fixtures. Bootstrap tests exercise download and checksum handling
+under Bash, Windows PowerShell 5.1, and PowerShell 7. CI exercises the native
+executable through the Docker integration suite.
