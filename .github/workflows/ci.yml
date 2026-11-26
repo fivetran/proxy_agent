@@ -210,4 +210,4 @@ jobs:
       - name: Publish the tested commit
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/publish_manager.py
+        run: bash .github/scripts/publish_manager.sh
