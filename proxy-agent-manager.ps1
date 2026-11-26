@@ -626,10 +626,6 @@ switch ($Command) {
         Set-WebProxyFromEnvironment -ProbeUri ([Uri]"https://$($IMAGE.Split('/')[0])/")
         Invoke-Upgrade
     }
-    'logs' {
-        . $loadAgent
-        docker logs -f $CONTAINER_NAME
-    }
     'doctor' {
         . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
@@ -662,6 +658,10 @@ switch ($Command) {
             'status' {
                 . $loadAgent
                 docker ps -a --filter "name=$CONTAINER_NAME" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+            }
+            'logs' {
+                . $loadAgent
+                docker logs -f $CONTAINER_NAME
             }
             'update-manager' {
                 Update-Manager
