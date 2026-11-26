@@ -2,7 +2,12 @@
   "reflection": [
     {
       "type": "com.fivetran.proxy_agent.Application",
-      "fields": [{"name": "help"}, {"name": "spec"}]
+      "fields": [{"name": "help"}, {"name": "spec"}, {"name": "agentDirectory"}]
+    },
+    {
+      "type": "com.fivetran.proxy_agent.UpdateManagerCommand",
+      "methods": [{"name": "<init>", "parameterTypes": []}],
+      "fields": [{"name": "application"}, {"name": "help"}]
     },
     {
       "type": "com.fivetran.proxy_agent.InstallCommand",

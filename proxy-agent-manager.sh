@@ -282,6 +282,9 @@ run_doctor() {
 # Updating the manager does not require agent configuration or Docker. Exit in
 # this parsed block so Bash never resumes reading the replaced script.
 if [ "${1:-}" = "update-manager" ]; then
+    if [ -x "$BASE_DIR/manager" ] && "$BASE_DIR/manager" update-manager --help >/dev/null 2>&1; then
+        exec "$BASE_DIR/manager" --agent-dir "$BASE_DIR" "$@"
+    fi
     update_manager
     exit 0
 fi

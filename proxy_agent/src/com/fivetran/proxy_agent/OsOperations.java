@@ -1,6 +1,10 @@
 package com.fivetran.proxy_agent;
 
+import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
+import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
+
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
@@ -20,6 +24,20 @@ interface OsOperations {
     String managerScriptName();
 
     String managerBinaryName();
+
+    /** Returns the release artifact for the running host and architecture. */
+    String managerReleaseAsset() throws IOException;
+
+    /** Checks the platform script's syntax without running it. */
+    boolean validManagerScript(Path script) throws IOException, InterruptedException;
+
+    /** Publishes the staged update and reports whether a helper owns the staging directory. */
+    default boolean publishManagerUpdate(Path directory, Path staging) throws IOException {
+        for (var file : List.of(managerBinaryName(), managerScriptName())) {
+            Files.move(staging.resolve(file), directory.resolve(file), ATOMIC_MOVE, REPLACE_EXISTING);
+        }
+        return false;
+    }
 
     long reservedMemoryMb();
 

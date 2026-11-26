@@ -567,6 +567,20 @@ function Invoke-Doctor {
 
 # Updating the manager does not require agent configuration or Docker.
 if ($Command -eq 'update-manager') {
+    $nativeManager = Join-Path $BASE_DIR 'manager.exe'
+    $hasNativeUpdater = $false
+    if (Test-Path -LiteralPath $nativeManager -PathType Leaf) {
+        try {
+            & $nativeManager update-manager --help *> $null
+            $hasNativeUpdater = $LASTEXITCODE -eq 0
+        } catch {
+            $hasNativeUpdater = $false
+        }
+    }
+    if ($hasNativeUpdater) {
+        & $nativeManager --agent-dir $BASE_DIR update-manager @DoctorArgs
+        exit $LASTEXITCODE
+    }
     Update-Manager
     exit 0
 }
