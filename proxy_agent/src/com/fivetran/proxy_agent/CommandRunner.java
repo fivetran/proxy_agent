@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
 
 /** Launches local commands and keeps installation credentials out of unrelated processes. */
-final class InstallHost {
+final class CommandRunner {
     private static final String DOCKER = "docker";
     private static final String TOKEN = "TOKEN";
 
