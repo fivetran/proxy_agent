@@ -8,6 +8,15 @@ set -euo pipefail
 
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# A manager from an older release can coexist with this script.
+case "${1:-}" in
+    status)
+        if [ -x "$BASE_DIR/manager" ] && "$BASE_DIR/manager" status --help >/dev/null 2>&1; then
+            exec "$BASE_DIR/manager" --agent-dir "$BASE_DIR" status
+        fi
+        ;;
+esac
+
 # PROXY_AGENT_IMAGE and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
 # test suite can run against a stub image and registry.
 IMAGE="${PROXY_AGENT_IMAGE:-us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent}"

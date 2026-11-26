@@ -1,6 +1,7 @@
 package com.fivetran.proxy_agent;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -13,9 +14,17 @@ final class Docker {
     }
 
     CommandRunner.Result capture(String... arguments) throws IOException, InterruptedException {
+        return commands.capture(command(arguments));
+    }
+
+    int run(Path directory, String... arguments) throws IOException, InterruptedException {
+        return commands.run(directory, command(arguments));
+    }
+
+    private static List<String> command(String[] arguments) {
         var command = new ArrayList<String>();
         command.add("docker");
         command.addAll(List.of(arguments));
-        return commands.capture(command);
+        return command;
     }
 }

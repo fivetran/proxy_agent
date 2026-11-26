@@ -10,6 +10,21 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $BASE_DIR           = $PSScriptRoot
+
+# A manager from an older release can coexist with this script.
+$nativeManager = Join-Path $BASE_DIR 'manager.exe'
+if ($Command -eq 'status' -and (Test-Path -LiteralPath $nativeManager -PathType Leaf)) {
+    try {
+        & $nativeManager status --help *> $null
+        $hasNativeCommand = $LASTEXITCODE -eq 0
+    } catch {
+        $hasNativeCommand = $false
+    }
+    if ($hasNativeCommand) {
+        & $nativeManager --agent-dir $BASE_DIR status
+        exit $LASTEXITCODE
+    }
+}
 # PROXY_AGENT_IMAGE and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
 # test suite can run against a stub image and registry.
 $IMAGE              = if ($env:PROXY_AGENT_IMAGE) { $env:PROXY_AGENT_IMAGE } else { 'us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent' }

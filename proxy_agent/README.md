@@ -1,9 +1,10 @@
 # Native Proxy Agent manager
 
-The Java host CLI currently implements `manager install`. It checks
+The Java host CLI implements `manager install` and `manager status`. Installation checks
 prerequisites, prepares the installation directory, configures the agent, and
 pins the compatible image version. It installs and invokes the existing
-platform manager for `start`. The legacy manager handles the other commands.
+platform manager for `start`. The platform scripts delegate `status` when the
+installed executable supports it and handle other commands.
 It validates configuration fetched from Fivetran and stages replacements before
 changing the files in an existing installation.
 
