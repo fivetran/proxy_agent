@@ -21,6 +21,10 @@ class Docker {
         return commands.run(directory, command(arguments));
     }
 
+    int runAndRecord(Path directory, Path report, List<String> arguments) throws IOException, InterruptedException {
+        return commands.runAndRecord(directory, command(arguments.toArray(String[]::new)), report);
+    }
+
     private static List<String> command(String[] arguments) {
         var command = new ArrayList<String>();
         command.add("docker");

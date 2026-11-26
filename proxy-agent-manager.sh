@@ -327,12 +327,6 @@ if [ "$#" -gt 0 ]; then
 fi
 
 case "$command" in
-    doctor)
-        load_agent
-        CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
-        check_memory_allocation
-        run_doctor "$@"
-        ;;
     *)
         native="$BASE_DIR/manager"
         if [[ -n "$command" && "$command" != -* && -x "$native" ]] &&
@@ -379,6 +373,12 @@ case "$command" in
             logs)
                 load_agent
                 docker logs -f "${CONTAINER_NAME}"
+                ;;
+            doctor)
+                load_agent
+                CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
+                check_memory_allocation
+                run_doctor "$@"
                 ;;
             update-manager)
                 update_manager

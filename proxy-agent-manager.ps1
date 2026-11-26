@@ -601,12 +601,6 @@ $loadAgent = {
 }
 
 switch ($Command) {
-    'doctor' {
-        . $loadAgent
-        $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
-        Assert-MemoryAllocation
-        Invoke-Doctor -DoctorArgs $DoctorArgs
-    }
     default {
         $native = Join-Path $BASE_DIR 'manager.exe'
         $hasNativeCommand = $false
@@ -662,6 +656,12 @@ switch ($Command) {
             'logs' {
                 . $loadAgent
                 docker logs -f $CONTAINER_NAME
+            }
+            'doctor' {
+                . $loadAgent
+                $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
+                Assert-MemoryAllocation
+                Invoke-Doctor -DoctorArgs $DoctorArgs
             }
             'update-manager' {
                 Update-Manager
