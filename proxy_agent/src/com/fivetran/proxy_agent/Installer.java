@@ -49,7 +49,7 @@ final class Installer {
         System.out.println("Installing Fivetran Proxy Agent...\n");
         var windowsVersion = checkPrerequisites(options, memoryMb);
 
-        operations.configureProxy();
+        var http = operations.installerHttp();
         var directory = options.directory();
         if (Files.isDirectory(directory)) {
             System.out.println(directory + " already exists, will re-use it.");
@@ -58,9 +58,9 @@ final class Installer {
         Files.createDirectories(directory.resolve("logs"));
         var managerName = operations.isWindows() ? "proxy-agent-manager.ps1" : "proxy-agent-manager.sh";
         var manager = directory.resolve(managerName);
-        installManager(manager);
+        installManager(http, manager);
         writeSettings(directory, options.windowsVersion(), memoryMb);
-        installConfig(configDirectory, config);
+        installConfig(http, configDirectory, config);
 
         var suffix = windowsVersion.isEmpty() ? UBUNTU_TAG_SUFFIX : "-windows-" + windowsVersion;
         System.out.println("Resolving latest proxy agent version...");
@@ -69,7 +69,7 @@ final class Installer {
         } else if (operations.isWindows()) {
             System.out.println("Using Linux container image");
         }
-        var version = getLatestVersion(suffix);
+        var version = getLatestVersion(http, suffix);
         Files.writeString(directory.resolve("version"), version + "\n");
         System.out.println("Using version " + version);
         installNativeBinary(directory);
@@ -259,12 +259,12 @@ final class Installer {
         }
     }
 
-    private void installManager(Path manager) throws IOException, InterruptedException {
+    private void installManager(InstallerHttp http, Path manager) throws IOException, InterruptedException {
         System.out.println("Downloading management script...");
         var temp = Files.createTempFile(manager.getParent(), manager.getFileName() + ".", ".tmp");
         try {
             var url = InstallHost.env("PROXY_AGENT_SCRIPT_URL", SCRIPT_ROOT + manager.getFileName());
-            operations.download(url, temp);
+            http.download(url, temp);
             operations.makeExecutable(temp);
             Files.move(temp, manager, ATOMIC_MOVE, REPLACE_EXISTING);
         } finally {
@@ -307,13 +307,14 @@ final class Installer {
         Files.writeString(directory.resolve("settings.ps1"), settings);
     }
 
-    private void installConfig(Path directory, Config config) throws IOException, InterruptedException {
+    private void installConfig(InstallerHttp http, Path directory, Config config) throws IOException, InterruptedException {
         var contents = config.contents();
         var shouldFetch = contents == null;
         if (contents == null) {
             var api = InstallHost.env("FIVETRAN_API_URL", "https://api.fivetran.com").replaceAll("/+$", "");
             System.out.println("Fetching agent config from Fivetran...");
-            contents = operations.configure(api + "/proxy-agent/configure", config.token());
+            contents = http.configure(api + "/proxy-agent/configure", config.token());
+            operations.validateFetchedConfig(contents);
         }
         var destination = directory.resolve("config.json");
         var temp = operations.createProtectedConfig(directory);
@@ -328,8 +329,8 @@ final class Installer {
         }
     }
 
-    private String getLatestVersion(String suffix) throws IOException, InterruptedException {
-        var tags = operations.getTags(InstallHost.env("PROXY_AGENT_REGISTRY_TAGS_URL", REGISTRY_URL));
+    private String getLatestVersion(InstallerHttp http, String suffix) throws IOException, InterruptedException {
+        var tags = http.registryTags(InstallHost.env("PROXY_AGENT_REGISTRY_TAGS_URL", REGISTRY_URL));
         var pattern = Pattern.compile("(" + VERSION + ")" + Pattern.quote(suffix));
         var latest = "";
         for (var tag : tags) {

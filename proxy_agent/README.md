@@ -11,16 +11,25 @@ uses shared Java code for installation and delegates host operations to
 engineering tests.
 
 On Unix, set `http_proxy` for HTTP, `https_proxy` or `HTTPS_PROXY` for
-HTTPS, and `all_proxy` or `ALL_PROXY` as a fallback. The Java installer
-uses these settings for HTTP forward proxies. Set `no_proxy` or `NO_PROXY`
-to a comma-separated list of hosts or domain suffixes.
+HTTPS, and `all_proxy` or `ALL_PROXY` as a fallback. Java handles HTTP
+forward proxies, including CONNECT for HTTPS destinations. HTTPS and SOCKS
+proxy URLs use curl. Set `no_proxy` or `NO_PROXY` to a comma-separated
+list of hosts or domain suffixes. CIDR entries use curl 7.86.0 or later.
+When the default JDK trust store rejects a certificate, the installer can
+retry with curl so it can use the host's trust configuration.
 
 On Windows, set `HTTPS_PROXY` or its fallback `HTTP_PROXY` for both HTTP
 and HTTPS requests. `NO_PROXY` applies when a proxy is set in the
 environment. Java handles explicit HTTP proxies and uses the Windows web
-client for Internet Options and when Windows proxy authentication or
-certificate trust is needed. A proxy URL can contain credentials. When it
-omits them, Windows proxy authentication uses the current Windows identity.
+client for Internet Options, integrated authentication, Windows certificate
+trust, and proxy schemes other than HTTP. HTTPS and SOCKS proxy URLs depend
+on the PowerShell and .NET version providing that client. A proxy URL can
+contain credentials. When it omits them, Windows proxy authentication uses
+the current Windows identity.
+
+Without installer proxy environment variables, you can explicitly configure
+the JDK route using `-Dhttp.proxyHost`, `-Dhttps.proxyHost`, their port
+properties, and `-Dhttp.nonProxyHosts` before the `install` subcommand.
 
 ## Build
 

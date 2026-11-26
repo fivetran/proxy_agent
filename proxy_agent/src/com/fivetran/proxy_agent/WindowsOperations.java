@@ -4,6 +4,7 @@ import static java.nio.charset.StandardCharsets.UTF_16LE;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import java.io.IOException;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
@@ -17,17 +18,15 @@ final class WindowsOperations implements Operations {
     private final InstallHost host = new InstallHost();
     private final String powerShell = InstallHost.env("PROXY_AGENT_INSTALLER_POWERSHELL", "powershell.exe");
 
-    private @Nullable InstallerHttp http;
-
     @Override
-    public void configureProxy() throws IOException {
+    public InstallerHttp installerHttp() {
         var address = InstallHost.env("HTTPS_PROXY", InstallHost.env("HTTP_PROXY", ""));
-        var explicitProxy = address.isEmpty() ? null : InstallerProxy.parseProxyUrl(address);
-        // Internet Options includes system bypass rules and PAC. Keep those requests on Windows.
-        var proxy = InstallerProxy.forWindows(explicitProxy);
-        if (explicitProxy != null && "http".equalsIgnoreCase(explicitProxy.getScheme())) {
-            http = new InstallerHttp(proxy);
+        if (address.isEmpty()) {
+            // An explicitly configured JDK route is independent of Internet Options.
+            return new InstallerHttp(InstallerProxy.hasJdkProxySettings() ? InstallerProxy.forJdk() : null,
+                    this::request);
         }
+        return new InstallerHttp(InstallerProxy.forWindows(address), this::request);
     }
 
     @Override
@@ -106,90 +105,46 @@ final class WindowsOperations implements Operations {
         return result.output();
     }
 
-    @Override
-    public void download(String url, Path target) throws IOException, InterruptedException {
-        InstallerHttp.parseUrl(url);
-        if (http != null) {
-            try {
-                http.download(url, target);
-                return;
-            } catch (InstallerHttp.WindowsTransportRequired e) {
-                // Windows handles integrated authentication and enterprise CA trust.
-            }
-        }
+    private InstallerHttp.Response request(URI uri, @Nullable String token) throws IOException, InterruptedException {
         var result = runPowerShell("""
-                Invoke-WebRequest -Uri $argument -OutFile $value -TimeoutSec 30 -UseBasicParsing
-                Unblock-File -LiteralPath $value
-                """, url, target.toString(), true);
-        if (!result.succeeded()) {
-            throw new IOException("Failed to download management script");
-        }
-    }
-
-    @Override
-    public List<String> getTags(String url) throws IOException, InterruptedException {
-        InstallerHttp.parseUrl(url);
-        if (http != null) {
-            try {
-                return http.registryTags(url);
-            } catch (InstallerHttp.WindowsTransportRequired e) {
-                // Windows handles integrated authentication and enterprise CA trust.
-            }
-        }
-        var result = runPowerShell("""
-                $response = Invoke-RestMethod -Uri $argument -Method Get -TimeoutSec 30
-                foreach ($tag in $response.tags) { [Console]::WriteLine($tag) }
-                """, url, "", true);
-        if (!result.succeeded()) {
-            throw new IOException("Unable to query image registry for latest version");
-        }
-        return result.output().lines().toList();
-    }
-
-    @Override
-    public byte[] configure(String url, String token) throws IOException, InterruptedException {
-        InstallerHttp.parseUrl(url);
-        InstallerHttp.checkToken(token);
-        if (http != null) {
-            try {
-                var config = http.configure(url, token);
-                var checked = runPowerShell("[Console]::InputEncoding = [Text.Encoding]::UTF8; "
-                                + "$null = [Console]::In.ReadToEnd() | ConvertFrom-Json",
-                        "", "", false, new String(config, UTF_8));
-                if (!checked.succeeded()) {
-                    throw new IOException("Configure endpoint returned an invalid JSON response");
+                $options = @{ Uri = $argument; TimeoutSec = 30; UseBasicParsing = $true }
+                if ($value) {
+                    $options.Method = 'Post'
+                    $options.MaximumRedirection = 0
+                    $options.Headers = @{ Authorization = "Basic $value"; Accept = 'application/json' }
                 }
-                return config;
-            } catch (InstallerHttp.WindowsTransportRequired e) {
-                // The proxy rejected the connection or TLS failed before the POST was sent.
-            }
-        }
-        var result = runPowerShell("""
                 try {
-                    $response = Invoke-WebRequest -Uri $argument -Method Post -TimeoutSec 30 -UseBasicParsing -MaximumRedirection 0 `
-                        -Headers @{ Authorization = "Basic $value"; Accept = 'application/json' }
+                    $response = Invoke-WebRequest @options
                 } catch {
                     if (-not $_.Exception.Response) { exit 1 }
                     [Console]::WriteLine([int]$_.Exception.Response.StatusCode)
                     exit 0
                 }
-                try {
-                    $null = $response.Content | ConvertFrom-Json
-                } catch {
-                    exit 2
-                }
-                [Console]::WriteLine($response.StatusCode)
-                [Console]::Write($response.Content)
-                """, url, token, true);
-        if (result.status() == 2) {
-            throw new IOException("Configure endpoint returned an invalid JSON response");
-        }
+                [Console]::WriteLine([int]$response.StatusCode)
+                [Console]::Write([Convert]::ToBase64String($response.RawContentStream.ToArray()))
+                """, uri.toString(), token == null ? "" : token, true);
         var endOfStatus = result.output().indexOf('\n');
         if (!result.succeeded() || endOfStatus < 0) {
-            throw new IOException("Failed to connect to configure endpoint");
+            throw new IOException("Windows HTTP request failed");
         }
-        var status = result.output().substring(0, endOfStatus).strip();
-        return InstallHost.configBody(status, result.output().substring(endOfStatus + 1));
+        try {
+            var status = Integer.parseInt(result.output().substring(0, endOfStatus).strip());
+            var body = Base64.getDecoder().decode(result.output().substring(endOfStatus + 1));
+            return new InstallerHttp.Response(status, body);
+        } catch (IllegalArgumentException e) {
+            throw new IOException("Invalid Windows HTTP response");
+        }
+    }
+
+    @Override
+    public void validateFetchedConfig(byte[] config) throws IOException, InterruptedException {
+        var checked = runPowerShell("""
+                [Console]::InputEncoding = [Text.Encoding]::UTF8
+                $null = [Console]::In.ReadToEnd() | ConvertFrom-Json
+                """, "", "", false, new String(config, UTF_8));
+        if (!checked.succeeded()) {
+            throw new IOException("Configure endpoint returned an invalid JSON response");
+        }
     }
 
     @Override

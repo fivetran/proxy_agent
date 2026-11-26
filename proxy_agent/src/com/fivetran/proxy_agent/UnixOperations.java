@@ -1,11 +1,12 @@
 package com.fivetran.proxy_agent;
 
 import java.io.IOException;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
 
@@ -15,7 +16,6 @@ final class UnixOperations implements Operations {
     private static final int BYTES_PER_MB = 1024 * 1024;
 
     private final InstallHost host = new InstallHost();
-    private @Nullable InstallerHttp http;
     private final boolean isMac = System.getProperty("os.name").startsWith("Mac");
 
     @Override
@@ -101,27 +101,39 @@ final class UnixOperations implements Operations {
     }
 
     @Override
-    public void configureProxy() throws IOException {
-        http = new InstallerHttp(InstallerProxy.forUnix());
+    public InstallerHttp installerHttp() {
+        return new InstallerHttp(InstallerProxy.forUnix(), this::requestWithCurl);
     }
 
-    @Override
-    public void download(String url, Path target) throws IOException {
-        http().download(url, target);
+    private InstallerHttp.Response requestWithCurl(URI uri, @Nullable String token) throws IOException, InterruptedException {
+        if (!host.hasCommand("curl", false)) {
+            throw new IOException("This proxy configuration requires curl");
+        }
+        var body = Files.createTempFile("proxy-agent-response.", ".tmp");
+        try {
+            var command = new ArrayList<>(List.of("curl", "-q", "-sS", "--max-time", "30",
+                    "--proto", "=http,https", "--output", body.toString(), "--write-out", "%{http_code}", "--config", "-"));
+            var config = curlOption("url", uri.toString());
+            if (token == null) {
+                command.addAll(List.of("--location", "--max-redirs", "10", "--proto-redir",
+                        uri.getScheme().equalsIgnoreCase("https") ? "=https" : "=http,https"));
+            } else {
+                command.addAll(List.of("--request", "POST", "--header", "Accept: application/json"));
+                config += curlOption("header", "Authorization: Basic " + token);
+            }
+            var result = InstallHost.capture(InstallHost.builder(command), config);
+            if (!result.succeeded() || !result.output().matches("[1-5][0-9]{2}")) {
+                throw new IOException("HTTP request through curl failed");
+            }
+            return new InstallerHttp.Response(Integer.parseInt(result.output()), Files.readAllBytes(body));
+        } finally {
+            Files.deleteIfExists(body);
+        }
     }
 
-    @Override
-    public List<String> getTags(String url) throws IOException {
-        return http().registryTags(url);
-    }
-
-    @Override
-    public byte[] configure(String url, String token) throws IOException {
-        return http().configure(url, token);
-    }
-
-    private InstallerHttp http() {
-        return Objects.requireNonNull(http);
+    /** Passes curl options over stdin so credentials stay out of process arguments. */
+    private static String curlOption(String name, String value) {
+        return name + " = \"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"\n";
     }
 
     @Override
