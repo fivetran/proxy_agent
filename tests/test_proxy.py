@@ -176,45 +176,10 @@ class TestProxyContract:
     http_proxy for HTTP targets. NO_PROXY and the resulting behavior are shared.
     """
 
-    def test_update_manager_installs_downloaded_script(self, native_web_sandbox, web_endpoints):
-        source = (REPO / f'proxy-agent-manager.{EXT}').read_bytes() + b'\n# Updated manager\n'
-        web_endpoints.script_body = source
-        native_web_sandbox.env['NO_PROXY'] = '*'
-
-        result = native_web_sandbox.run('update-manager')
-
-        assert result.returncode == 0, result.stdout
-        assert native_web_sandbox.manager.read_bytes() == source
-
-    @pytest.mark.parametrize('valid_digest', [True, False], ids=['verified', 'checksum-mismatch'])
-    def test_legacy_update_bootstraps_a_missing_native_manager(self, native_web_sandbox, web_endpoints, valid_digest):
-        sandbox = native_web_sandbox
-        payload = b'fixture manager executable'
-        web_endpoints.manager_binary = payload
-        sandbox.env.update(
-            NO_PROXY='*',
-            PROXY_AGENT_MANAGER_BINARY_URL=web_endpoints.origin_url + '/native-manager',
-            PROXY_AGENT_MANAGER_BINARY_SHA256=hashlib.sha256(payload).hexdigest() if valid_digest else '0' * 64,
-        )
-        original_config = sandbox.config.read_bytes()
-        original_version = sandbox.version.read_bytes()
-
-        result = sandbox.run('update-manager')
-
-        assert result.returncode == int(not valid_digest), result.stdout
-        binary = sandbox.agent / ('manager.exe' if WINDOWS else 'manager')
-        if valid_digest:
-            assert binary.read_bytes() == payload
-        else:
-            assert not binary.exists()
-        assert sandbox.config.read_bytes() == original_config
-        assert sandbox.version.read_bytes() == original_version
-        assert not sandbox.calls('docker')
-        assert not list(sandbox.agent.glob('.native-manager.*'))
 
     @pytest.mark.parametrize('credentials', [None, ('us@er', 'p:ss')], ids=['anonymous', 'basic-auth'])
     @pytest.mark.parametrize('no_proxy', ['', 'host', '*'], ids=['proxied', 'bypass-host', 'bypass-all'])
-    @pytest.mark.parametrize('operation', ['install', 'upgrade', 'update-manager'])
+    @pytest.mark.parametrize('operation', ['install', 'upgrade'])
     def test_routing_and_credentials(
         self, native_web_sandbox, web_endpoints, credentials, no_proxy, operation
     ):
@@ -240,7 +205,7 @@ class TestProxyContract:
             PROXY_AGENT_REGISTRY_TAGS_URL=registry_url,
             PROXY_AGENT_SCRIPT_URL=script_url,
         )
-        expected_urls = {script_url} if operation == 'update-manager' else {registry_url}
+        expected_urls = {registry_url}
         if operation == 'install':
             expected_urls.add(script_url)
             result = sandbox.install()
@@ -363,17 +328,6 @@ class TestWindowsProxy:
     process-wide proxy changes into another test or making network requests.
     """
 
-    def test_update_manager_uses_override_url_and_https_proxy(self, proxy_sandbox):
-        url = 'https://downloads.example.com/manager.ps1'
-        proxy_sandbox.env.update(PROXY_AGENT_SCRIPT_URL=url, HTTPS_PROXY='http://proxy.example.com:3128')
-
-        result = proxy_sandbox.run('update-manager')
-
-        assert result.returncode == 0, result.stdout
-        assert proxy_sandbox.calls('request') == [[url, '', '30']]
-        assert proxy_sandbox.snapshot['proxy_address'] == 'http://proxy.example.com:3128/'
-        if 'http_client_proxy' in proxy_sandbox.snapshot:
-            assert proxy_sandbox.snapshot['http_client_proxy']
 
     def test_credentials_and_no_proxy_host_boundaries(self, proxy_sandbox, upgrade):
         proxy_sandbox.env.update(

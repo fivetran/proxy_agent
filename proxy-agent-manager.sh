@@ -1,50 +1,17 @@
 #!/usr/bin/env bash
-#
-#  Management script for Fivetran Proxy Agent (Docker)
-#
-#  Usage: ./proxy-agent-manager.sh {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}
-#
 set -euo pipefail
 
-BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+BASE_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 
-# PROXY_AGENT_IMAGE and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
-# test suite can run against a stub image and registry.
 IMAGE="${PROXY_AGENT_IMAGE:-us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent}"
-# Appended to the plain agent version to form the Linux image tag.
 IMAGE_TAG_SUFFIX="-ubuntu-26.04"
 CONFIG_FILE="$BASE_DIR/config/config.json"
 VERSION_FILE="$BASE_DIR/version"
 SETTINGS_FILE="$BASE_DIR/settings.sh"
-
-get_agent_id() {
-    grep -o '"agent_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null \
-        | sed 's/.*"agent_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' \
-        || true
-}
-
 LOGFILE="$BASE_DIR/logs/proxy-agent-manager.log"
 CONTAINER_LOG_DIR="/app/logs"
 CONTAINER_CONFIG_FILE="/config/config.json"
 
-# ── Functions ────────────────────────────────────────────────────────────────
-
-log() {
-    echo "$1"
-    mkdir -p "$(dirname "$LOGFILE")"
-    echo "$(date -u +'%Y-%m-%d %H:%M:%S') UTC - $1" >> "$LOGFILE"
-}
-
-# Only the commands that start a container check the setting, so stop, status
-# and logs still work with an invalid one.
-check_memory_allocation() {
-    if ! [[ "$MEMORY_ALLOCATION_MB" =~ ^[0-9]+$ ]] || [ "$MEMORY_ALLOCATION_MB" -lt 1 ]; then
-        echo "ERROR: Invalid MEMORY_ALLOCATION_MB in $SETTINGS_FILE: $MEMORY_ALLOCATION_MB (must be a positive integer, in MB)"
-        exit 1
-    fi
-}
-
-# Bootstrap just the manager for existing installations, without starting Docker.
 install_native_manager() (
     local url="${PROXY_AGENT_MANAGER_BINARY_URL:-}"
     local expected="${PROXY_AGENT_MANAGER_BINARY_SHA256:-}"
@@ -72,38 +39,32 @@ install_native_manager() (
     fi
     expected=$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')
     [ "${digest%% *}" = "$expected" ] || exit 1
-    chmod u+x "$candidate" && mv -f -- "$candidate" "$BASE_DIR/manager" || exit 1
+    chmod u+x "$candidate" || exit 1
+    if [ "${1:-}" = update-manager ] && ! "$candidate" update-manager --help >/dev/null 2>&1; then
+        exit 1
+    fi
+    mv -f -- "$candidate" "$BASE_DIR/manager" || exit 1
     echo "Native manager installed."
 )
 
-# Download beside the installed script so rename replaces it atomically.
-# The subshell confines the cleanup trap to this command.
-update_manager() (
-    local script_url="${PROXY_AGENT_SCRIPT_URL:-https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh}"
-    local tmp_script
-    tmp_script=$(mktemp "$BASE_DIR/.proxy-agent-manager.XXXXXX")
-    trap 'rm -f "$tmp_script"' EXIT
+get_agent_id() {
+    grep -o '"agent_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null \
+        | sed 's/.*"agent_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' \
+        || true
+}
 
-    echo "Downloading management script..."
-    if ! curl -fSsL --max-time 30 "$script_url" -o "$tmp_script"; then
-        echo "ERROR: Failed to download management script" >&2
+log() {
+    echo "$1"
+    mkdir -p "$(dirname "$LOGFILE")"
+    echo "$(date -u +'%Y-%m-%d %H:%M:%S') UTC - $1" >> "$LOGFILE"
+}
+
+check_memory_allocation() {
+    if ! [[ "$MEMORY_ALLOCATION_MB" =~ ^[0-9]+$ ]] || [ "$MEMORY_ALLOCATION_MB" -lt 1 ]; then
+        echo "ERROR: Invalid MEMORY_ALLOCATION_MB in $SETTINGS_FILE: $MEMORY_ALLOCATION_MB (must be a positive integer, in MB)"
         exit 1
     fi
-    if [ ! -s "$tmp_script" ] || ! bash -n "$tmp_script"; then
-        echo "ERROR: Downloaded management script is empty or has invalid syntax" >&2
-        exit 1
-    fi
-    chmod u+x "$tmp_script"
-    mv -f "$tmp_script" "$0"
-    echo "Management script updated. The agent has not been restarted."
-    if [ ! -x "$BASE_DIR/manager" ] &&
-        { [ -z "${PROXY_AGENT_SCRIPT_URL:-}" ] || [ -n "${PROXY_AGENT_MANAGER_BINARY_URL:-}${PROXY_AGENT_MANAGER_BINARY_SHA256:-}" ]; }; then
-        if ! install_native_manager; then
-            echo "WARNING: Could not install a verified native manager. The management script remains available." >&2
-            [ -z "${PROXY_AGENT_MANAGER_BINARY_URL:-}${PROXY_AGENT_MANAGER_BINARY_SHA256:-}" ] || exit 1
-        fi
-    fi
-)
+}
 
 get_latest_version() {
     local registry_host="${IMAGE%%/*}"
@@ -122,8 +83,6 @@ get_latest_version() {
         || true
 }
 
-# Prints the plain agent version for a version file entry. Accepts a plain
-# version (1.2.9) or a legacy image tag (1.2.9-ubuntu-26.04).
 get_release_version() {
     local tag="$1"
     if [[ "$tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-ubuntu-26\.04)?$ ]]; then
@@ -227,17 +186,10 @@ start_agent() {
     fi
 }
 
-# Lists the logs doctors saved in the log folder, sorted for comm.
 list_doctor_logs() {
     find "$BASE_DIR/logs" -maxdepth 1 -name 'doctor-*.log' | LC_ALL=C sort
 }
 
-# Runs the doctor in a throwaway container beside the agent's, passing "$@" to
-# --doctor (e.g. --region us-east-1), and exits with its exit code. Newer
-# doctors save their log and an archive to the mounted log folder, so they
-# outlive the container. Otherwise, as with older doctors (e.g. 1.2.10), which
-# only print their report, or when the doctor fails before saving its log, its
-# output is saved there instead.
 run_doctor() {
     mkdir -p "$BASE_DIR/logs"
     local output_file temporary_output_file earlier_doctor_logs timestamp
@@ -277,76 +229,87 @@ run_doctor() {
     exit "$status"
 }
 
-# ── Commands ─────────────────────────────────────────────────────────────────
-
-# Updating the manager does not require agent configuration or Docker. Exit in
-# this parsed block so Bash never resumes reading the replaced script.
-if [ "${1:-}" = "update-manager" ]; then
-    if [ -x "$BASE_DIR/manager" ] && "$BASE_DIR/manager" update-manager --help >/dev/null 2>&1; then
-        exec "$BASE_DIR/manager" --agent-dir "$BASE_DIR" "$@"
+load_agent() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "ERROR: Config file not found: $CONFIG_FILE"
+        exit 1
     fi
-    update_manager
-    exit 0
-fi
 
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "ERROR: Config file not found: $CONFIG_FILE"
-    exit 1
-fi
+    AGENT_ID=$(get_agent_id)
+    if [ -z "$AGENT_ID" ] || [ "$AGENT_ID" = "null" ]; then
+        echo "ERROR: 'agent_id' missing in $CONFIG_FILE"
+        exit 1
+    fi
 
-AGENT_ID=$(get_agent_id)
-if [ -z "$AGENT_ID" ] || [ "$AGENT_ID" = "null" ]; then
-    echo "ERROR: 'agent_id' missing in $CONFIG_FILE"
-    exit 1
-fi
+    CONTAINER_NAME="proxy-agent-${AGENT_ID}"
 
-CONTAINER_NAME="proxy-agent-${AGENT_ID}"
+    if [ ! -f "$VERSION_FILE" ]; then
+        echo "ERROR: $VERSION_FILE not found."
+        exit 1
+    fi
+    # Also strips the UTF-8 byte order mark an editor on Windows may add.
+    PINNED_VERSION=$(LC_ALL=C tr -d '[:space:]\357\273\277' < "$VERSION_FILE")
+    if [ -z "$PINNED_VERSION" ]; then
+        echo "ERROR: $VERSION_FILE is empty."
+        exit 1
+    fi
 
-if [ ! -f "$VERSION_FILE" ]; then
-    echo "ERROR: $VERSION_FILE not found."
-    exit 1
-fi
-# Also strips the UTF-8 byte order mark an editor on Windows may add.
-PINNED_VERSION=$(LC_ALL=C tr -d '[:space:]\357\273\277' < "$VERSION_FILE")
-if [ -z "$PINNED_VERSION" ]; then
-    echo "ERROR: $VERSION_FILE is empty."
-    exit 1
-fi
+    if [ -f "$SETTINGS_FILE" ]; then
+        # shellcheck disable=SC1090
+        source "$SETTINGS_FILE"
+    fi
+    MEMORY_ALLOCATION_MB="${MEMORY_ALLOCATION_MB:-5120}"
 
-if [ -f "$SETTINGS_FILE" ]; then
-    # shellcheck disable=SC1090
-    source "$SETTINGS_FILE"
-fi
-MEMORY_ALLOCATION_MB="${MEMORY_ALLOCATION_MB:-5120}"
+    # Shared by the agent and doctor containers, so the doctor checks the agent's
+    # config, memory limit and log folder.
+    AGENT_RUN_ARGS=(
+        --memory="${MEMORY_ALLOCATION_MB}m"
+        --env IS_DOCKER=true
+        --env LOG_FOLDER_PATH="$CONTAINER_LOG_DIR"
+        -v "$BASE_DIR/config/config.json:$CONTAINER_CONFIG_FILE:ro"
+        -v "$BASE_DIR/logs:$CONTAINER_LOG_DIR"
+    )
+}
 
-# Shared by the agent and doctor containers, so the doctor checks the agent's
-# config, memory limit and log folder.
-AGENT_RUN_ARGS=(
-    --memory="${MEMORY_ALLOCATION_MB}m"
-    --env IS_DOCKER=true
-    --env LOG_FOLDER_PATH="$CONTAINER_LOG_DIR"
-    -v "$BASE_DIR/config/config.json:$CONTAINER_CONFIG_FILE:ro"
-    -v "$BASE_DIR/logs:$CONTAINER_LOG_DIR"
-)
+run_native_manager() {
+    local manager="$BASE_DIR/manager"
+    if [ ! -f "$manager" ] && ! install_native_manager; then
+        echo "ERROR: Could not install a verified native manager." >&2
+        exit 1
+    fi
+    # An early native installer may predate the update-manager command.
+    if [ "${1:-}" = update-manager ] && ! "$manager" update-manager --help >/dev/null 2>&1; then
+        install_native_manager update-manager || {
+            echo "ERROR: Could not install a native manager that supports update-manager." >&2
+            exit 1
+        }
+    fi
+    exec "$manager" "$@"
+}
 
 case "${1:-}" in
+    status)
+        load_agent
+        docker ps -a --filter "name=${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
+        ;;
+    logs)
+        load_agent
+        docker logs -f "${CONTAINER_NAME}"
+        ;;
+    stop)
+        load_agent
+        log "Stopping ${CONTAINER_NAME}..."
+        stop_agent
+        ;;
     start)
+        load_agent
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
         check_memory_allocation
         pin_version "$CURRENT_VERSION"
         start_agent "$CURRENT_VERSION"
         ;;
-
-    stop)
-        log "Stopping ${CONTAINER_NAME}..."
-        stop_agent
-        ;;
-
-    status)
-        docker ps -a --filter "name=${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
-        ;;
-
     restart)
+        load_agent
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
         check_memory_allocation
         log "Restarting ${CONTAINER_NAME}..."
@@ -354,26 +317,20 @@ case "${1:-}" in
         pin_version "$CURRENT_VERSION"
         start_agent "$CURRENT_VERSION"
         ;;
-
     upgrade)
+        load_agent
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
         check_memory_allocation
         upgrade_agent
         ;;
-
-    logs)
-        docker logs -f "${CONTAINER_NAME}"
-        ;;
-
     doctor)
+        load_agent
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
         check_memory_allocation
         shift
         run_doctor "$@"
         ;;
-
     *)
-        echo "Usage: $0 {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}"
-        exit 1
+        run_native_manager "$@"
         ;;
 esac
