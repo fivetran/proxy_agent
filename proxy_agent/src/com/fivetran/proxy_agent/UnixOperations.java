@@ -151,4 +151,8 @@ class UnixOperations implements OsOperations {
         Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rwx------"));
     }
 
+    @Override
+    public int start(Path manager) throws IOException, InterruptedException {
+        return commands.run(manager.getParent(), List.of(manager.toString(), "start"));
+    }
 }

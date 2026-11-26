@@ -8,15 +8,9 @@ import java.util.List;
 /** Runs Docker commands on the host. */
 class Docker {
     private final CommandRunner commands;
-    private final String executable;
 
     Docker(CommandRunner commands) {
-        this(commands, "docker");
-    }
-
-    Docker(CommandRunner commands, String executable) {
         this.commands = commands;
-        this.executable = executable;
     }
 
     CommandRunner.Result capture(String... arguments) throws IOException, InterruptedException {
@@ -31,9 +25,9 @@ class Docker {
         return commands.runAndRecord(directory, command(arguments.toArray(String[]::new)), report);
     }
 
-    private List<String> command(String[] arguments) {
+    private static List<String> command(String[] arguments) {
         var command = new ArrayList<String>();
-        command.add(executable);
+        command.add("docker");
         command.addAll(List.of(arguments));
         return command;
     }

@@ -1,8 +1,10 @@
 """Check installer results with controlled Docker, web, and host responses.
 
-The real installer writes files and applies real config permissions.
-Sandbox selects the bootstrapper, supplies HTTP fixtures, and records Docker
-commands for both platforms without a Docker daemon.
+The real installer writes files and applies real config permissions. Its
+downloaded manager is replaced with a launcher that only records the start
+request; manager lifecycle behavior is tested in test_manager.py. Sandbox
+selects the host's script and translates installation arguments, allowing shared
+assertions for both platforms without Docker or network access.
 """
 
 import stat
@@ -10,10 +12,6 @@ from pathlib import Path
 
 import pytest
 from support.harness import EXT, WINDOWS
-
-
-def container_starts(sandbox):
-    return [arguments for arguments in sandbox.calls('docker') if arguments[0] == 'run']
 
 
 @pytest.fixture
@@ -44,7 +42,7 @@ class TestInstall:
         settings = (sandbox.installed / f'settings.{EXT}').read_text()
         assert ('$MEMORY_ALLOCATION_MB = 2048' if WINDOWS else 'MEMORY_ALLOCATION_MB=2048') in settings
         assert 'WINDOWS_VERSION' not in settings
-        assert len(container_starts(sandbox)) == 1
+        assert sandbox.calls('manager') == [['start']]
 
     def test_config_permissions(self, sandbox, install):
         sandbox.observe_acl = True
@@ -73,24 +71,41 @@ class TestInstall:
         sandbox.env['RUNTIME'] = 'docker'
         sandbox.config.unlink()
         assert 'Config file not found' in install(code=1)
-        assert not container_starts(sandbox)
+        assert not sandbox.calls('manager')
 
     def test_no_matching_tags_does_not_start(self, sandbox, install):
         sandbox.options['tags'] = ['1.2.13', '1.2.13-windows-ltsc2016']
         install(code=1)
         assert not (sandbox.installed / 'version').exists()
-        assert not container_starts(sandbox)
+        assert not sandbox.calls('manager')
 
     def test_registry_failure_does_not_pin_or_start(self, sandbox, install):
         sandbox.options['registry_failure'] = True
         assert 'Unable to query' in install(code=1)
         assert not (sandbox.installed / 'version').exists()
-        assert not container_starts(sandbox)
+        assert not sandbox.calls('manager')
 
-    def test_docker_start_failure_is_reported(self, sandbox, install):
-        sandbox.options['run_failure_tag'] = '1.2.10'
+    def test_interrupted_download_preserves_existing_installation(self, sandbox, install):
+        """A partial download must be removed without replacing existing files."""
+        (sandbox.installed / 'config').mkdir(parents=True)
+        original = {
+            sandbox.manager.name: 'existing manager',
+            'version': '1.2.9',
+            'config/config.json': '{"agent_id":"existing"}',
+        }
+        for name, contents in original.items():
+            (sandbox.installed / name).write_text(contents)
+        sandbox.options['download_failure'] = True
+        assert 'Failed to download management script' in install(code=1)
+        for name, contents in original.items():
+            assert (sandbox.installed / name).read_text() == contents
+        assert not list(sandbox.installed.glob(sandbox.manager.name + '.*'))
+        assert not sandbox.calls('manager')
+
+    def test_downloaded_manager_failure_is_reported(self, sandbox, install):
+        sandbox.options['manager_exit'] = 7
         assert 'agent failed to start' in install(code=1)
-        assert len(container_starts(sandbox)) == 1
+        assert sandbox.calls('manager') == [['start']]
         assert (sandbox.installed / 'version').read_text().strip() == '1.2.10'
         assert (sandbox.installed / 'config/config.json').read_bytes() == sandbox.config.read_bytes()
 
@@ -100,7 +115,7 @@ class TestInstall:
         original_config = config.read_bytes()
         version = sandbox.installed / 'version'
         original_version = version.read_bytes()
-        starts = container_starts(sandbox)
+        starts = sandbox.calls('manager')
 
         sandbox.env['TOKEN'] = 'fixture-invalid-token'
         sandbox.options['configure_status'] = 401
@@ -108,8 +123,7 @@ class TestInstall:
 
         assert config.read_bytes() == original_config
         assert version.read_bytes() == original_version
-        assert container_starts(sandbox) == starts
-        assert len(starts) == 1
+        assert sandbox.calls('manager') == starts == [['start']]
 
     @pytest.mark.parametrize(
         'options',
@@ -126,7 +140,7 @@ class TestInstall:
         sandbox.options.update(options)
         result = sandbox.install(ConfigPath='')
         assert result.returncode != 0, result.stdout
-        assert not container_starts(sandbox)
+        assert not sandbox.calls('manager')
 
     def test_low_disk_space_warns_using_platform_minimum(self, sandbox, install):
         sandbox.options['free_mb'] = 1000

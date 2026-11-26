@@ -18,7 +18,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-/** Exercises downloaded binary verification and script validation against a local release. */
+/** Exercises downloaded binary verification against a local release. */
 public final class UpdateManagerTest {
     private static final byte[] MANAGER = "verified native manager".getBytes(UTF_8);
 
@@ -41,13 +41,10 @@ public final class UpdateManagerTest {
     }
 
     @Test
-    public void updatesTheBinaryAndScriptTogetherAfterVerification() throws Exception {
+    public void updatesOnlyTheBinaryAfterVerification() throws Exception {
         assertThat(run(hash()), is(0));
         assertThat(Files.readAllBytes(manager), is(MANAGER));
-        assertThat(Files.readAllBytes(wrapper), is(ManagerWrapper.contents(operations.managerScriptName())));
-        var before = Files.getLastModifiedTime(wrapper);
-        assertThat(run(hash()), is(0));
-        assertThat(Files.getLastModifiedTime(wrapper), is(before));
+        assertThat(Files.readString(wrapper), is("original script"));
         assertStagingCleaned();
     }
 
@@ -58,22 +55,10 @@ public final class UpdateManagerTest {
         assertOriginalFiles();
     }
 
-    @Test
-    public void leavesAWrapperFreeInstallationWithoutAScript() throws Exception {
-        Files.delete(wrapper);
-        assertThat(run(hash()), is(0));
-        assertThat(Files.readAllBytes(manager), is(MANAGER));
-        assertThat(Files.exists(wrapper), is(false));
-    }
-
     private int run(String digest) throws Exception {
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/", request -> {
+        server.createContext("/manager", request -> {
             try (request) {
-                if (!request.getRequestURI().getPath().equals("/manager")) {
-                    request.sendResponseHeaders(404, -1);
-                    return;
-                }
                 request.sendResponseHeaders(200, MANAGER.length);
                 request.getResponseBody().write(MANAGER);
             }

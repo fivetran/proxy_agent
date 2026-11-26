@@ -47,7 +47,6 @@ public final class Application implements Callable<Integer> {
     int execute(String[] args) {
         var commandLine = new CommandLine(this);
         commandLine.setExpandAtFiles(false);
-        commandLine.getSubcommands().get("doctor").setUnmatchedOptionsArePositionalParams(true);
         return commandLine.execute(args);
     }
 

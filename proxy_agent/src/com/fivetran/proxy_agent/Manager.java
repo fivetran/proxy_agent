@@ -27,6 +27,7 @@ final class Manager {
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .disable(StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION)
             .build();
+    private static final String SCRIPT_ROOT = "https://raw.githubusercontent.com/fivetran/proxy_agent/main/";
     private static final String IMAGE =
             "us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent";
     private static final String LINUX_SUFFIX = "-ubuntu-26.04";
@@ -65,7 +66,7 @@ final class Manager {
         return docker;
     }
 
-    /** Downloads and verifies a native manager update. */
+    /** Downloads the native release. */
     int updateManager(Path directory) throws IOException {
         return new ManagerUpdate(operations, http).run(directory,
                 Environment.get("PROXY_AGENT_MANAGER_BINARY_URL", ""),
@@ -394,6 +395,17 @@ final class Manager {
         return version;
     }
 
+    void downloadManagerScript(Path target) throws IOException {
+        var url = Environment.get("PROXY_AGENT_SCRIPT_URL", SCRIPT_ROOT + operations.managerScriptName());
+        try {
+            http.download(url, target);
+        } catch (ProxySettings.ConfigurationException e) {
+            throw e;
+        } catch (IOException e) {
+            throw new IOException("Failed to download management script", e);
+        }
+    }
+
     List<String> registryTags() throws IOException {
         return registryTags(REGISTRY_URL);
     }
@@ -519,6 +531,12 @@ final class Manager {
             }
         }
         return new ConfigFields(agentId, authToken, legacy);
+    }
+
+    void startAgent(Path script) throws IOException, InterruptedException {
+        if (operations.start(script) != 0) {
+            throw new IOException("Installation complete, but agent failed to start.");
+        }
     }
 
     private record ConfigFields(@Nullable String agentId, @Nullable String authToken, boolean legacy) {}

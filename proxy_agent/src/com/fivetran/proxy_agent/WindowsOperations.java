@@ -68,15 +68,12 @@ class WindowsOperations implements OsOperations {
                 try {
                     $manager = Get-Process -Id $env:PROXY_AGENT_UPDATE_PID -ErrorAction SilentlyContinue
                     if ($manager) { Wait-Process -InputObject $manager -Timeout 60 }
-                    foreach ($name in @('manager.exe', 'proxy-agent-manager.ps1')) {
-                        $source = Join-Path $stage $name
-                        if (-not [IO.File]::Exists($source)) { continue }
-                        $destination = Join-Path $target $name
-                        if ([IO.File]::Exists($destination)) {
-                            [IO.File]::Replace($source, $destination, [NullString]::Value)
-                        } else {
-                            [IO.File]::Move($source, $destination)
-                        }
+                    $source = Join-Path $stage 'manager.exe'
+                    $destination = Join-Path $target 'manager.exe'
+                    if ([IO.File]::Exists($destination)) {
+                        [IO.File]::Replace($source, $destination, [NullString]::Value)
+                    } else {
+                        [IO.File]::Move($source, $destination)
                     }
                     Write-Output 'Native manager updated.'
                 } catch {
@@ -241,6 +238,11 @@ class WindowsOperations implements OsOperations {
     @Override
     public void makeExecutable(Path path) {
         // Executable permissions on Windows are managed by the file ACL.
+    }
+
+    @Override
+    public int start(Path manager) throws IOException, InterruptedException {
+        return commands.run(manager.getParent(), List.of(powerShell, "-NoProfile", "-File", manager.toString(), "start"));
     }
 
     CommandRunner.Result runPowerShell(String command, String argument)

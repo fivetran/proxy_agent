@@ -28,14 +28,11 @@ interface OsOperations {
     /** Returns the release artifact for the running host and architecture. */
     String managerReleaseAsset() throws IOException;
 
+    /** Checks the platform script's syntax without running it. */
     /** Publishes the staged update and reports whether a helper owns the staging directory. */
     default boolean publishManagerUpdate(Path directory, Path staging) throws IOException {
-        for (var file : List.of(managerBinaryName(), managerScriptName())) {
-            var source = staging.resolve(file);
-            if (Files.exists(source)) {
-                Files.move(source, directory.resolve(file), ATOMIC_MOVE, REPLACE_EXISTING);
-            }
-        }
+        var file = managerBinaryName();
+        Files.move(staging.resolve(file), directory.resolve(file), ATOMIC_MOVE, REPLACE_EXISTING);
         return false;
     }
 
@@ -74,6 +71,8 @@ interface OsOperations {
     Path createProtectedConfig(Path directory) throws IOException, InterruptedException;
 
     void makeExecutable(Path path) throws IOException;
+
+    int start(Path manager) throws IOException, InterruptedException;
 
     record Settings(String fileName, String contents) {}
 

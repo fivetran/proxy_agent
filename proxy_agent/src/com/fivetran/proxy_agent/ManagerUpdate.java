@@ -15,7 +15,7 @@ import java.util.HexFormat;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
-/** Stages a verified native manager and migrates an installed legacy script when needed. */
+/** Stages and publishes a verified native manager. */
 final class ManagerUpdate {
     private static final String RELEASE = "https://github.com/fivetran/proxy_agent/releases/download/";
     private static final String LATEST_RELEASE = "https://api.github.com/repos/fivetran/proxy_agent/releases/latest";
@@ -52,7 +52,6 @@ final class ManagerUpdate {
                 throw new IOException("Native manager SHA-256 does not match.");
             }
             operations.makeExecutable(binary);
-            ManagerWrapper.stageMigration(operations, directory, staging);
             deferred = operations.publishManagerUpdate(directory, staging);
             System.out.println((deferred ? "Native manager update scheduled for process exit." : "Native manager updated.")
                     + " SHA-256 " + digest.toLowerCase(Locale.ROOT) + ".");
@@ -60,7 +59,6 @@ final class ManagerUpdate {
         } finally {
             if (!deferred) {
                 Files.deleteIfExists(staging.resolve(operations.managerBinaryName()));
-                Files.deleteIfExists(staging.resolve(operations.managerScriptName()));
                 Files.deleteIfExists(staging);
             }
         }

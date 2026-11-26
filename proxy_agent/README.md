@@ -2,11 +2,8 @@
 
 The Java host CLI implements `manager install`. Installation checks
 prerequisites, prepares the installation directory, configures the agent, and
-pins the compatible image version, and starts the agent through the native
-manager. The installer places a small forwarding script beside the binary for
-callers that use the old path. The forwarder downloads and verifies a missing
-binary, passes through all arguments, and returns the native command's exit
-status.
+pins the compatible image version. It installs and invokes the existing
+platform manager for `start`. The platform scripts delegate supported commands to the installed executable.
 
 The native executable also implements these manager commands.
 
@@ -16,9 +13,7 @@ The native executable also implements these manager commands.
 - `start`
 - `restart`
 - `upgrade`
-- `doctor`
-- `update-manager`
-
+- `doctor` (pass diagnostic options after `--` when invoking the binary directly)
 It validates configuration fetched from Fivetran and stages replacements before
 changing the files in an existing installation.
 
@@ -107,20 +102,17 @@ SHA to that tag. Each release includes all three binaries, their `.sha256`
 files, and both matching manager scripts. Older CI runs can publish their
 assets without replacing a newer release as latest.
 
+The public scripts retain their existing paths. They download a verified
+manager if the binary is missing, then pass their arguments through.
+Run the binary directly or keep using those paths. After the forwarding
+scripts have shipped in the release, native `update-manager` downloads
+only the executable.
+
 Rerun the failed workflow to retry publishing the same commit, or run
 `gh workflow run ci.yml --ref main` to build, test, and release the current
 commit on `main`. Verify the initial release URLs before switching the public
 installers to the native manager.
 
-Release assets include the forwarding scripts for transitional versions of
-`update-manager` that download both files. Current versions download the
-verified binary and use its bundled template to migrate an installed script.
-The full manager scripts at the repository root remain available to
-script-only customers updating from `main`.
-
-## Testing
-
-Run the Java manager unit tests with `bazel test //proxy_agent:tests`.
 Installer unit tests use a Bazel-built test JAR with controlled host probes and
 local HTTP fixtures. Bootstrap tests exercise download and checksum handling
 under Bash, Windows PowerShell 5.1, and PowerShell 7. CI exercises the native

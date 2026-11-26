@@ -147,7 +147,7 @@ Use `proxy-agent-manager.ps1` to control the agent:
 | `logs`    | Stream live container logs                           |
 | `doctor`  | Check the installation and connectivity to Fivetran in a separate container. The doctor's log and archive are saved to `logs/`, or its output if the doctor saves no log, as in 1.2.10. Options are passed to the agent's `--doctor`, e.g. `doctor --region us-east-1` |
 
-### Updating the manager
+### Updating the management script
 
 Run `update-manager` as the user who installed the agent:
 
@@ -159,19 +159,14 @@ Run `update-manager` as the user who installed the agent:
 & "$env:USERPROFILE\fivetran-proxy-agent\proxy-agent-manager.ps1" update-manager
 ```
 
-Use your installation directory if it differs from the default. A script-only
-installation still downloads and validates the full platform script from this
-repository's `main` branch. The public files there remain usable on hosts
-without the native manager.
+Use your installation directory if it differs from the default. This downloads the latest management script from this repository's `main` branch, checks that it is nonempty and has valid syntax, then replaces the installed script. A failed download or validation leaves the existing script intact. Configuration, settings, the pinned agent version, and the running container are unchanged; the new script takes effect on the next command. Updating the manager does not require Docker or valid agent configuration.
 
-`upgrade` updates only the agent container. The native `manager update-manager`
-downloads the platform binary and verifies its SHA-256. If the installation
-still has an older platform script, the update replaces it with a bundled
-forwarder at the same path. Run the native manager directly or keep using the
-`.sh` or `.ps1` path. The installed forwarder downloads and verifies a
-missing native binary, then passes all arguments through.
-On Windows, updates from the installed executable complete after that process
-exits and report their outcome in `logs/manager-update.log`.
+`upgrade` updates only the agent container. An installation with a native
+manager can run `manager update-manager` to download the platform binary,
+verify its SHA-256, and install the accompanying script from the latest manager
+release. On Windows, an update invoked from the installed executable completes
+after that process exits and reports success or failure in
+`logs/manager-update.log`.
 
 #### Older installations without `update-manager`
 

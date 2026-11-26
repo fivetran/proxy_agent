@@ -9,7 +9,7 @@ import java.util.Set;
 public final class TestManager {
     public static void main(String[] args) {
         var commands = new CommandRunner(Set.of("TOKEN"));
-        var docker = new Docker(commands, Environment.get("AGENT_TEST_DOCKER_BIN", "docker"));
+        var docker = new Docker(commands);
         var operations = OsOperations.forCurrentHost(commands, docker);
         if (operations instanceof WindowsOperations) {
             operations = new WindowsOperations(commands, docker) {
