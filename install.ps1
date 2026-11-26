@@ -89,8 +89,7 @@ function Set-WebProxyFromEnvironment {
     try {
         $proxyUri = [Uri]$proxyUrl
     } catch {
-        Write-Host "ERROR: Invalid proxy URL in HTTPS_PROXY/HTTP_PROXY" -ForegroundColor Red
-        exit 1
+        throw 'Invalid proxy URL in HTTPS_PROXY/HTTP_PROXY'
     }
 
     # .NET bypass entries are regular expressions matched against the request URL. As with curl,
@@ -341,7 +340,12 @@ if ($env:RUNTIME -ne 'docker') {
     exit 1
 }
 
-Set-WebProxyFromEnvironment -ProbeUri ([Uri]$REGISTRY_TAGS_URL)
+try {
+    Set-WebProxyFromEnvironment -ProbeUri ([Uri]$REGISTRY_TAGS_URL)
+} catch {
+    Write-Host "ERROR: $_" -ForegroundColor Red
+    exit 1
+}
 
 $currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if ($currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -466,8 +470,19 @@ try {
         Write-Host "ERROR: Failed to download management script from ${AGENT_SCRIPT_URL}: $_" -ForegroundColor Red
         exit 1
     }
+    # Start the manager's 24-hour cooldown at installation.
+    [IO.File]::SetLastWriteTimeUtc($tmpScript, [DateTime]::UtcNow)
     Move-Item -LiteralPath $tmpScript -Destination $agentScript -Force
     Unblock-File -LiteralPath $agentScript
+    # Record the installed bytes so the manager can recognize local edits.
+    try {
+        $updateDir = Join-Path $InstallDir '.manager-auto-update'
+        $null = [IO.Directory]::CreateDirectory($updateDir)
+        [IO.File]::WriteAllLines($tmpScript, @((Get-FileHash -LiteralPath $agentScript).Hash))
+        Move-Item -LiteralPath $tmpScript -Destination (Join-Path $updateDir 'download') -Force
+    } catch {
+        Remove-Item -LiteralPath $tmpScript -Force -ErrorAction SilentlyContinue
+    }
 
     # Bootstrap or copy config
     $configDest  = Join-Path $InstallDir 'config\config.json'

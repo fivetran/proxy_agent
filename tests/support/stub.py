@@ -55,11 +55,21 @@ def record(root, command, args):
         log.write(json.dumps([command, *args]) + "\n")
 
 
+def write_script(path, options, default_script, encoding='utf-8'):
+    if 'script_bytes' in options:
+        Path(path).write_bytes(base64.b64decode(options['script_bytes']))
+    else:
+        Path(path).write_text(options.get('script_content', default_script), encoding=encoding)
+    if 'script_mtime_ns' in options:
+        timestamp = options['script_mtime_ns']
+        os.utime(path, ns=(timestamp, timestamp))
+
+
 def powershell_parameters(command, args):
     """Bind the small cmdlet interfaces used by the scripts, failing on unknown options."""
     positional, allowed = {
         'Invoke-RestMethod': ('uri', {'uri', 'method', 'timeoutsec'}),
-        'Invoke-WebRequest': ('uri', {'uri', 'method', 'timeoutsec', 'headers', 'outfile', 'usebasicparsing'}),
+        'Invoke-WebRequest': ('uri', {'uri', 'method', 'timeoutsec', 'headers', 'outfile', 'usebasicparsing', 'passthru'}),
         'Get-CimInstance': ('classname', {'classname'}),
         'Get-PSDrive': ('name', {'name'}),
     }[command]
@@ -70,7 +80,7 @@ def powershell_parameters(command, args):
             name = argument[1:].lower()
             if name not in allowed | {'erroraction'}:
                 raise ValueError(f'Unexpected {command} parameter: {argument}')
-            if name == 'usebasicparsing':
+            if name in {'usebasicparsing', 'passthru'}:
                 parameters[name] = True
             else:
                 try:
@@ -108,8 +118,7 @@ def powershell_command(root, options, command, args):
                 '& $env:AGENT_TEST_PYTHON $env:AGENT_TEST_STUB manager-json\n'
                 'exit $LASTEXITCODE\n'
             )
-            Path(parameters['outfile']).write_text(
-                options.get('script_content', default_script), encoding='utf-8-sig')
+            write_script(parameters['outfile'], options, default_script, encoding='utf-8-sig')
             if options.get('download_exit'):
                 return {'download_error': 'Download interrupted'}
             return None
@@ -201,8 +210,10 @@ def main():
                 return 22
             # The installer downloads a manager that only records its arguments.
             default_script = '#!/usr/bin/env bash\nexec "$AGENT_TEST_PYTHON" "$AGENT_TEST_STUB" manager "$@"\n'
-            Path(args[args.index("-o") + 1]).write_text(
-                options.get('script_content', default_script))
+            write_script(args[args.index("-o") + 1], options, default_script)
+            if '-D' in args:
+                Path(args[args.index('-D') + 1]).write_text('HTTP/1.1 200 OK\r\n\r\n')
+                print('200 0', end='')
             return options.get('download_exit', 0)
         elif any("/proxy-agent/configure" in arg for arg in args):
             if options.get('configure_failure'):
@@ -222,7 +233,7 @@ def main():
         print(f"stub 100000 0 {options.get('free_mb', 100000)} 0% /")
     elif command == "date":
         # Fix timestamps to exercise collisions between doctor reports.
-        print("2020-01-02T03-04-05")
+        print("2020-01-02" if "+%F" in args else "2020-01-02T03-04-05")
     elif command == 'manager':
         if options.get('manager_exit'):
             print('stub manager startup failed')

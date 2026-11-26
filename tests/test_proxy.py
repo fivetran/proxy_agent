@@ -9,6 +9,7 @@ the source-consistency check runs everywhere.
 
 import base64
 import json
+import os
 import re
 import socket
 import threading
@@ -47,7 +48,8 @@ def web_endpoints():
     non-loopback IPv4 address so .NET Framework cannot bypass it automatically.
     """
     endpoints = SimpleNamespace(
-        requests={'origin': [], 'proxy': []}, expected_auth=None, registry_body=None, script_body=None
+        requests={'origin': [], 'proxy': []}, expected_auth=None, registry_body=None,
+        script_body=None, script_etag=None, script_redirect=None,
     )
     script_path = f'/proxy-agent-manager.{EXT}'
     responses = {
@@ -61,11 +63,13 @@ def web_endpoints():
 
             def do_GET(self):
                 authorization = self.headers.get('Proxy-Authorization')
+                if_none_match = self.headers.get('If-None-Match')
                 endpoints.requests[role].append(
                     {
                         'path': self.path,
                         'proxy_authorization': authorization,
                         'authorization': self.headers.get('Authorization'),
+                        'if_none_match': if_none_match,
                     }
                 )
                 if role == 'proxy' and endpoints.expected_auth and authorization != endpoints.expected_auth:
@@ -81,9 +85,22 @@ def web_endpoints():
                 content_type, body = responses[path]
                 if path == '/v2/stub/tags/list' and endpoints.registry_body is not None:
                     body = endpoints.registry_body
+                if path == script_path and endpoints.script_redirect and self.path != endpoints.script_redirect:
+                    self.send_response(302)
+                    self.send_header('Location', endpoints.script_redirect)
+                    self.end_headers()
+                    return
                 if path == script_path and endpoints.script_body is not None:
                     body = endpoints.script_body
+                etag = endpoints.script_etag if path == script_path else None
+                if etag and if_none_match == etag:
+                    self.send_response(304)
+                    self.send_header('ETag', etag)
+                    self.end_headers()
+                    return
                 self.send_response(200)
+                if etag:
+                    self.send_header('ETag', etag)
                 self.send_header('Content-Type', content_type)
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers()
@@ -132,6 +149,66 @@ class TestProxyContract:
 
         assert result.returncode == 0, result.stdout
         assert native_web_sandbox.manager.read_bytes() == source
+
+    def test_daily_update_uses_etag_and_protects_local_edits(self, native_web_sandbox, web_endpoints):
+        sandbox = native_web_sandbox
+        sandbox.env['NO_PROXY'] = '*'
+        web_endpoints.script_etag = '"original"'
+        original = sandbox.manager.read_bytes()
+
+        def daily_check(age_script=True):
+            for stamp in sandbox.update_state.glob('????-??-??'):
+                stamp.unlink()
+            if age_script:
+                os.utime(sandbox.manager, (0, 0))
+            result = sandbox.run('status')
+            assert result.returncode == 0, result.stdout
+            assert 'NAMES IMAGE STATUS' in result.stdout
+            return result.stdout
+
+        assert 'already up to date' in daily_check()
+        assert 'already up to date' in daily_check()
+        assert sandbox.manager.read_bytes() == original
+        assert sandbox.manager.stat().st_mtime == 0
+
+        web_endpoints.script_etag = '"new"'
+        web_endpoints.script_body = original + b'\n# New version\n'
+        assert 'Management script updated' in daily_check()
+        assert sandbox.manager.read_bytes() == web_endpoints.script_body
+        assert 'already up to date' in daily_check()
+
+        # Automatic checks leave local edits in place. Explicit updates restore the download.
+        edited = original + b'\n# Local edit\n'
+        sandbox.manager.write_bytes(edited)
+        assert 'modified locally' in daily_check(age_script=False)
+        assert sandbox.manager.read_bytes() == edited
+        assert len(web_endpoints.requests['origin']) == 4
+
+        result = sandbox.run('update-manager')
+        assert result.returncode == 0, result.stdout
+        assert 'Management script updated' in result.stdout
+        assert sandbox.manager.read_bytes() == web_endpoints.script_body
+        assert 'already up to date' in daily_check()
+
+        # An ETag is scoped to the URL that supplied it.
+        sandbox.env['PROXY_AGENT_SCRIPT_URL'] += '?other-source'
+        assert 'already up to date' in daily_check()
+        assert [request['if_none_match'] for request in web_endpoints.requests['origin']] == [
+            None, '"original"', '"original"', '"new"', None, '"new"', None,
+        ]
+
+        # A redirect target can have different content under the same ETag.
+        web_endpoints.script_redirect = urlsplit(web_endpoints.script_url).path + '?redirected'
+        web_endpoints.script_body = original + b'\n# Redirected version\n'
+        assert 'Management script updated' in daily_check()
+        assert sandbox.manager.read_bytes() == web_endpoints.script_body
+
+        # Downloads without a reusable ETag still establish a local hash.
+        request_count = len(web_endpoints.requests['origin'])
+        sandbox.manager.write_bytes(edited)
+        assert 'modified locally' in daily_check(age_script=False)
+        assert sandbox.manager.read_bytes() == edited
+        assert len(web_endpoints.requests['origin']) == request_count
 
     @pytest.mark.parametrize('credentials', [None, ('us@er', 'p:ss')], ids=['anonymous', 'basic-auth'])
     @pytest.mark.parametrize('no_proxy', ['', 'host', '*'], ids=['proxied', 'bypass-host', 'bypass-all'])

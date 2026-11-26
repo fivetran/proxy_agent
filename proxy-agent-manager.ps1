@@ -18,16 +18,9 @@ $VERSION_FILE       = Join-Path $BASE_DIR 'version'
 $LOGFILE            = Join-Path $BASE_DIR 'logs\proxy-agent-manager.log'
 $CONTAINER_LOG_DIR  = '/app/logs'
 $SETTINGS_FILE = Join-Path $BASE_DIR 'settings.ps1'
+$AUTO_UPDATE_DIR = Join-Path $BASE_DIR '.manager-auto-update'
 # Appended to the plain agent version to form the Linux image tag.
 $LINUX_IMAGE_TAG_SUFFIX = '-ubuntu-26.04'
-
-# ── Startup validation ───────────────────────────────────────────────────────
-
-$validCommands = @('start', 'stop', 'restart', 'upgrade', 'update-manager', 'status', 'logs', 'doctor')
-if (-not $Command -or $Command -notin $validCommands) {
-    Write-Host "Usage: $($MyInvocation.MyCommand.Name) {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}"
-    exit 1
-}
 
 # ── Functions ────────────────────────────────────────────────────────────────
 
@@ -69,8 +62,7 @@ function Set-WebProxyFromEnvironment {
     try {
         $proxyUri = [Uri]$proxyUrl
     } catch {
-        Write-Host "ERROR: Invalid proxy URL in HTTPS_PROXY/HTTP_PROXY" -ForegroundColor Red
-        exit 1
+        throw 'Invalid proxy URL in HTTPS_PROXY/HTTP_PROXY'
     }
 
     # .NET bypass entries are regular expressions matched against the request URL. As with curl,
@@ -106,14 +98,88 @@ function Set-WebProxyFromEnvironment {
     Write-Log "Using proxy $proxyAddress from the environment"
 }
 
+function Get-ManagerSourceHash {
+    param([string]$Url)
+
+    $stream = [IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($Url))
+    try {
+        (Get-FileHash -InputStream $stream).Hash
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 # Validate the download before atomically replacing the installed script.
 function Update-Manager {
+    param([switch]$Automatic)
+
+    if ($Automatic) {
+        $now = [DateTime]::UtcNow
+        $day = $now.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+        if (Test-Path -LiteralPath (Join-Path $AUTO_UPDATE_DIR $day) -PathType Leaf) { return $false }
+    }
     $scriptUrl = if ($env:PROXY_AGENT_SCRIPT_URL) { $env:PROXY_AGENT_SCRIPT_URL } else { 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1' }
+    $cache = Join-Path $AUTO_UPDATE_DIR 'download'
+    $etagPattern = '^"[!#-~]*"$'
+    $saved = @()
+    try {
+        $saved = [IO.File]::ReadAllLines($cache)
+    } catch [IO.IOException], [UnauthorizedAccessException] {
+        # Older installations acquire a baseline on their first successful download.
+    }
+    $hasBaseline = $saved.Count -gt 0 -and $saved[0] -match '^[0-9a-f]{64}$'
+    $locallyModified = $hasBaseline -and
+        $saved[0] -ne (Get-FileHash -LiteralPath $PSCommandPath).Hash
+    if ($Automatic) {
+        # A fresh download starts a cooldown. Local edits still warrant a warning.
+        if (-not $locallyModified -and [IO.File]::GetLastWriteTimeUtc($PSCommandPath) -gt $now.AddDays(-1)) {
+            return $false
+        }
+        if (-not (Register-ManagerUpdateCheck $day)) { return $false }
+        if ($locallyModified) {
+            Write-Warning 'Management script was modified locally. Automatic updates are paused. Run update-manager to restore automatic updates.'
+            return $false
+        }
+    }
     $tmpScript = Join-Path $BASE_DIR ('.proxy-agent-manager.' + [guid]::NewGuid() + '.ps1')
+    $tmpCache = "$tmpScript.etag"
     try {
         Set-WebProxyFromEnvironment -ProbeUri ([Uri]$scriptUrl)
-        Write-Host "Downloading management script..."
-        Invoke-WebRequest -Uri $scriptUrl -OutFile $tmpScript -UseBasicParsing -TimeoutSec 30
+        $sourceHash = Get-ManagerSourceHash $scriptUrl
+        $headers = @{}
+        # A cache entry only applies to the same source and exact installed bytes.
+        if ($saved.Count -eq 3 -and $hasBaseline -and -not $locallyModified -and
+            $saved[1] -eq $sourceHash -and $saved[2] -cmatch $etagPattern) {
+            $headers['If-None-Match'] = $saved[2]
+        }
+
+        Write-Host 'Checking for management script updates...'
+        do {
+            try {
+                $response = Invoke-WebRequest -Uri $scriptUrl -OutFile $tmpScript -UseBasicParsing -TimeoutSec 30 -PassThru -Headers $headers
+                $rawResponse = $response.BaseResponse
+            } catch {
+                $rawResponse = $_.Exception.Response
+                if ($headers.Count -eq 0 -or $rawResponse.StatusCode -ne 304) { throw }
+            }
+            $responseUri = if ($PSVersionTable.PSVersion.Major -ge 7) {
+                $rawResponse.RequestMessage.RequestUri
+            } else {
+                $rawResponse.ResponseUri
+            }
+            if ($rawResponse.StatusCode -ne 304) { break }
+            if ($responseUri -eq [Uri]$scriptUrl) {
+                Write-Host 'Management script is already up to date.'
+                return $false
+            }
+            # A redirected resource can reuse the same tag for different bytes.
+            $headers.Clear()
+        } while ($true)
+        # Some PowerShell versions return the body only in memory with -PassThru.
+        if ($response.RawContentStream.Length -gt 0 -and
+            (-not [IO.File]::Exists($tmpScript) -or [IO.FileInfo]::new($tmpScript).Length -eq 0)) {
+            [IO.File]::WriteAllBytes($tmpScript, $response.RawContentStream.ToArray())
+        }
         if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $tmpScript -Raw))) {
             throw 'Downloaded management script is empty.'
         }
@@ -122,16 +188,51 @@ function Update-Manager {
         if ($parseErrors.Count -gt 0) {
             throw 'Downloaded management script has invalid syntax.'
         }
-        Unblock-File -LiteralPath $tmpScript
-        # $null binds to an empty string here; Replace requires a null backup path.
-        [System.IO.File]::Replace($tmpScript, $PSCommandPath, [NullString]::Value)
-        Write-Host "Management script updated. The agent has not been restarted."
-    } catch {
-        Write-Host "ERROR: Failed to update management script: $_" -ForegroundColor Red
-        exit 1
+        $downloadHash = (Get-FileHash -LiteralPath $tmpScript).Hash
+        $updated = $downloadHash -ne (Get-FileHash -LiteralPath $PSCommandPath).Hash
+        if ($updated) {
+            Unblock-File -LiteralPath $tmpScript
+            # $null binds to an empty string here; Replace requires a null backup path.
+            [System.IO.File]::Replace($tmpScript, $PSCommandPath, [NullString]::Value)
+        }
+        $etag = if ($response.StatusCode -eq 200 -and $responseUri -eq [Uri]$scriptUrl) {
+            @($response.Headers['ETag'])[0]
+        }
+        if ($etag -cnotmatch $etagPattern) { $etag = '' }
+        try {
+            $null = [IO.Directory]::CreateDirectory($AUTO_UPDATE_DIR)
+            [IO.File]::WriteAllLines($tmpCache, @($downloadHash, $sourceHash, $etag))
+            Move-Item -LiteralPath $tmpCache -Destination $cache -Force
+        } catch {
+            # The downloaded script is usable even if the baseline could not be saved.
+        }
+        if (-not $updated) {
+            Write-Host 'Management script is already up to date.'
+            return $false
+        }
+        Write-Host "Management script updated to $($downloadHash.ToLowerInvariant())."
+        return $true
     } finally {
-        Remove-Item -LiteralPath $tmpScript -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpScript, $tmpCache -Force -ErrorAction SilentlyContinue
     }
+}
+
+# Claim the UTC day so simultaneous invocations share one check, including failures.
+function Register-ManagerUpdateCheck {
+    param([string]$Day)
+
+    $stamp = Join-Path $AUTO_UPDATE_DIR $day
+    $null = [IO.Directory]::CreateDirectory($AUTO_UPDATE_DIR)
+    try {
+        [IO.File]::Open($stamp, [IO.FileMode]::CreateNew).Dispose()
+    } catch [IO.IOException] {
+        if (Test-Path -LiteralPath $stamp -PathType Leaf) { return $false }
+        throw
+    }
+    Get-ChildItem -LiteralPath $AUTO_UPDATE_DIR -File -Filter '????-??-??' |
+        Where-Object { $_.Name -clt $day } |
+        Remove-Item -ErrorAction SilentlyContinue
+    return $true
 }
 
 function Get-ContainerOsType {
@@ -528,8 +629,31 @@ function Invoke-Doctor {
 
 # Updating the manager does not require agent configuration or Docker.
 if ($Command -eq 'update-manager') {
-    Update-Manager
+    try {
+        $null = Update-Manager
+    } catch {
+        Write-Host "ERROR: Failed to update management script: $_" -ForegroundColor Red
+        exit 1
+    }
     exit 0
+}
+$managerUpdated = $false
+try {
+    $managerUpdated = Update-Manager -Automatic
+} catch {
+    Write-Warning "Failed to update management script: $_"
+}
+if ($managerUpdated) {
+    # Call the replacement in a new script scope with the original bound parameters.
+    $global:LASTEXITCODE = 0
+    & $PSCommandPath @PSBoundParameters
+    exit $LASTEXITCODE
+}
+
+$validCommands = @('start', 'stop', 'restart', 'upgrade', 'status', 'logs', 'doctor')
+if ($Command -notin $validCommands) {
+    Write-Host "Usage: $($MyInvocation.MyCommand.Name) {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}"
+    exit 1
 }
 
 # settings.ps1 may set $MEMORY_ALLOCATION_MB and, for Windows containers,

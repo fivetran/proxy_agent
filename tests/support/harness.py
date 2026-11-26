@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 REPO = Path(__file__).resolve().parents[2]
 WINDOWS = sys.platform == 'win32'
@@ -56,6 +57,11 @@ class Sandbox:
         self.version.write_text('1.2.9\n')
         self.manager = self.agent / f'proxy-agent-manager.{EXT}'
         shutil.copy2(REPO / self.manager.name, self.manager)
+        # Most tests exercise agent commands after the day's update check.
+        self.update_state = self.agent / '.manager-auto-update'
+        self.update_state.mkdir()
+        day = datetime.now(timezone.utc).date().isoformat() if WINDOWS else '2020-01-02'
+        (self.update_state / day).touch()
         self.installed = self.root / 'installed'
         self.options = dict(container_os=container_os, tags=TAGS.copy(), build=20348,
                             product_type=3, free_mb=100000)

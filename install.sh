@@ -329,7 +329,21 @@ main() {
         die "Failed to download management script from $AGENT_SCRIPT_URL"
     fi
     chmod u+x "$tmp_script"
+    # Start the manager's 24-hour cooldown at installation.
+    touch -m -- "$tmp_script"
     mv "$tmp_script" "$install_dir/$AGENT_SCRIPT"
+    # Record the installed bytes so the manager can recognize local edits.
+    local update_dir="$install_dir/.manager-auto-update" digest
+    (
+        if command -v sha256sum >/dev/null; then
+            digest=$(sha256sum < "$install_dir/$AGENT_SCRIPT") || exit 1
+        else
+            digest=$(shasum -a 256 < "$install_dir/$AGENT_SCRIPT") || exit 1
+        fi
+        mkdir -p -- "$update_dir" &&
+            printf '%s\n' "${digest%% *}" > "$tmp_script" &&
+            mv -f -- "$tmp_script" "$update_dir/download"
+    ) 2>/dev/null || rm -f -- "$tmp_script"
 
     # Bootstrap or copy config
     if [ -z "${config_path:-}" ]; then

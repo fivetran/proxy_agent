@@ -16,6 +16,7 @@ IMAGE_TAG_SUFFIX="-ubuntu-26.04"
 CONFIG_FILE="$BASE_DIR/config/config.json"
 VERSION_FILE="$BASE_DIR/version"
 SETTINGS_FILE="$BASE_DIR/settings.sh"
+AUTO_UPDATE_DIR="$BASE_DIR/.manager-auto-update"
 
 get_agent_id() {
     grep -o '"agent_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null \
@@ -44,27 +45,124 @@ check_memory_allocation() {
     fi
 }
 
+manager_hash() {
+    local digest
+    local -a hash_command=(sha256sum)
+    if ! command -v sha256sum >/dev/null; then
+        hash_command=(shasum -a 256)
+    fi
+    digest=$("${hash_command[@]}") || return 1
+    printf '%s\n' "${digest%% *}"
+}
+
 # Download beside the installed script so rename replaces it atomically.
 # The subshell confines the cleanup trap to this command.
+# Exit 0 after replacement, 2 if current, and 1 on failure.
 update_manager() (
     local script_url="${PROXY_AGENT_SCRIPT_URL:-https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.sh}"
-    local tmp_script
-    tmp_script=$(mktemp "$BASE_DIR/.proxy-agent-manager.XXXXXX")
-    trap 'rm -f "$tmp_script"' EXIT
-
-    echo "Downloading management script..."
-    if ! curl -fSsL --max-time 30 "$script_url" -o "$tmp_script"; then
-        echo "ERROR: Failed to download management script" >&2
-        exit 1
+    local day="${1:-}" tmp_script tmp_headers response
+    local current_hash='' saved_hash='' saved_source='' etag='' locally_modified=false
+    local cache="$AUTO_UPDATE_DIR/download" etag_pattern='^"[!#-~]*"$'
+    local -a headers=()
+    if [ -f "$cache" ]; then
+        {
+            IFS= read -r saved_hash
+            IFS= read -r saved_source
+            IFS= read -r etag
+        } < "$cache" 2>/dev/null || true
     fi
+    if [[ "$saved_hash" =~ ^[0-9a-f]{64}$ ]]; then
+        current_hash=$(manager_hash < "$0" 2>/dev/null) || current_hash=''
+        [ -z "$current_hash" ] || [ "$saved_hash" = "$current_hash" ] || locally_modified=true
+    fi
+    if [ -n "$day" ]; then
+        # A fresh download starts a cooldown. Local edits still warrant a warning.
+        if [ "$locally_modified" = false ] &&
+            [ -n "$(find -L "$BASE_DIR/${0##*/}" -mtime -1 -print)" ]; then
+            exit 2
+        fi
+        claim_manager_update_check "$day" || exit "$?"
+        if [ "$locally_modified" = true ]; then
+            echo "WARNING: Management script was modified locally. Automatic updates are paused. Run update-manager to restore automatic updates."
+            exit 2
+        fi
+    fi
+    local source_hash
+    source_hash=$(printf '%s' "$script_url" | manager_hash 2>/dev/null) || source_hash=''
+    if [ -n "$current_hash" ] && [ "$locally_modified" = false ] && [ -n "$source_hash" ] &&
+        [ "$saved_source" = "$source_hash" ] && [[ "$etag" =~ $etag_pattern ]]; then
+        headers=(-H "If-None-Match: $etag")
+    fi
+
+    tmp_script=$(mktemp "$BASE_DIR/.proxy-agent-manager.XXXXXX") || exit 1
+    tmp_headers="$tmp_script.headers"
+    trap 'rm -f "$tmp_script" "$tmp_headers"' EXIT
+
+    echo "Checking for management script updates..."
+    while :; do
+        if ! response=$(curl -fSsL --max-time 30 "${headers[@]+"${headers[@]}"}" \
+            -D "$tmp_headers" -w '%{http_code} %{num_redirects}' -o "$tmp_script" "$script_url"); then
+            echo "ERROR: Failed to download management script" >&2
+            exit 1
+        fi
+        [[ "$response" != '304 '* || -z "${headers[0]:-}" ]] && break
+        if [ "$response" = '304 0' ]; then
+            echo "Management script is already up to date."
+            exit 2
+        fi
+        # A redirected resource can reuse the same tag for different bytes.
+        headers=()
+    done
     if [ ! -s "$tmp_script" ] || ! bash -n "$tmp_script"; then
         echo "ERROR: Downloaded management script is empty or has invalid syntax" >&2
         exit 1
     fi
-    chmod u+x "$tmp_script"
-    mv -f "$tmp_script" "$0"
-    echo "Management script updated. The agent has not been restarted."
+    # Record the validated download even when the server supplies no usable ETag.
+    local download_hash
+    download_hash=$(manager_hash < "$tmp_script" 2>/dev/null) || download_hash=''
+    etag=''
+    if [ "$response" = '200 0' ]; then
+        etag=$(awk 'tolower($1) == "etag:" { sub(/\r$/, "", $2); tag = $2 } /^HTTP\// { tag = "" } END { print tag }' "$tmp_headers")
+    fi
+    local updated=false
+    if ! cmp -s "$tmp_script" "$0"; then
+        chmod u+x "$tmp_script" && mv -f -- "$tmp_script" "$0" || exit 1
+        updated=true
+    fi
+    if [ -n "$download_hash" ]; then
+        (mkdir -p -- "$AUTO_UPDATE_DIR" &&
+            printf '%s\n' "$download_hash" "$source_hash" "$etag" > "$tmp_headers" &&
+            mv -f -- "$tmp_headers" "$cache") 2>/dev/null || true
+    fi
+    if [ "$updated" = false ]; then
+        echo "Management script is already up to date."
+        exit 2
+    fi
+    echo "Management script updated${download_hash:+ to $download_hash}."
 )
+
+# Claim the UTC day so concurrent invocations share one attempt, including failures.
+claim_manager_update_check() {
+    local day="$1" stamp
+    mkdir -p -- "$AUTO_UPDATE_DIR" || return 1
+    if ! (set -C; : > "$AUTO_UPDATE_DIR/$day") 2>/dev/null; then
+        [ -f "$AUTO_UPDATE_DIR/$day" ] && return 2
+        echo "ERROR: Could not record the management script update check" >&2
+        return 1
+    fi
+    for stamp in "$AUTO_UPDATE_DIR"/????-??-??; do
+        if [[ ${stamp##*/} < "$day" ]]; then
+            rm -f -- "$stamp"
+        fi
+    done
+}
+
+check_manager_update() {
+    local day
+    day=$(date -u +%F) || return 1
+    [ -f "$AUTO_UPDATE_DIR/$day" ] && return 2
+    update_manager "$day" >&2
+}
 
 get_latest_version() {
     local registry_host="${IMAGE%%/*}"
@@ -242,10 +340,22 @@ run_doctor() {
 
 # Updating the manager does not require agent configuration or Docker. Exit in
 # this parsed block so Bash never resumes reading the replaced script.
-if [ "${1:-}" = "update-manager" ]; then
-    update_manager
-    exit 0
-fi
+case "${1:-}" in
+    update-manager)
+        if update_manager; then
+            exit 0
+        else
+            status=$?
+            [ "$status" -eq 2 ] && exit 0
+            exit "$status"
+        fi
+        ;;
+    *)
+        if check_manager_update; then
+            exec "$BASH" "$0" "$@"
+        fi
+        ;;
+esac
 
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "ERROR: Config file not found: $CONFIG_FILE"
