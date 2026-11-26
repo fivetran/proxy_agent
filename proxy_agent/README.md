@@ -72,8 +72,8 @@ the latest full legacy manager from `main`. When that script runs
 verified release binary if it is missing. It leaves the running container,
 configuration, and pinned agent version alone.
 
-By default both bootstrap scripts fetch the binary and SHA-256 digest for the
-version named in the script. They also accept `PROXY_AGENT_MANAGER_BIN` for a
+Both bootstrap scripts fetch the binary and SHA-256 digest from the latest
+manager release and install the platform script from the same release. They also accept `PROXY_AGENT_MANAGER_BIN` for a
 local native binary. For a different hosted binary, set
 `PROXY_AGENT_MANAGER_BINARY_URL` and
 `PROXY_AGENT_MANAGER_BINARY_SHA256` together. The bootstrapper verifies the

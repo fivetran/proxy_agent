@@ -22,7 +22,13 @@ else
         aarch64|arm64) platform=linux-aarch64 ;;
         *) die "No native manager is available for this host architecture." ;;
     esac
-    url="https://github.com/fivetran/proxy_agent/releases/download/manager-v0.1.0/manager-$platform"
+    releases="https://github.com/fivetran/proxy_agent/releases"
+    release=$(curl -fSsL --max-time 30 -o /dev/null -w '%{url_effective}' --url "$releases/latest") ||
+        die "Failed to find the latest native manager release."
+    tag=${release#"$releases/tag/"}
+    [[ "$tag" =~ ^manager-v[0-9][0-9A-Za-z._-]*$ ]] || die "Invalid native manager release tag."
+    url="$releases/download/$tag/manager-$platform"
+    export PROXY_AGENT_SCRIPT_URL="${PROXY_AGENT_SCRIPT_URL:-$releases/download/$tag/proxy-agent-manager.sh}"
     expected_hash=$(curl -fSsL --max-time 30 --url "$url.sha256") ||
         die "Failed to download the native manager SHA-256 digest."
 fi
