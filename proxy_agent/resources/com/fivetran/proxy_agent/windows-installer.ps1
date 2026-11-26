@@ -7,8 +7,6 @@ $ProgressPreference = 'SilentlyContinue'
 # Without environment variables, keep the system proxy and its credentials.
 # Docker has separate proxy settings; see the README.
 function Set-WebProxyFromEnvironment {
-    param([Parameter(Mandatory)][Uri]$ProbeUri)
-
     $proxyUrl = if ($env:HTTPS_PROXY) { $env:HTTPS_PROXY } elseif ($env:HTTP_PROXY) { $env:HTTP_PROXY } else { $null }
     if (-not $proxyUrl) {
         $systemProxy = if ($PSVersionTable.PSVersion.Major -ge 7) {
@@ -16,15 +14,8 @@ function Set-WebProxyFromEnvironment {
         } else {
             [System.Net.WebRequest]::DefaultWebProxy
         }
-        if ($systemProxy) {
-            if (-not $systemProxy.Credentials) {
-                $systemProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
-            }
-            $effectiveProxy = $systemProxy.GetProxy($ProbeUri)
-            # Direct connections come back as the probe URI on .NET Framework and as null on .NET Core.
-            if ($effectiveProxy -and $effectiveProxy -ne $ProbeUri) {
-                [Console]::Error.WriteLine("Using system proxy $($effectiveProxy.Scheme)://$($effectiveProxy.Authority)")
-            }
+        if ($systemProxy -and -not $systemProxy.Credentials) {
+            $systemProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
         }
         return
     }
@@ -65,5 +56,4 @@ function Set-WebProxyFromEnvironment {
     if ($PSVersionTable.PSVersion.Major -ge 7) {
         [System.Net.Http.HttpClient]::DefaultProxy = $webProxy
     }
-    [Console]::Error.WriteLine("Using proxy $proxyAddress from the environment")
 }

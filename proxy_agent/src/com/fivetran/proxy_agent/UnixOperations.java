@@ -4,19 +4,18 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.regex.Pattern;
+import org.jspecify.annotations.Nullable;
 
 /** Host operations shared by Linux and macOS. */
 final class UnixOperations implements Operations {
-    private static final Pattern QUOTED_TAG = Pattern.compile("\"([0-9]+\\.[0-9]+\\.[0-9]+-[a-z0-9.-]+)\"");
-
     private static final Pattern LINUX_MEMORY = Pattern.compile("(?m)^MemTotal:\\s+([0-9]+)");
     private static final int BYTES_PER_MB = 1024 * 1024;
 
     private final InstallHost host = new InstallHost();
-    private final InstallerHttp http = new InstallerHttp();
+    private @Nullable InstallerHttp http;
     private final boolean isMac = System.getProperty("os.name").startsWith("Mac");
 
     @Override
@@ -102,23 +101,27 @@ final class UnixOperations implements Operations {
     }
 
     @Override
-    public void download(String url, Path target) throws IOException, InterruptedException {
-        http.download(url, target);
+    public void configureProxy() throws IOException {
+        http = new InstallerHttp(InstallerProxy.forUnix());
     }
 
     @Override
-    public List<String> getTags(String url) throws IOException, InterruptedException {
-        var tags = new ArrayList<String>();
-        var matcher = QUOTED_TAG.matcher(http.registryTags(url));
-        while (matcher.find()) {
-            tags.add(matcher.group(1));
-        }
-        return tags;
+    public void download(String url, Path target) throws IOException {
+        http().download(url, target);
     }
 
     @Override
-    public byte[] configure(String url, String token) throws IOException, InterruptedException {
-        return http.configure(url, token);
+    public List<String> getTags(String url) throws IOException {
+        return http().registryTags(url);
+    }
+
+    @Override
+    public byte[] configure(String url, String token) throws IOException {
+        return http().configure(url, token);
+    }
+
+    private InstallerHttp http() {
+        return Objects.requireNonNull(http);
     }
 
     @Override
