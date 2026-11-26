@@ -1,0 +1,8 @@
+{
+  "reflection": [
+    {
+      "type": "com.fivetran.proxy_agent.Application",
+      "fields": [{"name": "help"}]
+    }
+  ]
+}

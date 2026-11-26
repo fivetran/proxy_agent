@@ -8,6 +8,14 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Git Bash would otherwise rewrite Bazel's //package:target arguments.
+  MSYS2_ARG_CONV_EXCL: '//'
+
 # A new push to a pull request cancels its previous run, which otherwise keeps
 # two Windows runners busy for up to 45 minutes. Runs on main are never
 # cancelled so every merged commit gets a full result.
@@ -44,14 +52,59 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run PSScriptAnalyzer
-        shell: pwsh
         run: |
-          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
-            Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
-          }
-          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
-          $results | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
-          if ($results) { exit 1 }
+          pwsh -NoProfile -NonInteractive -Command 'if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) { Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop }'
+          pwsh -NoProfile -NonInteractive -Command 'Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1 -EnableExit -ErrorAction Stop'
+
+  native-manager:
+    name: Native manager (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux-x64
+          - os: ubuntu-24.04-arm
+            platform: linux-aarch64
+          - os: windows-2022
+            platform: windows-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the manager JAR
+        run: bazelisk build //proxy_agent:manager_deploy.jar
+      - uses: graalvm/setup-graalvm@v1.6.10
+        with:
+          distribution: graalvm-community
+          version: '25.6.5.1'
+          set-java-home: 'false'
+      - name: Build the native manager
+        env:
+          MANAGER_PLATFORM: ${{ matrix.platform }}
+        run: |
+          compiler=native-image
+          extension=
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            compiler=native-image.cmd
+            extension=.exe
+          fi
+          mkdir -p dist
+          binary="dist/manager-$MANAGER_PLATFORM"
+          "$compiler" -Ob -jar bazel-bin/proxy_agent/manager_deploy.jar "$binary"
+          sha256sum "$binary$extension" | cut -d ' ' -f 1 > "$binary$extension.sha256"
+      - name: Check native CLI usage
+        env:
+          MANAGER_PLATFORM: ${{ matrix.platform }}
+        run: |
+          manager="./dist/manager-$MANAGER_PLATFORM"
+          if [[ "$RUNNER_OS" == Windows ]]; then manager+=.exe; fi
+          "$manager" --help | grep -F 'Usage: manager'
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: manager-${{ matrix.platform }}
+          path: dist/manager-${{ matrix.platform }}*
+          if-no-files-found: error
 
   unit:
     name: Unit tests (${{ matrix.shell }}, ${{ matrix.os }})
@@ -114,10 +167,6 @@ jobs:
         shell: [powershell, pwsh]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
-    defaults:
-      run:
-        # Python launches the selected PowerShell executable for each script.
-        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -126,20 +175,15 @@ jobs:
       - run: python -m pip install -r tests/requirements.txt
       - name: Wait for the Docker daemon
         # The Docker service is not always running when a Windows job starts.
-        shell: powershell
         run: |
-          # The default 'Stop' preference would turn docker's stderr into a
-          # terminating error on the first failed attempt.
-          $ErrorActionPreference = 'Continue'
-          $service = Get-Service docker -ErrorAction SilentlyContinue
-          if ($service -and $service.Status -ne 'Running') { Start-Service docker }
-          foreach ($attempt in 1..30) {
-            docker info *> $null
-            if ($LASTEXITCODE -eq 0) { exit 0 }
-            Start-Sleep -Seconds 2
-          }
+          if ! docker info >/dev/null 2>&1; then
+            sc.exe start docker || true
+          fi
+          for _ in {1..30}; do
+            if docker info >/dev/null 2>&1; then exit 0; fi
+            sleep 2
+          done
           docker info
-          exit 1
       - name: Run integration test
         run: python -m pytest -v -m integration
         env:
