@@ -85,37 +85,22 @@ jobs:
           GRAALVM_ARCHIVE: graalvm-community-jdk-25i6-25.0.5.1_${{ matrix.platform }}_bin.${{ matrix.extension }}
           GRAALVM_SHA256: ${{ matrix.sha256 }}
         run: |
-          $tools = Join-Path $env:RUNNER_TEMP 'graalvm'
-          $null = New-Item -ItemType Directory -Path $tools
-          $archive = Join-Path $tools $env:GRAALVM_ARCHIVE
-          $url = "https://github.com/graalvm/graalvm-ce-builds/releases/download/graal-25.6.5.1/$env:GRAALVM_ARCHIVE"
-          Invoke-WebRequest -Uri $url -OutFile $archive
-          if ((Get-FileHash -LiteralPath $archive).Hash -ne $env:GRAALVM_SHA256) {
+          $tools = New-Item -ItemType Directory (Join-Path $env:RUNNER_TEMP 'graalvm')
+          $archive = Join-Path $tools.FullName $env:GRAALVM_ARCHIVE
+          Invoke-WebRequest "https://github.com/graalvm/graalvm-ce-builds/releases/download/graal-25.6.5.1/$env:GRAALVM_ARCHIVE" -OutFile $archive
+          if ((Get-FileHash $archive).Hash -ne $env:GRAALVM_SHA256) {
             throw 'GraalVM archive SHA-256 does not match.'
           }
-          if ($IsWindows) {
-            Expand-Archive -LiteralPath $archive -DestinationPath $tools
-            $program = 'bin/native-image.cmd'
-          } else {
-            tar -xzf $archive -C $tools
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            $program = 'bin/native-image'
-          }
-          $homeDir = Get-ChildItem -LiteralPath $tools -Directory | Select-Object -First 1
-          $null = New-Item -ItemType Directory -Path dist
-          $compiler = Join-Path $homeDir.FullName $program
-          $jar = (Resolve-Path 'bazel-bin/proxy_agent/manager_deploy.jar').Path
-          $output = Join-Path (Resolve-Path 'dist').Path 'manager'
-          & $compiler -Ob -jar $jar $output
+          tar -xf $archive -C $tools.FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $extension = if ($IsWindows) { '.exe' } else { '' }
-          $binary = Join-Path (Resolve-Path 'dist').Path "manager$extension"
-          & $binary install --help
+          $graalvm = Get-ChildItem $tools.FullName -Directory | Select-Object -First 1
+          $compiler = if ($IsWindows) { 'bin/native-image.cmd' } else { 'bin/native-image' }
+          $null = New-Item -ItemType Directory dist
+          $binary = "dist/manager-${{ matrix.platform }}"
+          & (Join-Path $graalvm.FullName $compiler) -Ob -jar bazel-bin/proxy_agent/manager_deploy.jar $binary
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $releaseName = "manager-${{ matrix.platform }}$extension"
-          $sha256 = (Get-FileHash -LiteralPath $binary).Hash.ToLowerInvariant()
-          Move-Item -LiteralPath $binary -Destination (Join-Path (Resolve-Path 'dist').Path $releaseName)
-          Set-Content -LiteralPath "dist/$releaseName.sha256" -Value $sha256 -Encoding ascii
+          if ($IsWindows) { $binary += '.exe' }
+          (Get-FileHash $binary).Hash.ToLowerInvariant() | Set-Content "$binary.sha256" -Encoding ascii
       - name: Check native installer failure handling
         if: matrix.platform == 'linux-x64'
         run: python3 tests/check_native_install.py dist/manager-linux-x64
