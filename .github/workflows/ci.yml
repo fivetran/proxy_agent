@@ -82,7 +82,7 @@ jobs:
           set-java-home: 'false'
       - name: Build the native manager
         env:
-          PLATFORM: ${{ matrix.platform }}
+          MANAGER_PLATFORM: ${{ matrix.platform }}
         run: |
           compiler=native-image
           extension=
@@ -91,7 +91,7 @@ jobs:
             extension=.exe
           fi
           mkdir -p dist
-          binary="dist/manager-$PLATFORM"
+          binary="dist/manager-$MANAGER_PLATFORM"
           "$compiler" -Ob -jar bazel-bin/proxy_agent/manager_deploy.jar "$binary"
           sha256sum "$binary$extension" | cut -d ' ' -f 1 > "$binary$extension.sha256"
       - name: Check native installer failure handling
@@ -100,7 +100,7 @@ jobs:
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: manager-${{ matrix.platform }}
-          path: dist/manager*
+          path: dist/manager-${{ matrix.platform }}*
           if-no-files-found: error
 
   unit:
