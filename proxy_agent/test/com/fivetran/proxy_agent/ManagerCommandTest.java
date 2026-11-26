@@ -8,6 +8,7 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.startsWith;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -192,6 +193,29 @@ public final class ManagerCommandTest {
         }
     }
 
+    @Test
+    public void doctorForwardsArgumentsAndExitStatusAndSavesOutput() throws Exception {
+        docker.running = true;
+        assertThat(invoke("doctor", "--", "--region", "us-east-1"), is(7));
+        assertThat(docker.lastRun.subList(docker.lastRun.size() - 3, docker.lastRun.size()),
+                is(List.of("--doctor", "--region", "us-east-1")));
+        assertThat(docker.running, is(true));
+        try (var reports = Files.list(directory.resolve("logs"))) {
+            var report = reports.findFirst().orElseThrow();
+            assertThat(report.getFileName().toString(), startsWith("proxy-agent-manager-doctor-"));
+            assertThat(Files.readString(report), containsString("doctor output"));
+        }
+    }
+
+    @Test
+    public void doctorKeepsOnlyTheContainersOwnReportWhenItExists() throws Exception {
+        docker.doctorWritesReport = true;
+        assertThat(invoke("doctor"), is(7));
+        try (var reports = Files.list(directory.resolve("logs"))) {
+            assertThat(reports.map(path -> path.getFileName().toString()).toList(), is(List.of("doctor-stub.log")));
+        }
+    }
+
     private int invoke(String... command) {
         var arguments = new ArrayList<>(List.of("--agent-dir", directory.toString()));
         arguments.addAll(List.of(command));
@@ -203,6 +227,7 @@ public final class ManagerCommandTest {
         private final List<List<String>> calls = new ArrayList<>();
         private int status;
         private boolean running;
+        private boolean doctorWritesReport;
         private List<String> lastRun = List.of();
         private String failImage = "";
 
@@ -221,6 +246,16 @@ public final class ManagerCommandTest {
                 running = true;
             }
             return status;
+        }
+
+        @Override
+        int runAndRecord(Path path, Path report, List<String> arguments) throws IOException {
+            lastRun = List.copyOf(arguments);
+            Files.writeString(report, "doctor output");
+            if (doctorWritesReport) {
+                Files.writeString(report.resolveSibling("doctor-stub.log"), "container report");
+            }
+            return 7;
         }
 
         private List<String> operations() {
