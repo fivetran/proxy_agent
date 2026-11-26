@@ -20,6 +20,7 @@ from urllib.parse import quote, urlsplit
 
 import pytest
 from support.harness import EXT, IMAGE, REPO, TAGS, WINDOWS, Sandbox
+from support.native_installer import installer_start_script
 
 
 @pytest.fixture
@@ -134,6 +135,7 @@ def web_endpoints():
 @pytest.mark.parametrize('source', ['token', 'websocket-config', 'rejected-token'])
 def test_install_configures_agent(native_web_sandbox, web_endpoints, source):
     sandbox = native_web_sandbox
+    web_endpoints.script_body = installer_start_script(windows=WINDOWS).encode()
     sandbox.env['NO_PROXY'] = '*'
     secret = 'fixture-configure-secret'
     token = base64.b64encode(f'abc123:{secret}'.encode()).decode()
@@ -207,6 +209,7 @@ class TestProxyContract:
         )
         expected_urls = {registry_url}
         if operation == 'install':
+            web_endpoints.script_body = installer_start_script(windows=WINDOWS).encode()
             expected_urls.add(script_url)
             result = sandbox.install()
             installation = sandbox.installed
