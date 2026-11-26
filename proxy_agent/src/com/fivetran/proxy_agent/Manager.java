@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.StreamReadFeature;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -44,6 +45,46 @@ final class Manager {
                 SystemEnvironment.get("PROXY_AGENT_MANAGER_BINARY_URL", ""),
                 SystemEnvironment.get("PROXY_AGENT_MANAGER_BINARY_SHA256", ""),
                 SystemEnvironment.get("PROXY_AGENT_SCRIPT_URL", ""));
+    }
+
+    /** Prints the Docker status table for the installed agent. */
+    int status(Path directory) throws IOException, InterruptedException {
+        return docker.run(directory, statusArguments(containerName(directory)));
+    }
+
+    private static String[] statusArguments(String container) {
+        return new String[] {"ps", "-a", "--filter", "name=" + container,
+                "--format", "table {{.Names}}\\t{{.Image}}\\t{{.Status}}"};
+    }
+
+    private static String containerName(Path directory) throws IOException {
+        var config = directory.resolve("config/config.json");
+        if (!Files.isRegularFile(config)) {
+            throw new IOException("Config file not found: " + config);
+        }
+        String agentId;
+        try {
+            agentId = readConfigFields(Files.readAllBytes(config)).agentId();
+        } catch (IOException e) {
+            throw new IOException("Failed to parse config file: " + config, e);
+        }
+        if (agentId == null || agentId.isBlank() || agentId.equals("null")) {
+            throw new IOException("'agent_id' missing in " + config);
+        }
+        pinnedVersion(directory);
+        return "proxy-agent-" + agentId;
+    }
+
+    private static String pinnedVersion(Path directory) throws IOException {
+        var versionFile = directory.resolve("version");
+        if (!Files.isRegularFile(versionFile)) {
+            throw new IOException(versionFile + " not found.");
+        }
+        var version = Files.readString(versionFile).replace("\uFEFF", "").strip();
+        if (version.isEmpty()) {
+            throw new IOException(versionFile + " is empty.");
+        }
+        return version;
     }
 
     void downloadManagerScript(Path target) throws IOException {

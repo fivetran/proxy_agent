@@ -83,6 +83,16 @@ def installer_environment(repo, root, env, *, windows):
     }
 
 
+def invoke_manager(repo, root, env, arguments, *, windows):
+    """Run a manager command directly with the test JAR and its Docker fixture."""
+    env = installer_environment(repo, root, env, windows=windows)
+    java_home = os.environ.get('JAVA_HOME_17_X64') or os.environ.get('JAVA_HOME_17_ARM64')
+    java = Path(java_home) / 'bin' / ('java.exe' if windows else 'java') if java_home else 'java'
+    return subprocess.run([str(java), '-jar', str(installer_jar(repo)), *arguments],
+                          env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          text=True, errors='replace', timeout=30)
+
+
 def installer_start_script(*, windows):
     return (
         '$OutputEncoding = [Text.UTF8Encoding]::new($false)\n'
