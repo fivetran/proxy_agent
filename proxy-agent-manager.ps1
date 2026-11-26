@@ -567,10 +567,6 @@ function Invoke-NativeManager {
 }
 
 switch ($Command) {
-    'status' {
-        . $loadAgent
-        docker ps -a --filter "name=$CONTAINER_NAME" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
-    }
     'logs' {
         . $loadAgent
         docker logs -f $CONTAINER_NAME
