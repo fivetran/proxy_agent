@@ -32,8 +32,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.12'
       - run: python -m pip install pip-audit==2.10.1
@@ -43,14 +43,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - run: shellcheck --severity=warning install.sh proxy-agent-manager.sh tests/stub/heartbeat.sh
 
   psscriptanalyzer:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Run PSScriptAnalyzer
         run: |
           pwsh -NoProfile -NonInteractive -Command 'if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) { Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop }'
@@ -71,7 +71,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Build the manager JAR
         run: bazelisk build //proxy_agent:manager_deploy.jar
       - uses: graalvm/setup-graalvm@v1.6.10
@@ -132,8 +132,8 @@ jobs:
     env:
       PROXY_AGENT_TEST_SHELL: ${{ matrix.shell }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.12'
       - run: python -m pip install -r tests/requirements.txt
@@ -149,8 +149,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.12'
       - run: python -m pip install -r tests/requirements.txt
@@ -168,8 +168,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.12'
       - run: python -m pip install -r tests/requirements.txt
