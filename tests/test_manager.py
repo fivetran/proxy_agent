@@ -10,6 +10,7 @@ separate cases below.
 """
 
 import base64
+import hashlib
 import os
 import re
 import shutil
@@ -164,6 +165,23 @@ class TestUpdateManager:
         assert (installed.st_size, installed.st_mtime_ns) == (original.st_size, original.st_mtime_ns)
         assert not sandbox.calls('docker')
         assert len(sandbox.calls('request' if WINDOWS else 'curl')) == 1
+
+    @pytest.mark.usefixtures('manager_update_due')
+    def test_unknown_command_updates_without_baseline_then_runs_new_manager(self, sandbox, run_manager):
+        replacement = sandbox.manager.read_bytes().replace(b'Usage:', b'Updated manager usage:')
+        sandbox.options['script_bytes'] = base64.b64encode(replacement).decode('ascii')
+        expected_hash = hashlib.sha256(replacement).hexdigest()
+
+        first = run_manager('bogus', code=1)
+        assert f'Management script updated to {expected_hash}.' in first
+        assert 'Updated manager usage:' in first
+        assert sandbox.manager.read_bytes() == replacement
+        saved_hash = (sandbox.update_state / 'download').read_text().splitlines()[0]
+        assert saved_hash.lower() == expected_hash
+
+        assert 'Updated manager usage:' in run_manager('bogus', code=1)
+        assert len(sandbox.calls('request' if WINDOWS else 'curl')) == 1
+        assert not sandbox.calls('docker')
 
     @pytest.mark.parametrize('download_failure', [False, True], ids=['unchanged', 'download-failed'])
     @pytest.mark.usefixtures('manager_update_due')

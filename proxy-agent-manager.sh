@@ -150,7 +150,7 @@ update_manager() (
         echo "Management script is already up to date."
         exit 2
     fi
-    echo "Management script updated."
+    echo "Management script updated${download_hash:+ to $download_hash}."
 )
 
 # Claim the UTC day so concurrent invocations share one attempt, including failures.
@@ -362,7 +362,7 @@ case "${1:-}" in
             exit "$status"
         fi
         ;;
-    start|stop|restart|upgrade|status|logs|doctor)
+    *)
         if check_manager_update; then
             exec "$BASH" "$0" "$@"
         fi

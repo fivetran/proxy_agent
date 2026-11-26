@@ -22,14 +22,6 @@ $AUTO_UPDATE_DIR = Join-Path $BASE_DIR '.manager-auto-update'
 # Appended to the plain agent version to form the Linux image tag.
 $LINUX_IMAGE_TAG_SUFFIX = '-ubuntu-26.04'
 
-# ── Startup validation ───────────────────────────────────────────────────────
-
-$validCommands = @('start', 'stop', 'restart', 'upgrade', 'update-manager', 'status', 'logs', 'doctor')
-if (-not $Command -or $Command -notin $validCommands) {
-    Write-Host "Usage: $($MyInvocation.MyCommand.Name) {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}"
-    exit 1
-}
-
 # ── Functions ────────────────────────────────────────────────────────────────
 
 function Write-Log {
@@ -225,7 +217,7 @@ function Update-Manager {
             Write-Host 'Management script is already up to date.'
             return $false
         }
-        Write-Host 'Management script updated.'
+        Write-Host "Management script updated to $($downloadHash.ToLowerInvariant())."
         return $true
     } finally {
         Remove-Item -LiteralPath $tmpScript, $tmpCache -Force -ErrorAction SilentlyContinue
@@ -663,6 +655,12 @@ if ($managerUpdated) {
     $global:LASTEXITCODE = 0
     & $PSCommandPath @PSBoundParameters
     exit $LASTEXITCODE
+}
+
+$validCommands = @('start', 'stop', 'restart', 'upgrade', 'status', 'logs', 'doctor')
+if ($Command -notin $validCommands) {
+    Write-Host "Usage: $($MyInvocation.MyCommand.Name) {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}"
+    exit 1
 }
 
 # settings.ps1 may set $MEMORY_ALLOCATION_MB and, for Windows containers,
