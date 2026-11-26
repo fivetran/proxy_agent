@@ -420,19 +420,6 @@ function Start-ProxyAgent {
     }
 }
 
-function Start-CurrentProxyAgent {
-    $containerOsType = Get-ContainerOsType
-    $windowsVersion = Resolve-WindowsVersion -ContainerOsType $containerOsType
-    $imageTag = Get-ImageTag -Version $CURRENT_VERSION -ContainerOsType $containerOsType -WindowsVersion $windowsVersion
-    Set-PinnedVersion $CURRENT_VERSION
-
-    if (-not (Start-ProxyAgent -ImageTag $imageTag -ContainerOsType $containerOsType)) {
-        return $false
-    }
-
-    return $true
-}
-
 function Invoke-Upgrade {
     Write-Host "Checking for latest version..."
     $containerOsType = Get-ContainerOsType
