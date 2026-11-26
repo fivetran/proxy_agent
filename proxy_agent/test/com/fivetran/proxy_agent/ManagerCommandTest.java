@@ -196,7 +196,7 @@ public final class ManagerCommandTest {
     @Test
     public void doctorForwardsArgumentsAndExitStatusAndSavesOutput() throws Exception {
         docker.running = true;
-        assertThat(invoke("doctor", "--", "--region", "us-east-1"), is(7));
+        assertThat(invoke("doctor", "--region", "us-east-1"), is(7));
         assertThat(docker.lastRun.subList(docker.lastRun.size() - 3, docker.lastRun.size()),
                 is(List.of("--doctor", "--region", "us-east-1")));
         assertThat(docker.running, is(true));
