@@ -162,7 +162,6 @@ jobs:
       matrix:
         # The published Linux image is multi-architecture (amd64 and arm64).
         os: [ubuntu-latest, ubuntu-24.04-arm]
-    needs: native-manager
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -171,18 +170,6 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r tests/requirements.txt
-      - uses: actions/download-artifact@v8.0.2
-        with:
-          name: ${{ runner.arch == 'ARM64' && 'manager-linux-aarch64' || 'manager-linux-x64' }}
-          path: dist
-      - run: |
-          case "$(uname -m)" in
-            x86_64) binary="$GITHUB_WORKSPACE/dist/manager-linux-x64" ;;
-            aarch64) binary="$GITHUB_WORKSPACE/dist/manager-linux-aarch64" ;;
-            *) exit 1 ;;
-          esac
-          chmod u+x "$binary"
-          echo "PROXY_AGENT_MANAGER_BIN=$binary" >> "$GITHUB_ENV"
       - run: python -m pytest -v -m integration
         env:
           PROXY_AGENT_TEST_SHELL: bash
@@ -194,7 +181,6 @@ jobs:
       matrix:
         os: [windows-2022, windows-2025]
         shell: [powershell, pwsh]
-    needs: native-manager
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     defaults:
@@ -207,10 +193,6 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r tests/requirements.txt
-      - uses: actions/download-artifact@v8.0.2
-        with:
-          name: manager-windows-x64
-          path: dist
       - name: Wait for the Docker daemon
         # The Docker service is not always running when a Windows job starts.
         shell: powershell
@@ -231,4 +213,3 @@ jobs:
         run: python -m pytest -v -m integration
         env:
           PROXY_AGENT_TEST_SHELL: ${{ matrix.shell }}
-          PROXY_AGENT_MANAGER_BIN: ${{ github.workspace }}\dist\manager-windows-x64.exe
