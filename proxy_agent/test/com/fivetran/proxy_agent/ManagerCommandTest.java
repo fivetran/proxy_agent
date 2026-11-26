@@ -9,6 +9,8 @@ import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -28,6 +30,7 @@ public final class ManagerCommandTest {
     private final TestDocker docker = new TestDocker(commands);
     private String memory = "4096";
     private OsOperations operations = new TestUnixOperations();
+    private final TestHttpClient http = new TestHttpClient();
     private Path directory;
     private Path config;
     private Path version;
@@ -144,10 +147,56 @@ public final class ManagerCommandTest {
         assertThat(docker.lastRun, hasItem(endsWith(":1.2.9-ubuntu-26.04")));
     }
 
+    @Test
+    public void upgradeSelectsTheHighestCompatibleVersion() throws Exception {
+        docker.running = true;
+        assertThat(invoke("upgrade"), is(0));
+        assertThat(Files.readString(version).strip(), is("1.2.10"));
+        assertThat(docker.lastRun, hasItem(endsWith(":1.2.10-ubuntu-26.04")));
+    }
+
+    @Test
+    public void upgradeRestoresThePreviousVersionAfterStartupFails() throws Exception {
+        docker.running = true;
+        docker.failImage = ":1.2.10-ubuntu-26.04";
+        assertThat(invoke("upgrade"), is(1));
+        assertThat(Files.readString(version).strip(), is("1.2.9"));
+        assertThat(docker.lastRun, hasItem(endsWith(":1.2.9-ubuntu-26.04")));
+        assertThat(docker.running, is(true));
+    }
+
+    @Test
+    public void upgradeRegistryFailureLeavesTheRunningAgentAlone() throws Exception {
+        docker.running = true;
+        http.registryAvailable = false;
+        assertThat(invoke("upgrade"), is(1));
+        assertThat(Files.readString(version).strip(), is("1.2.9"));
+        assertThat(docker.calls, is(empty()));
+        assertThat(docker.running, is(true));
+    }
+
+    private static final class TestHttpClient extends HttpClient {
+        private boolean registryAvailable = true;
+
+        private TestHttpClient() {
+            super(ProxySettings.forUnix());
+        }
+
+        @Override
+        byte[] get(String url) throws IOException {
+            if (!registryAvailable) {
+                throw new IOException("registry unavailable");
+            }
+            return """
+                    {"tags":["1.2.10-ubuntu-26.04","1.2.8-ubuntu-26.04","9.2.0-windows-ltsc2022"]}
+                    """.getBytes(StandardCharsets.UTF_8);
+        }
+    }
+
     private int invoke(String... command) {
         var arguments = new ArrayList<>(List.of("--agent-dir", directory.toString()));
         arguments.addAll(List.of(command));
-        var manager = new Manager(operations, docker, new HttpClient(operations.proxySettings()));
+        var manager = new Manager(operations, docker, http);
         return new Application(manager, path -> 0).execute(arguments.toArray(String[]::new));
     }
 
@@ -156,6 +205,7 @@ public final class ManagerCommandTest {
         private int status;
         private boolean running;
         private List<String> lastRun = List.of();
+        private String failImage = "";
 
         private TestDocker(CommandRunner commands) {
             super(commands);
@@ -166,6 +216,9 @@ public final class ManagerCommandTest {
             calls.add(List.of(arguments));
             if (arguments[0].equals("run")) {
                 lastRun = List.of(arguments);
+                if (!failImage.isEmpty() && lastRun.stream().anyMatch(arg -> arg.endsWith(failImage))) {
+                    return 125;
+                }
                 running = true;
             }
             return status;

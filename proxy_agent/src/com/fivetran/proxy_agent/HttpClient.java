@@ -10,7 +10,7 @@ import java.util.Map;
 import org.jspecify.annotations.Nullable;
 
 /** Makes HTTP requests using the manager proxy settings. */
-final class HttpClient {
+class HttpClient {
     private static final int TIMEOUT_MILLIS = 30_000;
     private static final int MAX_REDIRECTS = 10;
     private final ProxySettings proxy;
