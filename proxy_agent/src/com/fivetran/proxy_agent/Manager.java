@@ -54,7 +54,7 @@ public final class Manager {
         try {
             var operations = Operations.forCurrentHost();
             var proxy = ProxySettings.initialize(operations.isWindows());
-            var http = new AgentHttpClient(proxy);
+            var http = new HttpClient(proxy);
             new Installer(operations, http).install(
                     install.matchedPositionalValue(0, null),
                     install.matchedOptionValue(INSTALL_DIR, null),

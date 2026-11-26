@@ -36,9 +36,9 @@ final class Installer {
 
     private final InstallHost host = new InstallHost();
     private final Operations operations;
-    private final AgentHttpClient http;
+    private final HttpClient http;
 
-    Installer(Operations operations, AgentHttpClient http) {
+    Installer(Operations operations, HttpClient http) {
         this.operations = operations;
         this.http = http;
     }
