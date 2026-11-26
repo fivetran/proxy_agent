@@ -136,6 +136,14 @@ public final class ManagerCommandTest {
         }
     }
 
+    @Test
+    public void restartStopsAndRemovesTheOldContainerOnce() {
+        docker.running = true;
+        assertThat(invoke("restart"), is(0));
+        assertThat(docker.operations(), is(List.of("inspect", "stop", "rm", "run", "inspect", "ps")));
+        assertThat(docker.lastRun, hasItem(endsWith(":1.2.9-ubuntu-26.04")));
+    }
+
     private int invoke(String... command) {
         var arguments = new ArrayList<>(List.of("--agent-dir", directory.toString()));
         arguments.addAll(List.of(command));
