@@ -105,7 +105,21 @@ Rerun the failed workflow to retry publishing the same commit, or run
 commit on `main`. Verify the initial release URLs before switching the public
 installers to the native manager.
 
-Installer unit tests use a Bazel-built test JAR with controlled host probes and
-local HTTP fixtures. Bootstrap tests exercise download and checksum handling
-under Bash, Windows PowerShell 5.1, and PowerShell 7. CI exercises the native
-executable through the Docker integration suite.
+## Testing
+
+Run the Java manager unit tests with `bazel test //proxy_agent:tests`.
+The Java bootstrap tests run Bash, Windows PowerShell 5.1, or PowerShell 7 as
+subprocesses. The packaged manager proxy and Docker integration tests run the
+native artifact from CI.
+
+For local product tests, use these Bazel targets with the checkout path and
+packaged executable in the test environment. The Docker lifecycle target
+requires a Docker daemon running the platform's containers.
+
+```bash
+export PROXY_AGENT_TEST_REPOSITORY="$PWD"
+export PROXY_AGENT_MANAGER_BIN="$PWD/dist/manager"
+bazel test //proxy_agent:bootstrap_product_tests --test_env=PROXY_AGENT_TEST_REPOSITORY
+bazel test //proxy_agent:proxy_product_tests --test_env=PROXY_AGENT_MANAGER_BIN
+bazel test //proxy_agent:installed_manager_tests --test_env=PROXY_AGENT_TEST_REPOSITORY --test_env=PROXY_AGENT_MANAGER_BIN
+```

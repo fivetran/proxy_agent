@@ -1,5 +1,11 @@
 load("@rules_java//java:defs.bzl", "java_binary", "java_library", "java_test")
 
+_TEST_DEPS = [
+    ":proxy_agent",
+    "@hamcrest//jar",
+    "@junit4//jar",
+]
+
 java_library(
     name = "proxy_agent",
     srcs = glob(["src/**/*.java"]),
@@ -23,12 +29,27 @@ java_test(
     size = "small",
     srcs = ["test/com/fivetran/proxy_agent/ManagerCommandTest.java"],
     test_class = "com.fivetran.proxy_agent.ManagerCommandTest",
-    deps = [
-        ":proxy_agent",
-        "@hamcrest//jar",
-        "@junit4//jar",
-    ],
+    deps = _TEST_DEPS,
 )
+
+[
+    java_test(
+        name = name,
+        srcs = [
+            "test/com/fivetran/proxy_agent/" + source + ".java",
+            "test/com/fivetran/proxy_agent/ProductTestSupport.java",
+        ],
+        size = size,
+        tags = ["manual", "no-sandbox", "requires-network"],
+        test_class = "com.fivetran.proxy_agent." + source,
+        deps = _TEST_DEPS,
+    )
+    for name, source, size in [
+        ("bootstrap_product_tests", "BootstrapProductTest", "small"),
+        ("installed_manager_tests", "InstalledManagerTest", "large"),
+        ("proxy_product_tests", "ProxyProductTest", "small"),
+    ]
+]
 
 java_binary(
     name = "test_manager",
