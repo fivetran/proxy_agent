@@ -601,13 +601,6 @@ $loadAgent = {
 }
 
 switch ($Command) {
-    'restart' {
-        . $loadAgent
-        $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
-        Assert-MemoryAllocation
-        Write-Log "Restarting $CONTAINER_NAME..."
-        if (-not (Start-CurrentProxyAgent)) { exit 1 }
-    }
     'upgrade' {
         . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
@@ -654,6 +647,13 @@ switch ($Command) {
                 . $loadAgent
                 Write-Log "Stopping $CONTAINER_NAME..."
                 Stop-ProxyAgent
+            }
+            'restart' {
+                . $loadAgent
+                $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
+                Assert-MemoryAllocation
+                Write-Log "Restarting $CONTAINER_NAME..."
+                if (-not (Start-CurrentProxyAgent)) { exit 1 }
             }
             'status' {
                 . $loadAgent

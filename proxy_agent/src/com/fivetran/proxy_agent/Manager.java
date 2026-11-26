@@ -94,6 +94,14 @@ final class Manager {
         return startContainer(directory, agent, agent.version());
     }
 
+    /** Replaces the running container with the pinned release after preflight succeeds. */
+    int restart(Path directory) throws IOException, InterruptedException {
+        var agent = agentContainer(directory);
+        log(directory, "Restarting " + agent.name() + "...");
+        pinVersion(directory, agent.version());
+        return startContainer(directory, agent, agent.version());
+    }
+
     private AgentContainer agentContainer(Path directory) throws IOException, InterruptedException {
         var agentId = agentId(directory);
         var pinned = pinnedVersion(directory);

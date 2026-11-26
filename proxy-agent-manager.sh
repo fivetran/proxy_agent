@@ -327,15 +327,6 @@ if [ "$#" -gt 0 ]; then
 fi
 
 case "$command" in
-    restart)
-        load_agent
-        CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
-        check_memory_allocation
-        log "Restarting ${CONTAINER_NAME}..."
-        stop_agent
-        pin_version "$CURRENT_VERSION"
-        start_agent "$CURRENT_VERSION"
-        ;;
     upgrade)
         load_agent
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
@@ -375,6 +366,15 @@ case "$command" in
             status)
                 load_agent
                 docker ps -a --filter "name=${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
+                ;;
+            restart)
+                load_agent
+                CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
+                check_memory_allocation
+                log "Restarting ${CONTAINER_NAME}..."
+                stop_agent
+                pin_version "$CURRENT_VERSION"
+                start_agent "$CURRENT_VERSION"
                 ;;
             logs)
                 load_agent
