@@ -29,6 +29,10 @@
       ]
     },
     {
+      "type": "com.fivetran.proxy_agent.LogsCommand",
+      "methods": [{"name": "<init>", "parameterTypes": []}]
+    },
+    {
       "type": "sun.net.www.protocol.http.Handler",
       "methods": [{"name": "<init>", "parameterTypes": []}]
     },

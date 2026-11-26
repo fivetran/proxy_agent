@@ -52,6 +52,11 @@ final class Manager {
         return docker.run(directory, statusArguments(containerName(directory)));
     }
 
+    /** Streams Docker logs until the caller or Docker ends the session. */
+    int logs(Path directory) throws IOException, InterruptedException {
+        return docker.run(directory, "logs", "-f", containerName(directory));
+    }
+
     private static String[] statusArguments(String container) {
         return new String[] {"ps", "-a", "--filter", "name=" + container,
                 "--format", "table {{.Names}}\\t{{.Image}}\\t{{.Status}}"};
