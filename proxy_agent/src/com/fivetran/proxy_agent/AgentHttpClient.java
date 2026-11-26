@@ -12,16 +12,16 @@ import java.util.List;
 import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
 
-/** Installer downloads and API requests using the JDK's HTTP implementation. */
-final class InstallerHttp {
+/** HTTP downloads, registry lookups, and configuration requests for the proxy agent manager. */
+final class AgentHttpClient {
     private static final int TIMEOUT_MILLIS = 30_000;
     private static final int MAX_REDIRECTS = 10;
     private static final Pattern TAGS = Pattern.compile("\"tags\"\\s*:\\s*\\[([^]]*)]");
     private static final Pattern QUOTED_TAG = Pattern.compile("\"([0-9]+\\.[0-9]+\\.[0-9]+-[a-z0-9.-]+)\"");
 
-    private final InstallerProxy proxy;
+    private final ProxySettings proxy;
 
-    InstallerHttp(InstallerProxy proxy) {
+    AgentHttpClient(ProxySettings proxy) {
         this.proxy = proxy;
         // A dropped response does not tell us whether Fivetran processed the POST.
         System.setProperty("sun.net.http.retryPost", "false");
@@ -38,7 +38,7 @@ final class InstallerHttp {
                     return body.transferTo(file);
                 }
             });
-        } catch (InstallerProxy.ConfigurationException e) {
+        } catch (ProxySettings.ConfigurationException e) {
             throw e;
         } catch (IOException e) {
             throw new IOException("Failed to download management script", e);
@@ -51,7 +51,7 @@ final class InstallerHttp {
             return tags.find()
                     ? QUOTED_TAG.matcher(tags.group(1)).results().map(match -> match.group(1)).toList()
                     : List.of();
-        } catch (InstallerProxy.ConfigurationException e) {
+        } catch (ProxySettings.ConfigurationException e) {
             throw e;
         } catch (IOException e) {
             throw new IOException("Unable to query image registry for latest version", e);

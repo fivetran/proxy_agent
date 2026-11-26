@@ -10,7 +10,7 @@ uses shared Java code for installation and delegates host operations to
 `UnixOperations` or `WindowsOperations`. macOS uses `UnixOperations` for
 engineering tests.
 
-The installer uses Java networking on both platforms. On Unix, set
+The manager initializes JDK proxy settings before running a command. On Unix, set
 `http_proxy` for HTTP, `https_proxy` or `HTTPS_PROXY` for HTTPS, and
 `all_proxy` or `ALL_PROXY` as a fallback. On Windows, `HTTPS_PROXY`
 takes precedence over `HTTP_PROXY` and applies to both destination
