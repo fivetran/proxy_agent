@@ -11,7 +11,6 @@ $ErrorActionPreference = 'Stop'
 
 $BASE_DIR = $PSScriptRoot
 
-$IMAGE              = if ($env:PROXY_AGENT_IMAGE) { $env:PROXY_AGENT_IMAGE } else { 'us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent' }
 $CONFIG_FILE        = Join-Path $BASE_DIR 'config\config.json'
 $VERSION_FILE       = Join-Path $BASE_DIR 'version'
 $LOGFILE            = Join-Path $BASE_DIR 'logs\proxy-agent-manager.log'
@@ -222,60 +221,6 @@ function Get-ImageTag {
     return "$Version$LINUX_IMAGE_TAG_SUFFIX"
 }
 
-function Set-PinnedVersion {
-    param([Parameter(Mandatory)][string]$Version)
-    if ($Version -ne $PINNED_VERSION) {
-        Set-Content -Path $VERSION_FILE -Value $Version -Encoding ascii
-        $script:PINNED_VERSION = $Version
-    }
-}
-
-function Get-LatestVersion {
-    param(
-        [Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType,
-        [string]$WindowsVersion
-    )
-
-    if ($env:PROXY_AGENT_REGISTRY_TAGS_URL) {
-        $registryUrl = $env:PROXY_AGENT_REGISTRY_TAGS_URL
-    } else {
-        $registryHost   = $IMAGE.Split('/')[0]
-        $repositoryPath = $IMAGE.Substring($registryHost.Length + 1)
-        $registryUrl    = "https://$registryHost/v2/$repositoryPath/tags/list"
-    }
-
-    try {
-        $tagsJson = Invoke-RestMethod -Uri $registryUrl -Method Get -TimeoutSec 30
-    } catch {
-        Write-Host "ERROR: Unable to query image registry for latest version: $_" -ForegroundColor Red
-        exit 1
-    }
-
-    if ($ContainerOsType -eq 'windows') {
-        $tagPattern = '^\d+\.\d+\.\d+-windows-' + [regex]::Escape($WindowsVersion) + '$'
-        $releasePattern = '-windows-' + [regex]::Escape($WindowsVersion) + '$'
-    } else {
-        $tagPattern = '^\d+\.\d+\.\d+-ubuntu-26\.04$'
-        $releasePattern = '-ubuntu-26\.04$'
-    }
-    $versions = @($tagsJson.tags | Where-Object { $_ -match $tagPattern })
-    if (-not $versions) {
-        if ($ContainerOsType -eq 'windows') {
-            Write-Host "ERROR: No published Windows image tags found for $WindowsVersion" -ForegroundColor Red
-        } else {
-            Write-Host "ERROR: No published Ubuntu 26.04 image tags found" -ForegroundColor Red
-        }
-        exit 1
-    }
-
-    return ($versions | ForEach-Object { $_ -replace $releasePattern, '' } | Sort-Object { [version]$_ } | Select-Object -Last 1)
-}
-
-function Compare-SemVer {
-    param([string]$A, [string]$B)
-    return ([version]$A).CompareTo([version]$B)
-}
-
 function Assert-MemoryAllocation {
     if ("$MEMORY_ALLOCATION_MB" -notmatch '^\d+$' -or [int64]"$MEMORY_ALLOCATION_MB" -lt 1) {
         Write-Host "ERROR: Invalid `$MEMORY_ALLOCATION_MB in ${SETTINGS_FILE}: $MEMORY_ALLOCATION_MB (must be a positive integer, in MB)" -ForegroundColor Red
@@ -317,134 +262,6 @@ function Get-AgentRunArgs {
         '-v', $configMount,
         '-v', "${logsMount}:$containerLogDir"
     )
-}
-
-function Stop-ProxyAgent {
-    try { docker inspect $CONTAINER_NAME 2>&1 | Out-Null } catch {}
-    if ($LASTEXITCODE -eq 0) {
-        docker stop $CONTAINER_NAME | Out-Null
-        docker rm $CONTAINER_NAME | Out-Null
-        Write-Log "Stopped $CONTAINER_NAME."
-    }
-}
-
-function Start-ProxyAgent {
-    param(
-        [Parameter(Mandatory)][string]$ImageTag,
-        [Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType
-    )
-    Write-Log "Starting $CONTAINER_NAME (image tag: $ImageTag)..."
-
-    Stop-ProxyAgent
-
-    # Build argument list to avoid PowerShell variable expansion inside the health check.
-    $dockerArgs = @(
-        'run', '-d',
-        '--name', $CONTAINER_NAME,
-        '--restart', 'unless-stopped',
-        '--label', 'fivetran=proxy-agent',
-        '--label', "proxy_agent_id=$AGENT_ID",
-        '--env', 'HEARTBEAT_EXPIRY_SECONDS=30',
-        '--health-interval', '10s',
-        '--health-retries', '3',
-        '--health-start-period', '30s'
-    )
-
-    if ($ContainerOsType -eq 'windows') {
-        $containerHeartbeatPath = 'C:/app/logs/proxy-agent-heartbeat.txt'
-        $windowsHealthCheckScript = @(
-            '$path = $env:HEARTBEAT_PATH'
-            'if (-not (Test-Path -LiteralPath $path)) { exit 0 }'
-            '$line = Get-Content -LiteralPath $path -ErrorAction Stop | Select-Object -First 1'
-            'if ($line -match ''^HEARTBEAT_EXPIRE_AT=(\d+)$'' -and [int64]$Matches[1] -gt [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) { exit 0 } else { exit 1 }'
-        ) -join '; '
-        $windowsHealthCheckEncoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($windowsHealthCheckScript))
-        $windowsHealthCheck = "powershell.exe -NoProfile -EncodedCommand $windowsHealthCheckEncoded"
-        $dockerArgs += @(
-            '--env', "HEARTBEAT_PATH=$containerHeartbeatPath",
-            '--health-cmd', $windowsHealthCheck,
-            '--health-timeout', '15s'
-        )
-    } else {
-        $dockerArgs += @(
-            '--env', 'HEARTBEAT_PATH=/tmp/proxy-agent-heartbeat.txt',
-            '--health-cmd', '[ ! -f $HEARTBEAT_PATH ] || { . $HEARTBEAT_PATH && [ $(date +%s) -lt $HEARTBEAT_EXPIRE_AT ]; }',
-            '--health-timeout', '3s'
-        )
-    }
-    $dockerArgs += Get-AgentRunArgs -ContainerOsType $ContainerOsType
-    $dockerArgs += @("${IMAGE}:${ImageTag}", '-i', (Get-ContainerConfigPath -ContainerOsType $ContainerOsType))
-
-    & docker @dockerArgs | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        Write-Log "Error: Failed to start container $CONTAINER_NAME"
-        return $false
-    }
-
-    $timeout = 60
-    Write-Log "Waiting for $CONTAINER_NAME to become healthy (timeout: ${timeout}s)..."
-
-    $elapsed = 0
-    while ($true) {
-        try {
-            $health = (docker inspect -f '{{.State.Health.Status}}' $CONTAINER_NAME 2>&1).Trim()
-        } catch {
-            Write-Log "Error: Failed to inspect $CONTAINER_NAME"
-            return $false
-        }
-        if ($health -ne 'starting') { break }
-        if ($elapsed -ge $timeout) {
-            Write-Log "Error: $CONTAINER_NAME did not become healthy within ${timeout}s"
-            docker logs $CONTAINER_NAME | Out-Host
-            Stop-ProxyAgent
-            return $false
-        }
-        Start-Sleep -Seconds 1
-        $elapsed++
-    }
-
-    try {
-        $finalStatus = (docker inspect -f '{{.State.Health.Status}}' $CONTAINER_NAME 2>&1).Trim()
-    } catch {
-        $finalStatus = 'unknown'
-    }
-
-    if ($finalStatus -eq 'healthy') {
-        docker ps -a --filter "name=$CONTAINER_NAME" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' | Out-Host
-        Write-Log "Success: $CONTAINER_NAME is healthy."
-        return $true
-    } else {
-        Write-Log "Error: $CONTAINER_NAME entered status: $finalStatus"
-        docker logs $CONTAINER_NAME | Out-Host
-        return $false
-    }
-}
-
-function Invoke-Upgrade {
-    Write-Host "Checking for latest version..."
-    $containerOsType = Get-ContainerOsType
-    $windowsVersion = Resolve-WindowsVersion -ContainerOsType $containerOsType
-    $latestVersion = Get-LatestVersion -ContainerOsType $containerOsType -WindowsVersion $windowsVersion
-
-    if ((Compare-SemVer $latestVersion $CURRENT_VERSION) -eq 0) {
-        Set-PinnedVersion $CURRENT_VERSION
-        Write-Host "Already running the latest version ($CURRENT_VERSION)."
-        exit 0
-    }
-
-    Write-Log "Upgrading from $CURRENT_VERSION to $latestVersion..."
-    Set-PinnedVersion $latestVersion
-
-    $latestTag = Get-ImageTag -Version $latestVersion -ContainerOsType $containerOsType -WindowsVersion $windowsVersion
-    if (-not (Start-ProxyAgent -ImageTag $latestTag -ContainerOsType $containerOsType)) {
-        Write-Log "Upgrade failed, rolling back to $CURRENT_VERSION..."
-        Set-PinnedVersion $CURRENT_VERSION
-        $currentTag = Get-ImageTag -Version $CURRENT_VERSION -ContainerOsType $containerOsType -WindowsVersion $windowsVersion
-        if (-not (Start-ProxyAgent -ImageTag $currentTag -ContainerOsType $containerOsType)) {
-            Write-Log "Rollback to $CURRENT_VERSION failed."
-        }
-        exit 1
-    }
 }
 
 function Invoke-Doctor {
@@ -554,13 +371,6 @@ function Invoke-NativeManager {
 }
 
 switch ($Command) {
-    'upgrade' {
-        . $loadAgent
-        $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
-        Assert-MemoryAllocation
-        Set-WebProxyFromEnvironment -ProbeUri ([Uri]"https://$($IMAGE.Split('/')[0])/")
-        Invoke-Upgrade
-    }
     'doctor' {
         . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION

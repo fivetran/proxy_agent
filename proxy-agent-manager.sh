@@ -66,23 +66,6 @@ check_memory_allocation() {
     fi
 }
 
-get_latest_version() {
-    local registry_host="${IMAGE%%/*}"
-    local repository_path="${IMAGE#*/}"
-    local registry_url="${PROXY_AGENT_REGISTRY_TAGS_URL:-https://${registry_host}/v2/${repository_path}/tags/list}"
-    local tags_json
-    tags_json=$(curl -s -f --max-time 30 "$registry_url") || {
-        echo "ERROR: Unable to query image registry for latest version" >&2
-        return 1
-    }
-    echo "$tags_json" \
-        | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+-ubuntu-26\.04"' \
-        | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' \
-        | sort -V \
-        | tail -1 \
-        || true
-}
-
 get_release_version() {
     local tag="$1"
     if [[ "$tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-ubuntu-26\.04)?$ ]]; then
@@ -96,94 +79,6 @@ get_release_version() {
 
 image_tag() {
     echo "${IMAGE}:$1${IMAGE_TAG_SUFFIX}"
-}
-
-pin_version() {
-    echo "$1" > "$VERSION_FILE"
-}
-
-upgrade_agent() {
-    echo "Checking for latest version..."
-    local latest_version
-    latest_version=$(get_latest_version) || exit 1
-    if [ -z "$latest_version" ]; then
-        echo "ERROR: Unable to determine latest version" >&2
-        exit 1
-    fi
-    if [ "$latest_version" = "$CURRENT_VERSION" ]; then
-        pin_version "$CURRENT_VERSION"
-        echo "Already running the latest version ($CURRENT_VERSION)."
-        exit 0
-    fi
-    log "Upgrading from $CURRENT_VERSION to $latest_version..."
-    pin_version "$latest_version"
-    if ! start_agent "$latest_version"; then
-        log "Upgrade failed, rolling back to $CURRENT_VERSION..."
-        pin_version "$CURRENT_VERSION"
-        if ! start_agent "$CURRENT_VERSION"; then
-            log "Rollback to $CURRENT_VERSION failed."
-        fi
-        exit 1
-    fi
-}
-
-stop_agent() {
-    if docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
-        docker stop "${CONTAINER_NAME}" >/dev/null
-        docker rm "${CONTAINER_NAME}" >/dev/null
-        log "Stopped ${CONTAINER_NAME}."
-    fi
-}
-
-start_agent() {
-    local version="$1"
-    log "Starting ${CONTAINER_NAME} (version: ${version})..."
-
-    stop_agent
-
-    mkdir -p "$BASE_DIR/logs"
-
-    docker run -d \
-        --name "${CONTAINER_NAME}" \
-        --restart unless-stopped \
-        --label fivetran=proxy-agent \
-        --label proxy_agent_id="$AGENT_ID" \
-        "${AGENT_RUN_ARGS[@]}" \
-        --env HEARTBEAT_PATH=/tmp/proxy-agent-heartbeat.txt \
-        --env HEARTBEAT_EXPIRY_SECONDS=30 \
-        --health-cmd '[ ! -f $HEARTBEAT_PATH ] || { . $HEARTBEAT_PATH && [ $(date +%s) -lt $HEARTBEAT_EXPIRE_AT ]; }' \
-        --health-interval 10s \
-        --health-timeout 3s \
-        --health-retries 3 \
-        --health-start-period 30s \
-        "$(image_tag "$version")" \
-        -i "$CONTAINER_CONFIG_FILE"
-
-    local timeout=60
-    log "Waiting for ${CONTAINER_NAME} to become healthy (timeout: ${timeout}s)..."
-
-    local elapsed=0
-    while [ "$(docker inspect -f '{{.State.Health.Status}}' "${CONTAINER_NAME}")" = "starting" ]; do
-        if [ "$elapsed" -ge "$timeout" ]; then
-            log "Error: ${CONTAINER_NAME} did not become healthy within ${timeout}s"
-            docker logs "${CONTAINER_NAME}"
-            stop_agent
-            return 1
-        fi
-        sleep 1
-        elapsed=$((elapsed + 1))
-    done
-
-    FINAL_STATUS=$(docker inspect -f '{{.State.Health.Status}}' "${CONTAINER_NAME}")
-
-    if [ "$FINAL_STATUS" = "healthy" ]; then
-        docker ps -a --filter "name=${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
-        log "Success: ${CONTAINER_NAME} is healthy."
-    else
-        log "Error: ${CONTAINER_NAME} entered status: $FINAL_STATUS"
-        docker logs "${CONTAINER_NAME}"
-        return 1
-    fi
 }
 
 list_doctor_logs() {
@@ -241,7 +136,6 @@ load_agent() {
         exit 1
     fi
 
-    CONTAINER_NAME="proxy-agent-${AGENT_ID}"
 
     if [ ! -f "$VERSION_FILE" ]; then
         echo "ERROR: $VERSION_FILE not found."
@@ -288,12 +182,6 @@ run_native_manager() {
 }
 
 case "${1:-}" in
-    upgrade)
-        load_agent
-        CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
-        check_memory_allocation
-        upgrade_agent
-        ;;
     doctor)
         load_agent
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
