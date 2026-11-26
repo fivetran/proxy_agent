@@ -5,6 +5,7 @@ import static java.nio.charset.StandardCharsets.UTF_16LE;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Base64;
 import java.util.List;
 import org.jspecify.annotations.Nullable;
@@ -116,6 +117,34 @@ class WindowsOperations implements OsOperations {
             contents += "$WINDOWS_VERSION = '" + windowsVersion + "'\r\n";
         }
         return new Settings("settings.ps1", contents);
+    }
+
+    @Override
+    public ContainerSettings containerSettings(Path directory) throws IOException, InterruptedException {
+        var path = directory.resolve("settings.ps1");
+        if (!Files.isRegularFile(path)) {
+            return new ContainerSettings("5120", "");
+        }
+        var result = runPowerShell("""
+                . $argument | Out-Null
+                if ("$MEMORY_ALLOCATION_MB" -eq '') { $MEMORY_ALLOCATION_MB = 5120 }
+                [Console]::WriteLine([string]$MEMORY_ALLOCATION_MB)
+                [Console]::WriteLine([string]$WINDOWS_VERSION)
+                """, path.toString());
+        if (!result.succeeded()) {
+            throw new IOException("Could not read settings from " + path);
+        }
+        var lines = result.output().split("\\R", -1);
+        if (lines.length < 3) {
+            throw new IOException("Could not read settings from " + path);
+        }
+        return new ContainerSettings(lines[0], lines[1]);
+    }
+
+    @Override
+    public void saveWindowsVariant(Path directory, String variant) throws IOException {
+        Files.writeString(directory.resolve("settings.ps1"), "\r\n$WINDOWS_VERSION = '" + variant + "'\r\n",
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
     }
 
     @Override

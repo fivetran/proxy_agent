@@ -43,6 +43,11 @@ interface OsOperations {
 
     Settings settings(int memoryMb, String windowsVersion);
 
+    /** Evaluates settings written for the existing platform manager. */
+    ContainerSettings containerSettings(Path directory) throws IOException, InterruptedException;
+
+    default void saveWindowsVariant(Path directory, String variant) throws IOException {}
+
     void checkWindowsVersionOverride(String version);
 
     String containerOs(List<String> errors) throws IOException, InterruptedException;
@@ -73,4 +78,6 @@ interface OsOperations {
     int start(Path manager) throws IOException, InterruptedException;
 
     record Settings(String fileName, String contents) {}
+
+    record ContainerSettings(String memoryMb, String windowsVersion) {}
 }
