@@ -13,7 +13,7 @@ import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
 
 /** HTTP downloads, registry lookups, and configuration requests for the proxy agent manager. */
-final class AgentHttpClient {
+final class HttpClient {
     private static final int TIMEOUT_MILLIS = 30_000;
     private static final int MAX_REDIRECTS = 10;
     private static final Pattern TAGS = Pattern.compile("\"tags\"\\s*:\\s*\\[([^]]*)]");
@@ -21,7 +21,7 @@ final class AgentHttpClient {
 
     private final ProxySettings proxy;
 
-    AgentHttpClient(ProxySettings proxy) {
+    HttpClient(ProxySettings proxy) {
         this.proxy = proxy;
         // A dropped response does not tell us whether Fivetran processed the POST.
         System.setProperty("sun.net.http.retryPost", "false");
