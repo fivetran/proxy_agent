@@ -106,11 +106,15 @@ final class Manager {
     int upgrade(Path directory) throws IOException, InterruptedException {
         var agent = agentContainer(directory);
         System.out.println("Checking for latest version...");
-        var registry = agent.repository().split("/", 2);
-        if (registry.length != 2) {
-            throw new IOException("Unable to determine image registry from PROXY_AGENT_IMAGE");
+        var registryUrl = Environment.get("PROXY_AGENT_REGISTRY_TAGS_URL", "");
+        if (registryUrl.isEmpty()) {
+            var registry = agent.repository().split("/", 2);
+            if (registry.length != 2) {
+                throw new IOException("Unable to determine image registry from PROXY_AGENT_IMAGE");
+            }
+            registryUrl = "https://" + registry[0] + "/v2/" + registry[1] + "/tags/list";
         }
-        var latest = latestVersion("https://" + registry[0] + "/v2/" + registry[1] + "/tags/list", agent.suffix());
+        var latest = latestVersion(registryUrl, agent.suffix());
         var current = agent.version();
         if (ReleaseVersion.compare(latest, current) == 0) {
             pinVersion(directory, current);
