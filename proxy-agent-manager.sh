@@ -327,13 +327,6 @@ if [ "$#" -gt 0 ]; then
 fi
 
 case "$command" in
-    start)
-        load_agent
-        CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
-        check_memory_allocation
-        pin_version "$CURRENT_VERSION"
-        start_agent "$CURRENT_VERSION"
-        ;;
     restart)
         load_agent
         CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
@@ -367,6 +360,13 @@ case "$command" in
 
         # Older installations may run this script with an earlier manager or no binary.
         case "$command" in
+            start)
+                load_agent
+                CURRENT_VERSION=$(get_release_version "$PINNED_VERSION") || exit 1
+                check_memory_allocation
+                pin_version "$CURRENT_VERSION"
+                start_agent "$CURRENT_VERSION"
+                ;;
             stop)
                 load_agent
                 log "Stopping ${CONTAINER_NAME}..."

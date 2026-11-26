@@ -601,12 +601,6 @@ $loadAgent = {
 }
 
 switch ($Command) {
-    'start' {
-        . $loadAgent
-        $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
-        Assert-MemoryAllocation
-        if (-not (Start-CurrentProxyAgent)) { exit 1 }
-    }
     'restart' {
         . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
@@ -650,6 +644,12 @@ switch ($Command) {
 
         # Older installations may run this script with an earlier manager or no binary.
         switch ($Command) {
+            'start' {
+                . $loadAgent
+                $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
+                Assert-MemoryAllocation
+                if (-not (Start-CurrentProxyAgent)) { exit 1 }
+            }
             'stop' {
                 . $loadAgent
                 Write-Log "Stopping $CONTAINER_NAME..."

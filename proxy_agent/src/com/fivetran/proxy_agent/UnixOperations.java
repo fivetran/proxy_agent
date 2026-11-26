@@ -69,6 +69,20 @@ final class UnixOperations implements OsOperations {
     }
 
     @Override
+    public ContainerSettings containerSettings(Path directory) throws IOException, InterruptedException {
+        var path = directory.resolve("settings.sh");
+        if (!Files.isRegularFile(path)) {
+            return new ContainerSettings(Environment.get("MEMORY_ALLOCATION_MB", "5120"), "");
+        }
+        var result = commands.capture("bash", "-e", "-c",
+                "source \"$1\" >/dev/null; printf '%s\\n' \"${MEMORY_ALLOCATION_MB:-5120}\"", "manager", path.toString());
+        if (!result.succeeded()) {
+            throw new IOException("Could not read settings from " + path);
+        }
+        return new ContainerSettings(result.output().strip(), "");
+    }
+
+    @Override
     public void checkWindowsVersionOverride(String version) {
         if (!version.isEmpty()) {
             throw new IllegalArgumentException("Invalid Windows version: " + version);
