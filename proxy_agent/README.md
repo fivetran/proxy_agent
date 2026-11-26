@@ -64,6 +64,11 @@ Windows also accepts `--windows-version ltsc2019|ltsc2022|ltsc2025` in
 Windows-container mode.
 
 The public Bash and PowerShell installers are still the normal entry points.
+On older script-only installations, updating the management script retrieves
+the latest full legacy manager from `main`. When that script runs
+`update-manager`, it checks for the native manager beside it and installs the
+verified release binary if it is missing. It leaves the running container,
+configuration, and pinned agent version alone.
 This PR makes the native CLI available for testing and release preparation.
 
 ## Release sequence

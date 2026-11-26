@@ -106,6 +106,39 @@ function Set-WebProxyFromEnvironment {
     Write-Log "Using proxy $proxyAddress from the environment"
 }
 
+# Bootstrap just the manager for existing installations, without starting Docker.
+function Install-NativeManager {
+    $url = $env:PROXY_AGENT_MANAGER_BINARY_URL
+    $expected = $env:PROXY_AGENT_MANAGER_BINARY_SHA256
+    $candidate = Join-Path $BASE_DIR ('.native-manager.' + [guid]::NewGuid() + '.exe')
+    $checksum = "$candidate.sha256"
+    try {
+        if ($url -or $expected) {
+            if (-not $url -or $expected -notmatch '^[0-9a-f]{64}$') {
+                throw 'A manager URL and SHA-256 digest are required together.'
+            }
+        } else {
+            $url = 'https://github.com/fivetran/proxy_agent/releases/latest/download/manager-windows-x64.exe'
+            Invoke-WebRequest -Uri "$url.sha256" -OutFile $checksum -UseBasicParsing -TimeoutSec 30
+            $expected = [IO.File]::ReadAllText($checksum).Trim()
+        }
+        if ($expected -notmatch '^[0-9a-f]{64}$') { throw 'Invalid manager SHA-256 digest.' }
+        Invoke-WebRequest -Uri $url -OutFile $candidate -UseBasicParsing -TimeoutSec 120
+        if ((Get-FileHash -LiteralPath $candidate).Hash -ne $expected) {
+            throw 'Native manager SHA-256 does not match.'
+        }
+        Unblock-File -LiteralPath $candidate
+        [IO.File]::Move($candidate, (Join-Path $BASE_DIR 'manager.exe'))
+        Write-Host 'Native manager installed.'
+        return $true
+    } catch {
+        Write-Warning 'Could not install a verified native manager. The management script remains available.'
+        return $false
+    } finally {
+        Remove-Item -LiteralPath $candidate, $checksum -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # Validate the download before atomically replacing the installed script.
 function Update-Manager {
     $scriptUrl = if ($env:PROXY_AGENT_SCRIPT_URL) { $env:PROXY_AGENT_SCRIPT_URL } else { 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1' }
@@ -126,6 +159,12 @@ function Update-Manager {
         # $null binds to an empty string here; Replace requires a null backup path.
         [System.IO.File]::Replace($tmpScript, $PSCommandPath, [NullString]::Value)
         Write-Host "Management script updated. The agent has not been restarted."
+        $nativeOverride = $env:PROXY_AGENT_MANAGER_BINARY_URL -or $env:PROXY_AGENT_MANAGER_BINARY_SHA256
+        if (-not (Test-Path -LiteralPath (Join-Path $BASE_DIR 'manager.exe') -PathType Leaf) -and
+                (-not $env:PROXY_AGENT_SCRIPT_URL -or $nativeOverride)) {
+            $installed = Install-NativeManager
+            if (-not $installed -and $nativeOverride) { exit 1 }
+        }
     } catch {
         Write-Host "ERROR: Failed to update management script: $_" -ForegroundColor Red
         exit 1
