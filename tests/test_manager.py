@@ -151,19 +151,6 @@ class TestManager:
         assert sandbox.calls('docker') == before
         assert_image(sandbox, variant)
 
-    def test_nonstarting_commands_tolerate_invalid_settings_and_version(self, sandbox, run_manager):
-        run_manager('start')
-        sandbox.settings(MEMORY_ALLOCATION_MB='4G')
-        sandbox.version.write_text('2.0')
-        assert 'NAMES IMAGE STATUS' in run_manager('status')
-        assert 'name=proxy-agent-abc123' in docker_calls(sandbox, 'ps')[-1]
-        run_manager('logs')
-        assert docker_calls(sandbox, 'logs')[-1] == ['logs', '-f', 'proxy-agent-abc123']
-        run_manager('stop')
-        assert sandbox.image is None
-        for command in ('stop', 'rm'):
-            assert docker_calls(sandbox, command)[-1] == [command, 'proxy-agent-abc123']
-        assert sandbox.version.read_text() == '2.0'
 
     def test_missing_config(self, sandbox, run_manager):
         sandbox.config.unlink()

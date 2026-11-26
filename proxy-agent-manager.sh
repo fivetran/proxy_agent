@@ -288,10 +288,6 @@ run_native_manager() {
 }
 
 case "${1:-}" in
-    status)
-        load_agent
-        docker ps -a --filter "name=${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
-        ;;
     logs)
         load_agent
         docker logs -f "${CONTAINER_NAME}"
