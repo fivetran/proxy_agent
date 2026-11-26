@@ -4,10 +4,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 
-import com.sun.management.OperatingSystemMXBean;
 import java.io.IOException;
-import java.lang.management.ManagementFactory;
-import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -202,7 +199,7 @@ final class Installer {
         var matcher = DOCKER_VERSION.matcher(result.output());
         if (!matcher.find()) {
             warnings.add("Unable to determine Docker version");
-        } else if (compareVersions(matcher.group(1), MIN_DOCKER_VERSION) < 0) {
+        } else if (ReleaseVersion.compare(matcher.group(1), MIN_DOCKER_VERSION) < 0) {
             errors.add("Docker version " + matcher.group(1) + " does not meet the minimum requirement of "
                     + MIN_DOCKER_VERSION);
         }
@@ -214,7 +211,7 @@ final class Installer {
         return true;
     }
 
-    private void checkResources(int memoryMb, List<String> warnings) throws IOException {
+    private void checkResources(int memoryMb, List<String> warnings) throws IOException, InterruptedException {
         var cpus = operations.cpuCount();
         if (cpus > 0 && cpus < MIN_CPU_COUNT) {
             warnings.add("CPU count (" + cpus + ") is below the recommended minimum of " + MIN_CPU_COUNT);
@@ -223,10 +220,7 @@ final class Installer {
             warnings.add("Configured container memory (" + memoryMb + "MB) is below the recommended minimum of "
                     + DEFAULT_MEMORY_MB + "MB");
         }
-        var system = ManagementFactory.getOperatingSystemMXBean();
-        var totalMb = system instanceof OperatingSystemMXBean memory
-                ? Math.max(0, memory.getTotalMemorySize()) / (1024 * 1024)
-                : 0;
+        var totalMb = operations.totalMemoryMb();
         var reservedMb = operations.reservedMemoryMb();
         if (totalMb == 0) {
             warnings.add("Unable to determine available memory");
@@ -320,7 +314,7 @@ final class Installer {
                 continue;
             }
             var version = matcher.group(1);
-            if (latest.isEmpty() || compareVersions(version, latest) > 0) {
+            if (latest.isEmpty() || ReleaseVersion.compare(version, latest) > 0) {
                 latest = version;
             }
         }
@@ -328,18 +322,6 @@ final class Installer {
             throw new IOException("No published proxy agent image tags found for " + suffix.substring(1));
         }
         return latest;
-    }
-
-    private static int compareVersions(String left, String right) {
-        var leftParts = left.split("\\.");
-        var rightParts = right.split("\\.");
-        for (var i = 0; i < leftParts.length; i++) {
-            var compare = new BigInteger(leftParts[i]).compareTo(new BigInteger(rightParts[i]));
-            if (compare != 0) {
-                return compare;
-            }
-        }
-        return 0;
     }
 
     private void stageNativeBinary(Path directory, StagedFiles files) throws IOException {
