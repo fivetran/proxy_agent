@@ -4,7 +4,6 @@ import static java.nio.charset.StandardCharsets.UTF_16LE;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
@@ -12,7 +11,7 @@ import java.util.List;
 import java.util.Objects;
 import org.jspecify.annotations.Nullable;
 
-/** Windows host operations using PowerShell for native authentication and system APIs. */
+/** Windows host operations using PowerShell for Windows system APIs. */
 final class WindowsOperations implements Operations {
     private static final String POWERSHELL_SETUP = "/com/fivetran/proxy_agent/windows-installer.ps1";
     private final InstallHost host = new InstallHost();
@@ -20,13 +19,7 @@ final class WindowsOperations implements Operations {
 
     @Override
     public InstallerHttp installerHttp() {
-        var address = InstallHost.env("HTTPS_PROXY", InstallHost.env("HTTP_PROXY", ""));
-        if (address.isEmpty()) {
-            // An explicitly configured JDK route is independent of Internet Options.
-            return new InstallerHttp(InstallerProxy.hasJdkProxySettings() ? InstallerProxy.forJdk() : null,
-                    this::request);
-        }
-        return new InstallerHttp(InstallerProxy.forWindows(address), this::request);
+        return new InstallerHttp(InstallerProxy.forWindows());
     }
 
     @Override
@@ -60,7 +53,7 @@ final class WindowsOperations implements Operations {
                 } catch {
                     # The installer reports unavailable host memory while continuing the preflight checks.
                 }
-                """, "", "", false);
+                """, "");
         var lines = result.output().strip().split("\\R");
         if (lines[0].equalsIgnoreCase("true")) {
             System.out.println("WARNING: Running as Administrator is not recommended. Consider running as a regular user.");
@@ -75,7 +68,7 @@ final class WindowsOperations implements Operations {
                 [Console]::WriteLine($os.ProductType)
                 [Console]::WriteLine($os.BuildNumber)
                 [Console]::WriteLine($os.Caption)
-                """, "", "", false);
+                """, "");
         var lines = result.output().strip().split("\\R", 3);
         if (!result.succeeded() || lines.length < 2) {
             throw new IOException("Unable to detect the Windows Server version");
@@ -98,42 +91,11 @@ final class WindowsOperations implements Operations {
                 if (-not $config.agent_id -or -not $config.auth_token) { exit 1 }
                 $credential = "$($config.agent_id):$($config.auth_token)"
                 [Console]::Write($credential)
-                """, path.toAbsolutePath().toString(), "", false);
+                """, path.toAbsolutePath().toString());
         if (!result.succeeded()) {
             throw new IOException("Could not extract credentials from WebSocket config");
         }
         return result.output();
-    }
-
-    private InstallerHttp.Response request(URI uri, @Nullable String token) throws IOException, InterruptedException {
-        var result = runPowerShell("""
-                $options = @{ Uri = $argument; TimeoutSec = 30; UseBasicParsing = $true }
-                if ($value) {
-                    $options.Method = 'Post'
-                    $options.MaximumRedirection = 0
-                    $options.Headers = @{ Authorization = "Basic $value"; Accept = 'application/json' }
-                }
-                try {
-                    $response = Invoke-WebRequest @options
-                } catch {
-                    if (-not $_.Exception.Response) { exit 1 }
-                    [Console]::WriteLine([int]$_.Exception.Response.StatusCode)
-                    exit 0
-                }
-                [Console]::WriteLine([int]$response.StatusCode)
-                [Console]::Write([Convert]::ToBase64String($response.RawContentStream.ToArray()))
-                """, uri.toString(), token == null ? "" : token, true);
-        var endOfStatus = result.output().indexOf('\n');
-        if (!result.succeeded() || endOfStatus < 0) {
-            throw new IOException("Windows HTTP request failed");
-        }
-        try {
-            var status = Integer.parseInt(result.output().substring(0, endOfStatus).strip());
-            var body = Base64.getDecoder().decode(result.output().substring(endOfStatus + 1));
-            return new InstallerHttp.Response(status, body);
-        } catch (IllegalArgumentException e) {
-            throw new IOException("Invalid Windows HTTP response");
-        }
     }
 
     @Override
@@ -141,7 +103,7 @@ final class WindowsOperations implements Operations {
         var checked = runPowerShell("""
                 [Console]::InputEncoding = [Text.Encoding]::UTF8
                 $null = [Console]::In.ReadToEnd() | ConvertFrom-Json
-                """, "", "", false, new String(config, UTF_8));
+                """, "", new String(config, UTF_8));
         if (!checked.succeeded()) {
             throw new IOException("Configure endpoint returned an invalid JSON response");
         }
@@ -160,7 +122,7 @@ final class WindowsOperations implements Operations {
                 $admins = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
                 $acl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($admins, 'Read', 'Allow')))
                 Set-Acl -LiteralPath $argument -AclObject $acl
-                """, temp.toString(), "", false);
+                """, temp.toString());
             if (!result.succeeded()) {
                 throw new IOException("Could not restrict access to " + directory.resolve("config.json"));
             }
@@ -181,12 +143,12 @@ final class WindowsOperations implements Operations {
         host.start(manager, List.of(powerShell, "-NoProfile", "-File", manager.toString(), "start"));
     }
 
-    private InstallHost.Result runPowerShell(String command, String argument, String value, boolean usesProxy)
+    private InstallHost.Result runPowerShell(String command, String argument)
             throws IOException, InterruptedException {
-        return runPowerShell(command, argument, value, usesProxy, null);
+        return runPowerShell(command, argument, null);
     }
 
-    private InstallHost.Result runPowerShell(String command, String argument, String value, boolean usesProxy,
+    private InstallHost.Result runPowerShell(String command, String argument,
             @Nullable String input) throws IOException, InterruptedException {
         var setup = Objects.requireNonNull(WindowsOperations.class.getResourceAsStream(POWERSHELL_SETUP));
         String script;
@@ -196,17 +158,12 @@ final class WindowsOperations implements Operations {
         // Keep paths and credentials as data so PowerShell never parses them as code.
         script += """
                 $argument = $env:PROXY_AGENT_INSTALL_ARGUMENT
-                $value = $env:PROXY_AGENT_INSTALL_VALUE
                 try {
                 """;
-        if (usesProxy) {
-            script += "Set-WebProxyFromEnvironment\n";
-        }
         script += command + "\n} catch { exit 1 }\n";
         var encoded = Base64.getEncoder().encodeToString(script.getBytes(UTF_16LE));
         var process = InstallHost.builder(List.of(powerShell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded));
         process.environment().put("PROXY_AGENT_INSTALL_ARGUMENT", argument);
-        process.environment().put("PROXY_AGENT_INSTALL_VALUE", value);
         return InstallHost.capture(process, input);
     }
 }

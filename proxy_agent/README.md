@@ -10,26 +10,31 @@ uses shared Java code for installation and delegates host operations to
 `UnixOperations` or `WindowsOperations`. macOS uses `UnixOperations` for
 engineering tests.
 
-On Unix, set `http_proxy` for HTTP, `https_proxy` or `HTTPS_PROXY` for
-HTTPS, and `all_proxy` or `ALL_PROXY` as a fallback. Java handles HTTP
-forward proxies, including CONNECT for HTTPS destinations. HTTPS and SOCKS
-proxy URLs use curl. Set `no_proxy` or `NO_PROXY` to a comma-separated
-list of hosts or domain suffixes. CIDR entries use curl 7.86.0 or later.
-When the default JDK trust store rejects a certificate, the installer can
-retry with curl so it can use the host's trust configuration.
+The installer uses Java networking on both platforms. On Unix, set
+`http_proxy` for HTTP, `https_proxy` or `HTTPS_PROXY` for HTTPS, and
+`all_proxy` or `ALL_PROXY` as a fallback. On Windows, `HTTPS_PROXY`
+takes precedence over `HTTP_PROXY` and applies to both destination
+protocols. Without an explicit proxy, Windows uses Java's system proxy
+discovery, including Internet Options and PAC.
 
-On Windows, set `HTTPS_PROXY` or its fallback `HTTP_PROXY` for both HTTP
-and HTTPS requests. `NO_PROXY` applies when a proxy is set in the
-environment. Java handles explicit HTTP proxies and uses the Windows web
-client for Internet Options, integrated authentication, Windows certificate
-trust, and proxy schemes other than HTTP. HTTPS and SOCKS proxy URLs depend
-on the PowerShell and .NET version providing that client. A proxy URL can
-contain credentials. When it omits them, Windows proxy authentication uses
-the current Windows identity.
+Plain `http://` proxy URLs work with HTTP and HTTPS destinations.
+`socks://`, `socks4://`, and `socks5://` use the JDK SOCKS settings.
+HTTP and SOCKS5 proxy URLs can contain credentials. A Windows HTTP proxy
+without explicit credentials can use the signed-in identity through the
+JDK. An HTTP proxy URL with explicit credentials uses Java's Basic or
+Digest authentication. An integrated-only proxy cannot use URL credentials.
 
-Without installer proxy environment variables, you can explicitly configure
-the JDK route using `-Dhttp.proxyHost`, `-Dhttps.proxyHost`, their port
-properties, and `-Dhttp.nonProxyHosts` before the `install` subcommand.
+An `https://` proxy URL requires TLS to the proxy itself and is unsupported.
+`socks4a://` and `socks5h://` URLs require proxy-side DNS and are
+unsupported. Host and domain entries in `NO_PROXY` become JDK bypass
+patterns. CIDR entries are ignored. TLS certificates use the Java trust
+store.
+
+Explicit JDK proxy hosts take precedence over the installer environment
+variables. Set `-Dhttp.proxyHost`, `-Dhttps.proxyHost`, or `-DsocksProxyHost`
+and the corresponding ports before the `install` subcommand. The installer
+also respects `-Dhttp.nonProxyHosts`, `-DsocksNonProxyHosts`,
+`-Djava.net.useSystemProxies`, and `-Djavax.net.ssl.trustStore`.
 
 ## Build
 
