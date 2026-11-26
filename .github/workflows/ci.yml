@@ -116,6 +116,9 @@ jobs:
           $sha256 = (Get-FileHash -LiteralPath $binary).Hash.ToLowerInvariant()
           Move-Item -LiteralPath $binary -Destination (Join-Path (Resolve-Path 'dist').Path $releaseName)
           Set-Content -LiteralPath "dist/$releaseName.sha256" -Value $sha256 -Encoding ascii
+      - name: Check native installer failure handling
+        if: matrix.platform == 'linux-x64'
+        run: python3 tests/check_native_install.py dist/manager-linux-x64
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: manager-${{ matrix.platform }}

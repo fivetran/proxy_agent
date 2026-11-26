@@ -16,3 +16,8 @@ http_jar(
     sha256 = "f86e30fffd10d2b13b8caa8d4b237a7ee61f2ffccf5b1941de718b765d235bf8",
     urls = ["https://repo.maven.apache.org/maven2/info/picocli/picocli/4.7.7/picocli-4.7.7.jar"],
 )
+http_jar(
+    name = "jackson_core",
+    sha256 = "449798beb4c4ec26de9cc25b39ca2198036883fb905ca968cbef7136d19a25d9",
+    urls = ["https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-core/2.23.0/jackson-core-2.23.0.jar"],
+)

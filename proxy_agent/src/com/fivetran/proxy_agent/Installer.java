@@ -25,28 +25,26 @@ final class Installer {
     private static final int MIN_CPU_COUNT = 4;
     private static final int MIN_DISK_MB = 2048;
     private static final int MIN_WINDOWS_DISK_MB = 12288;
-    private static final String SCRIPT_ROOT = "https://raw.githubusercontent.com/fivetran/proxy_agent/main/";
-    private static final String REGISTRY_URL =
-            "https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list";
     private static final String MIN_DOCKER_VERSION = "20.10.17";
     private static final String UBUNTU_TAG_SUFFIX = "-ubuntu-26.04";
     private static final Pattern VERSION = Pattern.compile("[0-9]+\\.[0-9]+\\.[0-9]+");
     private static final Pattern DOCKER_VERSION = Pattern.compile("Docker version (" + VERSION + ")");
     private static final Set<String> WINDOWS_VERSIONS = Set.of("ltsc2019", "ltsc2022", "ltsc2025");
 
-    private final CommandRunner commands = new CommandRunner();
-    private final Operations operations;
-    private final HttpClient http;
+    private final Manager manager;
+    private final OsOperations operations;
+    private final Docker docker;
 
-    Installer(Operations operations, HttpClient http) {
-        this.operations = operations;
-        this.http = http;
+    Installer(Manager manager) {
+        this.manager = manager;
+        this.operations = manager.operations();
+        this.docker = manager.docker();
     }
 
     void install(@Nullable Path configPath, @Nullable Path installDir, String windowsVersionOverride)
             throws IOException, InterruptedException {
         operations.checkUser();
-        if (!CommandRunner.env("RUNTIME", "").equals("docker")) {
+        if (!Environment.get("RUNTIME", "").equals("docker")) {
             throw new IOException("RUNTIME must be set to 'docker'.");
         }
         var options = configurePaths(configPath, installDir, windowsVersionOverride);
@@ -61,42 +59,59 @@ final class Installer {
         }
         var configDirectory = Files.createDirectories(directory.resolve("config"));
         Files.createDirectories(directory.resolve("logs"));
-        var managerName = operations.isWindows() ? "proxy-agent-manager.ps1" : "proxy-agent-manager.sh";
-        var manager = directory.resolve(managerName);
-        installManager(manager);
-        writeSettings(directory, options.windowsVersion(), memoryMb);
-        installConfig(configDirectory, config);
+        var script = directory.resolve(operations.managerScriptName());
+        try (var files = new StagedFiles()) {
+            System.out.println("Downloading management script...");
+            var stagedScript = files.create(script);
+            manager.downloadManagerScript(stagedScript);
+            operations.makeExecutable(stagedScript);
+            var contents = configContents(config);
 
-        var suffix = windowsVersion.isEmpty() ? UBUNTU_TAG_SUFFIX : "-windows-" + windowsVersion;
-        System.out.println("Resolving latest proxy agent version...");
-        if (!windowsVersion.isEmpty()) {
-            System.out.println("Using Windows image variant " + windowsVersion);
-        } else if (operations.isWindows()) {
-            System.out.println("Using Linux container image");
+            var suffix = windowsVersion.isEmpty() ? UBUNTU_TAG_SUFFIX : "-windows-" + windowsVersion;
+            System.out.println("Resolving latest proxy agent version...");
+            if (!windowsVersion.isEmpty()) {
+                System.out.println("Using Windows image variant " + windowsVersion);
+            } else {
+                operations.describeLinuxImage();
+            }
+            var version = getLatestVersion(suffix);
+
+            var settings = operations.settings(memoryMb, options.windowsVersion());
+            Files.writeString(files.create(directory.resolve(settings.fileName())), settings.contents());
+            Files.writeString(files.create(directory.resolve("version")), version + "\n");
+            stageNativeBinary(directory, files);
+            var destination = configDirectory.resolve("config.json");
+            var stagedConfig = operations.createProtectedConfig(configDirectory);
+            files.add(stagedConfig, destination);
+            Files.write(stagedConfig, contents);
+
+            // Publish config last, after the other files the manager needs are in place.
+            files.install();
+            if (config.contents() != null) {
+                System.out.println("Config copied to " + destination);
+            }
+            System.out.println("Using version " + version);
         }
-        var version = getLatestVersion(suffix);
-        Files.writeString(directory.resolve("version"), version + "\n");
-        System.out.println("Using version " + version);
-        installNativeBinary(directory);
-        operations.start(manager);
+        recordManagerHash(script);
+        manager.startAgent(script);
         System.out.println("\nInstallation complete.");
         System.out.println("Install directory: " + directory);
     }
 
     private Options configurePaths(@Nullable Path config, @Nullable Path directory, String windowsVersion) {
         var variant = windowsVersion.toLowerCase(Locale.ROOT);
-        if (!variant.isEmpty() && (!operations.isWindows() || !WINDOWS_VERSIONS.contains(variant))) {
+        if (!variant.isEmpty() && !WINDOWS_VERSIONS.contains(variant)) {
             throw new IllegalArgumentException("Invalid Windows version: " + windowsVersion);
         }
+        operations.checkWindowsVersionOverride(windowsVersion);
         if (directory == null) {
-            var home = CommandRunner.env(operations.isWindows() ? "USERPROFILE" : "HOME", System.getProperty("user.home"));
-            directory = Path.of(home, "fivetran-proxy-agent");
+            directory = operations.defaultInstallDirectory();
         }
         return new Options(directory.toAbsolutePath().normalize(), config, variant);
     }
 
-    private Config readConfig(@Nullable Path path) throws IOException, InterruptedException {
-        var token = CommandRunner.env("TOKEN", "");
+    private static Config readConfig(@Nullable Path path) throws IOException {
+        var token = Environment.get("TOKEN", "");
         if (path == null) {
             if (token.isEmpty()) {
                 throw new IOException("Provide a config.json file or set TOKEN.");
@@ -107,19 +122,18 @@ final class Installer {
             throw new IOException("Config file not found or not readable: " + path);
         }
         var content = Files.readAllBytes(path);
-        var text = new String(content, UTF_8);
-        if (!token.isEmpty() || !text.contains("\"proxy_server_uri\"")) {
+        var credential = token.isEmpty() ? Manager.legacyCredential(content) : null;
+        if (credential == null) {
             return new Config(content, "");
         }
 
-        var credential = operations.legacyCredential(path, text);
         token = Base64.getEncoder().encodeToString(credential.getBytes(UTF_8));
         System.out.println("Detected WebSocket agent configuration. Fetching updated config from Fivetran...");
         return new Config(null, token);
     }
 
     private static int readMemoryMb() {
-        var memory = CommandRunner.env("MEMORY_ALLOCATION_MB", "");
+        var memory = Environment.get("MEMORY_ALLOCATION_MB", "");
         var console = System.console();
         if (memory.isEmpty() && console != null) {
             var response = console.readLine(
@@ -147,14 +161,7 @@ final class Installer {
         var warnings = new ArrayList<String>();
         var errors = new ArrayList<String>();
         var dockerAvailable = checkDocker(warnings, errors);
-        var containerOs = "linux";
-        if (dockerAvailable && operations.isWindows()) {
-            var result = commands.docker("info", "--format", "{{.OSType}}");
-            containerOs = result.output().strip();
-            if (!result.succeeded() || !(containerOs.equals("linux") || containerOs.equals("windows"))) {
-                errors.add("Unable to determine whether Docker is running Linux or Windows containers");
-            }
-        }
+        var containerOs = dockerAvailable ? operations.containerOs(errors) : "linux";
         if (!options.windowsVersion().isEmpty() && !containerOs.equals("windows")) {
             errors.add("-WindowsVersion can only be used when Docker is running Windows containers");
         }
@@ -162,7 +169,7 @@ final class Installer {
             operations.checkAutoStart(warnings);
         }
         checkResources(memoryMb, warnings);
-        checkDisk(options.directory(), containerOs.equals("windows"), warnings);
+        checkDisk(options.directory(), containerOs, warnings);
         if (warnings.isEmpty() && errors.isEmpty()) {
             System.out.println("OK\n");
         } else {
@@ -183,7 +190,7 @@ final class Installer {
             errors.add("docker is not installed");
             return false;
         }
-        var result = commands.docker("--version");
+        var result = docker.capture("--version");
         if (!result.succeeded()) {
             errors.add("Failed to execute 'docker --version'. Docker may not be functioning properly");
             return false;
@@ -195,7 +202,7 @@ final class Installer {
             errors.add("Docker version " + matcher.group(1) + " does not meet the minimum requirement of "
                     + MIN_DOCKER_VERSION);
         }
-        if (!commands.docker("info").succeeded()) {
+        if (!docker.capture("info").succeeded()) {
             errors.add("Docker is installed but the Docker daemon is not accessible. Ensure Docker is running and your"
                     + " user has permission to access the Docker daemon.");
             return false;
@@ -213,7 +220,7 @@ final class Installer {
                     + DEFAULT_MEMORY_MB + "MB");
         }
         var totalMb = operations.totalMemoryMb();
-        var reservedMb = operations.isWindows() ? 3072 : 1024;
+        var reservedMb = operations.reservedMemoryMb();
         if (totalMb == 0) {
             warnings.add("Unable to determine available memory");
         } else if (memoryMb > totalMb - reservedMb) {
@@ -222,10 +229,10 @@ final class Installer {
         }
     }
 
-    private void checkDisk(Path directory, boolean usesWindowsContainers, List<String> warnings)
+    private void checkDisk(Path directory, String containerOs, List<String> warnings)
             throws IOException, InterruptedException {
-        if (usesWindowsContainers) {
-            var root = commands.docker("info", "--format", "{{.DockerRootDir}}");
+        if (containerOs.equals("windows")) {
+            var root = docker.capture("info", "--format", "{{.DockerRootDir}}");
             var dataRoot = root.output().strip();
             if (root.succeeded() && !dataRoot.isEmpty()) {
                 directory = Path.of(dataRoot);
@@ -233,14 +240,12 @@ final class Installer {
                 warnings.add("Unable to determine Docker's data root; checking disk space for " + directory + " instead");
             }
         }
-        var target = operations.isWindows() && Files.exists(directory) ? directory : directory.getParent();
+        var target = operations.diskCheckTarget(directory);
         if (target == null || !Files.isDirectory(target)) {
-            if (operations.isWindows()) {
-                warnings.add("Unable to determine available disk space: directory " + target + " does not exist");
-            }
+            operations.warnMissingDiskTarget(target, warnings);
             return;
         }
-        var minimumMb = usesWindowsContainers ? MIN_WINDOWS_DISK_MB : MIN_DISK_MB;
+        var minimumMb = containerOs.equals("windows") ? MIN_WINDOWS_DISK_MB : MIN_DISK_MB;
         long freeMb;
         try {
             freeMb = Files.getFileStore(target).getUsableSpace() / (1024 * 1024);
@@ -249,7 +254,7 @@ final class Installer {
             return;
         }
         if (freeMb < minimumMb) {
-            var location = operations.isWindows() ? " on drive " + target.getRoot().toString().substring(0, 2) + " " : " ";
+            var location = operations.diskLocation(target);
             warnings.add("Available disk space" + location + "(" + freeMb + "MB) is below the recommended minimum of "
                     + minimumMb + "MB");
         }
@@ -264,17 +269,7 @@ final class Installer {
         }
     }
 
-    private void installManager(Path manager) throws IOException {
-        System.out.println("Downloading management script...");
-        var temp = Files.createTempFile(manager.getParent(), manager.getFileName() + ".", ".tmp");
-        try {
-            var url = CommandRunner.env("PROXY_AGENT_SCRIPT_URL", SCRIPT_ROOT + manager.getFileName());
-            http.download(url, temp);
-            operations.makeExecutable(temp);
-            Files.move(temp, manager, ATOMIC_MOVE, REPLACE_EXISTING);
-        } finally {
-            Files.deleteIfExists(temp);
-        }
+    private static void recordManagerHash(Path manager) {
         // A baseline is also understood by legacy managers that support automatic updates.
         var state = manager.getParent().resolve(".manager-auto-update");
         try {
@@ -300,42 +295,17 @@ final class Installer {
         }
     }
 
-    private void writeSettings(Path directory, String windowsVersion, int memoryMb) throws IOException {
-        if (!operations.isWindows()) {
-            Files.writeString(directory.resolve("settings.sh"), "MEMORY_ALLOCATION_MB=" + memoryMb + "\n");
-            return;
-        }
-        var settings = "$MEMORY_ALLOCATION_MB = " + memoryMb + "\r\n";
-        if (!windowsVersion.isEmpty()) {
-            settings += "$WINDOWS_VERSION = '" + windowsVersion + "'\r\n";
-        }
-        Files.writeString(directory.resolve("settings.ps1"), settings);
-    }
-
-    private void installConfig(Path directory, Config config) throws IOException, InterruptedException {
+    private byte[] configContents(Config config) throws IOException {
         var contents = config.contents();
-        var shouldFetch = contents == null;
-        if (contents == null) {
-            var api = CommandRunner.env("FIVETRAN_API_URL", "https://api.fivetran.com").replaceAll("/+$", "");
-            System.out.println("Fetching agent config from Fivetran...");
-            contents = http.configure(api + "/proxy-agent/configure", config.token());
-            operations.validateFetchedConfig(contents);
+        if (contents != null) {
+            return contents;
         }
-        var destination = directory.resolve("config.json");
-        var temp = operations.createProtectedConfig(directory);
-        try {
-            Files.write(temp, contents);
-            Files.move(temp, destination, ATOMIC_MOVE, REPLACE_EXISTING);
-        } finally {
-            Files.deleteIfExists(temp);
-        }
-        if (!shouldFetch) {
-            System.out.println("Config copied to " + destination);
-        }
+        System.out.println("Fetching agent config from Fivetran...");
+        return manager.fetchConfiguration(config.token());
     }
 
     private String getLatestVersion(String suffix) throws IOException {
-        var tags = http.registryTags(CommandRunner.env("PROXY_AGENT_REGISTRY_TAGS_URL", REGISTRY_URL));
+        var tags = manager.registryTags();
         var pattern = Pattern.compile("(" + VERSION + ")" + Pattern.quote(suffix));
         var latest = "";
         for (var tag : tags) {
@@ -366,8 +336,8 @@ final class Installer {
         return 0;
     }
 
-    private void installNativeBinary(Path directory) throws IOException {
-        var executable = CommandRunner.env("PROXY_AGENT_INSTALLER_BINARY", "");
+    private void stageNativeBinary(Path directory, StagedFiles files) throws IOException {
+        var executable = Environment.get("PROXY_AGENT_INSTALLER_BINARY", "");
         if (executable.isEmpty() && "runtime".equals(System.getProperty("org.graalvm.nativeimage.imagecode"))) {
             executable = ProcessHandle.current().info().command().orElse("");
         }
@@ -375,18 +345,13 @@ final class Installer {
             return;
         }
         var source = Path.of(executable);
-        var target = directory.resolve(operations.isWindows() ? "manager.exe" : "manager");
+        var target = directory.resolve(operations.managerBinaryName());
         if (Files.exists(target) && (Files.isSameFile(source, target) || Files.mismatch(source, target) == -1)) {
             return;
         }
-        var temp = Files.createTempFile(directory, "manager.", ".tmp");
-        try {
-            Files.copy(source, temp, REPLACE_EXISTING);
-            operations.makeExecutable(temp);
-            Files.move(temp, target, ATOMIC_MOVE, REPLACE_EXISTING);
-        } finally {
-            Files.deleteIfExists(temp);
-        }
+        var temp = files.create(target);
+        Files.copy(source, temp, REPLACE_EXISTING);
+        operations.makeExecutable(temp);
     }
 
     /** Command-line paths and the optional Windows image override. */

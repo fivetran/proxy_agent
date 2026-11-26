@@ -1,71 +1,166 @@
 package com.fivetran.proxy_agent;
 
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.core.StreamReadFeature;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import org.jspecify.annotations.Nullable;
-import picocli.CommandLine;
 
-/** Command-line entry point for the host-side proxy agent manager. */
-@CommandLine.Command(name = "manager", exitCodeOnInvalidInput = 1)
-public final class Manager {
-    @CommandLine.Option(names = {"-h", "--help"}, usageHelp = true, description = "Show usage.")
-    private boolean help;
+/** Proxy agent operations shared by manager commands. */
+final class Manager {
+    private static final JsonFactory JSON = JsonFactory.builder()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .disable(StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION)
+            .build();
+    private static final String SCRIPT_ROOT = "https://raw.githubusercontent.com/fivetran/proxy_agent/main/";
+    private static final String REGISTRY_URL =
+            "https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list";
 
-    private Manager() {}
+    private final OsOperations operations;
+    private final Docker docker;
+    private final HttpClient http;
 
-    /** Runs the requested management command and returns its exit status to the caller. */
-    public static void main(String[] args) {
-        var commandLine = new CommandLine(new Manager());
-        commandLine.addSubcommand("install", new InstallArguments());
-        commandLine.setExpandAtFiles(false);
-        commandLine.setExecutionStrategy(Manager::execute);
-        System.exit(commandLine.execute(args));
+    Manager(OsOperations operations, Docker docker, HttpClient http) {
+        this.operations = operations;
+        this.docker = docker;
+        this.http = http;
     }
 
-    private static int execute(CommandLine.ParseResult result) {
-        var helpExitCode = CommandLine.executeHelpRequest(result);
-        if (helpExitCode != null) {
-            return helpExitCode;
-        }
-        var install = result.subcommand();
-        if (install == null) {
-            result.commandSpec().commandLine().usage(System.err);
-            return 1;
-        }
-        var arguments = (InstallArguments) install.commandSpec().userObject();
+    OsOperations operations() {
+        return operations;
+    }
+
+    Docker docker() {
+        return docker;
+    }
+
+    void downloadManagerScript(Path target) throws IOException {
+        var url = Environment.get("PROXY_AGENT_SCRIPT_URL", SCRIPT_ROOT + operations.managerScriptName());
         try {
-            var operations = Operations.forCurrentHost();
-            var proxy = ProxySettings.initialize(operations.isWindows());
-            var http = new HttpClient(proxy);
-            new Installer(operations, http).install(arguments.config, arguments.installDir, arguments.windowsVersion);
-            return 0;
-        } catch (IOException | IllegalArgumentException e) {
-            System.err.println("ERROR: " + e.getMessage());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            System.err.println("ERROR: Installation interrupted.");
+            http.download(url, target);
+        } catch (ProxySettings.ConfigurationException e) {
+            throw e;
+        } catch (IOException e) {
+            throw new IOException("Failed to download management script", e);
         }
-        return 1;
     }
 
-    /** Options and the optional configuration path accepted by the install subcommand. */
-    @CommandLine.Command(
-            name = "install",
-            description = "Install and start the Fivetran Proxy Agent.",
-            exitCodeOnInvalidInput = 1)
-    static final class InstallArguments {
-        @CommandLine.Option(names = {"-h", "--help"}, usageHelp = true, description = "Show usage.")
-        private boolean help;
-
-        @CommandLine.Option(names = "--install-dir", paramLabel = "DIR", description = "Installation directory.")
-        private @Nullable Path installDir;
-
-        @CommandLine.Option(names = "--windows-version", paramLabel = "LTSC",
-                description = "Windows container image variant.")
-        private String windowsVersion = "";
-
-        @CommandLine.Parameters(index = "0", arity = "0..1", paramLabel = "CONFIG",
-                description = "Configuration file. Use TOKEN to fetch one instead.")
-        private @Nullable Path config;
+    List<String> registryTags() throws IOException {
+        try {
+            var bytes = http.get(Environment.get("PROXY_AGENT_REGISTRY_TAGS_URL", REGISTRY_URL));
+            var tags = new ArrayList<String>();
+            try (var parser = JSON.createParser(bytes)) {
+                if (parser.nextToken() != JsonToken.START_OBJECT) {
+                    throw new IOException("Expected a registry response object");
+                }
+                for (var field = parser.nextFieldName(); field != null; field = parser.nextFieldName()) {
+                    if (parser.nextToken() == JsonToken.START_ARRAY && field.equals("tags")) {
+                        while (parser.nextToken() != JsonToken.END_ARRAY) {
+                            if (!parser.hasToken(JsonToken.VALUE_STRING)) {
+                                throw new IOException("Expected a registry tag");
+                            }
+                            tags.add(parser.getText());
+                        }
+                    } else {
+                        parser.skipChildren();
+                    }
+                }
+                if (!parser.hasToken(JsonToken.END_OBJECT) || parser.nextToken() != null) {
+                    throw new IOException("Invalid registry response");
+                }
+            }
+            return tags;
+        } catch (ProxySettings.ConfigurationException e) {
+            throw e;
+        } catch (IOException e) {
+            throw new IOException("Unable to query image registry for latest version", e);
+        }
     }
+
+    byte[] fetchConfiguration(String token) throws IOException {
+        if (token.indexOf('\r') >= 0 || token.indexOf('\n') >= 0) {
+            throw new IOException("Invalid TOKEN");
+        }
+        var api = Environment.get("FIVETRAN_API_URL", "https://api.fivetran.com").replaceAll("/+$", "");
+        HttpClient.Response response;
+        try {
+            response = http.post(api + "/proxy-agent/configure",
+                    Map.of("Authorization", "Basic " + token, "Accept", "application/json"));
+        } catch (ProxySettings.ConfigurationException e) {
+            throw e;
+        } catch (IOException e) {
+            throw new IOException("Failed to connect to configure endpoint", e);
+        }
+        if (response.status() == 401) {
+            throw new IOException("Authentication failed (HTTP 401). Ensure your TOKEN is valid.");
+        }
+        if (response.status() != 200) {
+            throw new IOException("Configure endpoint returned HTTP " + response.status());
+        }
+        ConfigFields fields;
+        try {
+            fields = readConfigFields(response.body());
+        } catch (IOException e) {
+            throw new IOException("Configure endpoint returned an invalid JSON response", e);
+        }
+        if (fields.agentId() == null || fields.agentId().isBlank()) {
+            throw new IOException("Configure endpoint response is missing a nonempty string agent_id");
+        }
+        return response.body();
+    }
+
+    /** Reads a saved WebSocket agent's credentials if the config needs to be migrated. */
+    static @Nullable String legacyCredential(byte[] contents) throws IOException {
+        ConfigFields fields;
+        try {
+            fields = readConfigFields(contents);
+        } catch (IOException e) {
+            throw new IOException("Config file does not contain a valid JSON object", e);
+        }
+        if (!fields.legacy()) {
+            return null;
+        }
+        if (fields.agentId() == null || fields.agentId().isEmpty()
+                || fields.authToken() == null || fields.authToken().isEmpty()) {
+            throw new IOException("Could not extract credentials from WebSocket config");
+        }
+        return fields.agentId() + ":" + fields.authToken();
+    }
+
+    private static ConfigFields readConfigFields(byte[] bytes) throws IOException {
+        String agentId = null;
+        String authToken = null;
+        var legacy = false;
+        try (var parser = JSON.createParser(bytes)) {
+            if (parser.nextToken() != JsonToken.START_OBJECT) {
+                throw new IOException("Expected a config object");
+            }
+            for (var field = parser.nextFieldName(); field != null; field = parser.nextFieldName()) {
+                var type = parser.nextToken();
+                switch (field) {
+                    case "agent_id" -> agentId = type == JsonToken.VALUE_STRING ? parser.getText() : null;
+                    case "auth_token" -> authToken = type == JsonToken.VALUE_STRING ? parser.getText() : null;
+                    case "proxy_server_uri" -> legacy = true;
+                    default -> {}
+                }
+                parser.skipChildren();
+            }
+            if (!parser.hasToken(JsonToken.END_OBJECT) || parser.nextToken() != null) {
+                throw new IOException("Invalid config object");
+            }
+        }
+        return new ConfigFields(agentId, authToken, legacy);
+    }
+
+    void startAgent(Path script) throws IOException, InterruptedException {
+        if (operations.start(script) != 0) {
+            throw new IOException("Installation complete, but agent failed to start.");
+        }
+    }
+
+    private record ConfigFields(@Nullable String agentId, @Nullable String authToken, boolean legacy) {}
 }

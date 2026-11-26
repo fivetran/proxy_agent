@@ -1,13 +1,15 @@
 {
   "reflection": [
     {
-      "type": "com.fivetran.proxy_agent.Manager",
-      "fields": [{"name": "help"}]
+      "type": "com.fivetran.proxy_agent.Application",
+      "fields": [{"name": "help"}, {"name": "spec"}]
     },
     {
-      "type": "com.fivetran.proxy_agent.Manager$InstallArguments",
+      "type": "com.fivetran.proxy_agent.InstallCommand",
+      "methods": [{"name": "<init>", "parameterTypes": []}],
       "fields": [
         {"name": "help"},
+        {"name": "application"},
         {"name": "installDir"},
         {"name": "windowsVersion"},
         {"name": "config"}
@@ -21,8 +23,5 @@
       "type": "sun.net.www.protocol.https.Handler",
       "methods": [{"name": "<init>", "parameterTypes": []}]
     }
-  ],
-  "resources": [
-    {"glob": "com/fivetran/proxy_agent/windows-installer.ps1"}
   ]
 }
