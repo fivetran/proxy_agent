@@ -26,8 +26,6 @@ interface Operations {
 
     String legacyCredential(Path path, String config) throws IOException, InterruptedException;
 
-    InstallerHttp installerHttp() throws IOException;
-
     default void validateFetchedConfig(byte[] config) throws IOException, InterruptedException {}
 
     Path createProtectedConfig(Path directory) throws IOException, InterruptedException;

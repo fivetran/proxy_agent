@@ -35,7 +35,13 @@ final class Installer {
     private static final Set<String> WINDOWS_VERSIONS = Set.of("ltsc2019", "ltsc2022", "ltsc2025");
 
     private final InstallHost host = new InstallHost();
-    private final Operations operations = Operations.forCurrentHost();
+    private final Operations operations;
+    private final AgentHttpClient http;
+
+    Installer(Operations operations, AgentHttpClient http) {
+        this.operations = operations;
+        this.http = http;
+    }
 
     void install(@Nullable Path configPath, @Nullable Path installDir, String windowsVersionOverride)
             throws IOException, InterruptedException {
@@ -49,7 +55,6 @@ final class Installer {
         System.out.println("Installing Fivetran Proxy Agent...\n");
         var windowsVersion = checkPrerequisites(options, memoryMb);
 
-        var http = operations.installerHttp();
         var directory = options.directory();
         if (Files.isDirectory(directory)) {
             System.out.println(directory + " already exists, will re-use it.");
@@ -58,9 +63,9 @@ final class Installer {
         Files.createDirectories(directory.resolve("logs"));
         var managerName = operations.isWindows() ? "proxy-agent-manager.ps1" : "proxy-agent-manager.sh";
         var manager = directory.resolve(managerName);
-        installManager(http, manager);
+        installManager(manager);
         writeSettings(directory, options.windowsVersion(), memoryMb);
-        installConfig(http, configDirectory, config);
+        installConfig(configDirectory, config);
 
         var suffix = windowsVersion.isEmpty() ? UBUNTU_TAG_SUFFIX : "-windows-" + windowsVersion;
         System.out.println("Resolving latest proxy agent version...");
@@ -69,7 +74,7 @@ final class Installer {
         } else if (operations.isWindows()) {
             System.out.println("Using Linux container image");
         }
-        var version = getLatestVersion(http, suffix);
+        var version = getLatestVersion(suffix);
         Files.writeString(directory.resolve("version"), version + "\n");
         System.out.println("Using version " + version);
         installNativeBinary(directory);
@@ -259,7 +264,7 @@ final class Installer {
         }
     }
 
-    private void installManager(InstallerHttp http, Path manager) throws IOException, InterruptedException {
+    private void installManager(Path manager) throws IOException {
         System.out.println("Downloading management script...");
         var temp = Files.createTempFile(manager.getParent(), manager.getFileName() + ".", ".tmp");
         try {
@@ -307,7 +312,7 @@ final class Installer {
         Files.writeString(directory.resolve("settings.ps1"), settings);
     }
 
-    private void installConfig(InstallerHttp http, Path directory, Config config) throws IOException, InterruptedException {
+    private void installConfig(Path directory, Config config) throws IOException, InterruptedException {
         var contents = config.contents();
         var shouldFetch = contents == null;
         if (contents == null) {
@@ -329,7 +334,7 @@ final class Installer {
         }
     }
 
-    private String getLatestVersion(InstallerHttp http, String suffix) throws IOException, InterruptedException {
+    private String getLatestVersion(String suffix) throws IOException {
         var tags = http.registryTags(InstallHost.env("PROXY_AGENT_REGISTRY_TAGS_URL", REGISTRY_URL));
         var pattern = Pattern.compile("(" + VERSION + ")" + Pattern.quote(suffix));
         var latest = "";

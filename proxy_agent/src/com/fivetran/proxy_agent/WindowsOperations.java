@@ -18,11 +18,6 @@ final class WindowsOperations implements Operations {
     private final String powerShell = InstallHost.env("PROXY_AGENT_INSTALLER_POWERSHELL", "powershell.exe");
 
     @Override
-    public InstallerHttp installerHttp() {
-        return new InstallerHttp(InstallerProxy.forWindows());
-    }
-
-    @Override
     public boolean isWindows() {
         return true;
     }

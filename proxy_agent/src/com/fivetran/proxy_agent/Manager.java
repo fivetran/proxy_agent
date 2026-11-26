@@ -52,7 +52,10 @@ public final class Manager {
             return 1;
         }
         try {
-            new Installer().install(
+            var operations = Operations.forCurrentHost();
+            var proxy = ProxySettings.initialize(operations.isWindows());
+            var http = new AgentHttpClient(proxy);
+            new Installer(operations, http).install(
                     install.matchedPositionalValue(0, null),
                     install.matchedOptionValue(INSTALL_DIR, null),
                     install.matchedOptionValue(WINDOWS_VERSION, ""));

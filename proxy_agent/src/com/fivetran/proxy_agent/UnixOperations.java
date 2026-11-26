@@ -98,11 +98,6 @@ final class UnixOperations implements Operations {
     }
 
     @Override
-    public InstallerHttp installerHttp() {
-        return new InstallerHttp(InstallerProxy.forUnix());
-    }
-
-    @Override
     public Path createProtectedConfig(Path directory) throws IOException {
         return Files.createTempFile(directory, "config.", ".tmp",
                 PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));

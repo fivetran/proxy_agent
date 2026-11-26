@@ -14,8 +14,8 @@ import java.util.Locale;
 import java.util.stream.Stream;
 import org.jspecify.annotations.Nullable;
 
-/** Translates installer environment settings into JDK proxy properties. */
-final class InstallerProxy {
+/** Applies the manager environment settings to JDK proxy properties. */
+final class ProxySettings {
     private static final String SOCKS_HOST = "socksProxyHost";
     private static final String SOCKS_PORT = "socksProxyPort";
     private static final String SOCKS_VERSION = "socksProxyVersion";
@@ -27,7 +27,7 @@ final class InstallerProxy {
     private final boolean environmentProxy;
     private final @Nullable Authenticator defaultAuthenticator = Authenticator.getDefault();
 
-    private InstallerProxy(String http, String https, String exclusions) {
+    private ProxySettings(String http, String https, String exclusions) {
         var explicitJdkProxy = Stream.of("http.proxyHost", "https.proxyHost", SOCKS_HOST)
                 .anyMatch(property -> !System.getProperty(property, "").isEmpty());
         this.http = explicitJdkProxy ? "" : http;
@@ -52,20 +52,24 @@ final class InstallerProxy {
         }
     }
 
-    /** Sets separate HTTP and HTTPS routes using the installer environment variables. */
-    static InstallerProxy forUnix() {
+    /** Initializes proxy settings once before executing a manager command. */
+    static ProxySettings initialize(boolean windows) {
+        return windows ? forWindows() : forUnix();
+    }
+
+    private static ProxySettings forUnix() {
         var all = env("all_proxy", env("ALL_PROXY", ""));
-        return new InstallerProxy(env("http_proxy", all), env("https_proxy", env("HTTPS_PROXY", all)),
+        return new ProxySettings(env("http_proxy", all), env("https_proxy", env("HTTPS_PROXY", all)),
                 env("no_proxy", env("NO_PROXY", "")));
     }
 
     /** Uses Windows proxy discovery unless an explicit route is provided. */
-    static InstallerProxy forWindows() {
+    private static ProxySettings forWindows() {
         if (System.getProperty(SYSTEM_PROXIES) == null) {
             System.setProperty(SYSTEM_PROXIES, "true");
         }
         var proxy = env("HTTPS_PROXY", env("HTTP_PROXY", ""));
-        return new InstallerProxy(proxy, proxy, env("NO_PROXY", ""));
+        return new ProxySettings(proxy, proxy, env("NO_PROXY", ""));
     }
 
     private static void disableIntegratedAuth(String property) {
@@ -78,7 +82,7 @@ final class InstallerProxy {
         var protocol = uri.getScheme().toLowerCase(Locale.ROOT);
         var address = protocol.equals("https") ? https : http;
         if (environmentProxy) {
-            // Each installer request is completed before opening the next one. SOCKS properties are JVM-wide.
+            // Each manager request is completed before opening the next one. SOCKS properties are JVM-wide.
             System.clearProperty(SOCKS_HOST);
             Authenticator.setDefault(defaultAuthenticator);
         }
@@ -161,7 +165,7 @@ final class InstallerProxy {
 
     private record ProxyAddress(String scheme, String host, int port, @Nullable String userInfo) {}
 
-    /** A sanitized proxy setting error that can be displayed to the installer user. */
+    /** A sanitized proxy setting error that can be displayed by the manager. */
     static final class ConfigurationException extends IOException {
         private ConfigurationException(String message) {
             super(message);
