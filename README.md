@@ -161,7 +161,12 @@ Run `update-manager` as the user who installed the agent:
 
 Use your installation directory if it differs from the default. This downloads the latest management script from this repository's `main` branch, checks that it is nonempty and has valid syntax, then replaces the installed script. A failed download or validation leaves the existing script intact. Configuration, settings, the pinned agent version, and the running container are unchanged; the new script takes effect on the next command. Updating the manager does not require Docker or valid agent configuration.
 
-`upgrade` updates only the agent container. To update both, run `update-manager` first, then invoke the script again with `upgrade`.
+`upgrade` updates only the agent container. An installation with a native
+manager can run `manager update-manager` to download the platform binary,
+verify its SHA-256, and install the accompanying script from the latest manager
+release. On Windows, an update invoked from the installed executable completes
+after that process exits and reports success or failure in
+`logs/manager-update.log`.
 
 #### Older installations without `update-manager`
 

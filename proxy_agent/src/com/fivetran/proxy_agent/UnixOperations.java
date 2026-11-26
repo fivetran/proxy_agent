@@ -42,6 +42,23 @@ final class UnixOperations implements OsOperations {
     }
 
     @Override
+    public String managerReleaseAsset() throws IOException {
+        if (isMac) {
+            throw new IOException("A manager download URL and SHA-256 digest are required on macOS.");
+        }
+        return switch (System.getProperty("os.arch")) {
+            case "amd64", "x86_64" -> "manager-linux-x64";
+            case "aarch64", "arm64" -> "manager-linux-aarch64";
+            default -> throw new IOException("No native manager is available for this host architecture.");
+        };
+    }
+
+    @Override
+    public boolean validManagerScript(Path script) throws IOException, InterruptedException {
+        return commands.capture("bash", "-n", script.toString()).succeeded();
+    }
+
+    @Override
     public long reservedMemoryMb() {
         return 1024;
     }
