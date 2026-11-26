@@ -2,8 +2,10 @@
 
 The Java host CLI implements `manager install`. Installation checks
 prerequisites, prepares the installation directory, configures the agent, and
-pins the compatible image version. It installs and invokes the existing
-platform manager for `start`. The platform scripts delegate supported commands to the installed executable.
+pins the compatible image version, and starts the agent through the native
+manager. The installer places a small forwarding script beside the binary for
+callers that use the old path. It passes all arguments through and returns the
+native command's exit status.
 
 The native executable also implements these manager commands.
 
@@ -13,7 +15,9 @@ The native executable also implements these manager commands.
 - `start`
 - `restart`
 - `upgrade`
-- `doctor` (pass diagnostic options after `--` when invoking the binary directly)
+- `doctor`
+- `update-manager`
+
 It validates configuration fetched from Fivetran and stages replacements before
 changing the files in an existing installation.
 
@@ -107,6 +111,15 @@ Rerun the failed workflow to retry publishing the same commit, or run
 commit on `main`. Verify the initial release URLs before switching the public
 installers to the native manager.
 
+Release assets include the forwarding scripts for transitional versions of
+`update-manager` that download both files. Current versions download the
+verified binary and use its bundled template to migrate an installed script.
+The full manager scripts at the repository root remain available to
+script-only customers updating from `main`.
+
+## Testing
+
+Run the Java manager unit tests with `bazel test //proxy_agent:tests`.
 Installer unit tests use a Bazel-built test JAR with controlled host probes and
 local HTTP fixtures. Bootstrap tests exercise download and checksum handling
 under Bash, Windows PowerShell 5.1, and PowerShell 7. CI exercises the native

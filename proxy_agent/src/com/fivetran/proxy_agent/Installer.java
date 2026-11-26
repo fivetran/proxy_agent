@@ -1,7 +1,6 @@
 package com.fivetran.proxy_agent;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 
 import com.sun.management.OperatingSystemMXBean;
@@ -9,18 +8,15 @@ import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
 
-/** Installs the proxy agent and delegates the first start to the legacy manager. */
+/** Installs the proxy agent and starts it through the native manager. */
 final class Installer {
     private static final int DEFAULT_MEMORY_MB = 5120;
     private static final int MIN_CPU_COUNT = 4;
@@ -64,10 +60,6 @@ final class Installer {
         Files.createDirectories(directory.resolve("logs"));
         var script = directory.resolve(operations.managerScriptName());
         try (var files = new StagedFiles()) {
-            System.out.println("Downloading management script...");
-            var stagedScript = files.create(script);
-            manager.downloadManagerScript(stagedScript);
-            operations.makeExecutable(stagedScript);
             var contents = configContents(config);
 
             var suffix = windowsVersion.isEmpty() ? UBUNTU_TAG_SUFFIX : "-windows-" + windowsVersion;
@@ -83,6 +75,9 @@ final class Installer {
             Files.writeString(files.create(directory.resolve(settings.fileName())), settings.contents());
             Files.writeString(files.create(directory.resolve("version")), version + "\n");
             stageNativeBinary(directory, files);
+            var stagedScript = files.create(script);
+            Files.write(stagedScript, ManagerWrapper.contents(operations.managerScriptName()));
+            operations.makeExecutable(stagedScript);
             var destination = configDirectory.resolve("config.json");
             var stagedConfig = operations.createProtectedConfig(configDirectory);
             files.add(stagedConfig, destination);
@@ -95,8 +90,9 @@ final class Installer {
             }
             System.out.println("Using version " + version);
         }
-        recordManagerHash(script);
-        manager.startAgent(script);
+        if (manager.start(directory) != 0) {
+            throw new IOException("Installation complete, but agent failed to start.");
+        }
         System.out.println("\nInstallation complete.");
         System.out.println("Install directory: " + directory);
     }
@@ -271,32 +267,6 @@ final class Installer {
             for (var message : messages) {
                 System.out.println("  - " + message);
             }
-        }
-    }
-
-    private static void recordManagerHash(Path manager) {
-        // A baseline is also understood by legacy managers that support automatic updates.
-        var state = manager.getParent().resolve(".manager-auto-update");
-        try {
-            Files.createDirectories(state);
-            var tempState = Files.createTempFile(state, "download.", ".tmp");
-            try {
-                Files.writeString(tempState, sha256(Files.readAllBytes(manager)) + "\n");
-                Files.move(tempState, state.resolve("download"), ATOMIC_MOVE, REPLACE_EXISTING);
-            } finally {
-                Files.deleteIfExists(tempState);
-            }
-        } catch (IOException e) {
-            // Existing script installers treat unavailable update metadata as best effort.
-            System.err.println("WARNING: Could not record the installed manager hash.");
-        }
-    }
-
-    private static String sha256(byte[] bytes) {
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 is unavailable", e);
         }
     }
 

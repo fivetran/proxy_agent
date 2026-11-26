@@ -79,6 +79,7 @@ def installer_environment(repo, root, env, *, windows):
     return {
         **env,
         'PROXY_AGENT_MANAGER_BIN': str(launcher),
+        'AGENT_TEST_DOCKER_BIN': str(launch_dir / 'docker.exe') if windows else 'docker',
         'PATH': str(launch_dir) + os.pathsep + env['PATH'],
     }
 

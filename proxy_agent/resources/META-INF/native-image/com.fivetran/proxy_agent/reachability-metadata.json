@@ -61,5 +61,8 @@
       "type": "sun.net.www.protocol.https.Handler",
       "methods": [{"name": "<init>", "parameterTypes": []}]
     }
+  ],
+  "resources": [
+    {"glob": "com/fivetran/proxy_agent/compat/**"}
   ]
 }

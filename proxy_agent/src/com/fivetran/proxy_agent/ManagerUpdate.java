@@ -6,7 +6,6 @@ import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonToken;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.DigestOutputStream;
@@ -16,7 +15,7 @@ import java.util.HexFormat;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
-/** Stages a verified native manager and its matching compatibility script. */
+/** Stages a verified native manager and migrates an installed legacy script when needed. */
 final class ManagerUpdate {
     private static final String RELEASE = "https://github.com/fivetran/proxy_agent/releases/download/";
     private static final String LATEST_RELEASE = "https://api.github.com/repos/fivetran/proxy_agent/releases/latest";
@@ -31,7 +30,7 @@ final class ManagerUpdate {
         this.http = http;
     }
 
-    int run(Path directory, String binaryUrl, String digest, String scriptUrl) throws IOException, InterruptedException {
+    int run(Path directory, String binaryUrl, String digest) throws IOException {
         if (binaryUrl.isEmpty() != digest.isEmpty()) {
             throw new IOException("Native manager download requires a URL and its SHA-256 digest.");
         }
@@ -47,19 +46,13 @@ final class ManagerUpdate {
         var deferred = false;
         try {
             var binary = staging.resolve(operations.managerBinaryName());
-            var script = staging.resolve(operations.managerScriptName());
             System.out.println("Downloading native manager...");
             http.download(binaryUrl, binary);
             if (!digest.equalsIgnoreCase(digest(binary))) {
                 throw new IOException("Native manager SHA-256 does not match.");
             }
             operations.makeExecutable(binary);
-            System.out.println("Downloading management script...");
-            http.download(scriptUrl.isEmpty() ? companionScript(binaryUrl) : scriptUrl, script);
-            if (Files.size(script) == 0 || !operations.validManagerScript(script)) {
-                throw new IOException("Downloaded management script is empty or has invalid syntax.");
-            }
-            operations.makeExecutable(script);
+            ManagerWrapper.stageMigration(operations, directory, staging);
             deferred = operations.publishManagerUpdate(directory, staging);
             System.out.println((deferred ? "Native manager update scheduled for process exit." : "Native manager updated.")
                     + " SHA-256 " + digest.toLowerCase(Locale.ROOT) + ".");
@@ -92,14 +85,6 @@ final class ManagerUpdate {
             throw new IOException("Invalid latest manager release response.", e);
         }
         throw new IOException("The latest release does not have a manager release tag.");
-    }
-
-    private String companionScript(String binaryUrl) throws IOException {
-        try {
-            return URI.create(binaryUrl).resolve(operations.managerScriptName()).toString();
-        } catch (IllegalArgumentException e) {
-            throw new IOException("Invalid native manager download URL.");
-        }
     }
 
     private static String digest(Path file) throws IOException {

@@ -53,11 +53,6 @@ class UnixOperations implements OsOperations {
     }
 
     @Override
-    public boolean validManagerScript(Path script) throws IOException, InterruptedException {
-        return commands.capture("bash", "-n", script.toString()).succeeded();
-    }
-
-    @Override
     public long reservedMemoryMb() {
         return 1024;
     }
@@ -156,8 +151,4 @@ class UnixOperations implements OsOperations {
         Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rwx------"));
     }
 
-    @Override
-    public int start(Path manager) throws IOException, InterruptedException {
-        return commands.run(manager.getParent(), List.of(manager.toString(), "start"));
-    }
 }

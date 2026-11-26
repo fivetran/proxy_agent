@@ -52,16 +52,6 @@ class WindowsOperations implements OsOperations {
     }
 
     @Override
-    public boolean validManagerScript(Path script) throws IOException, InterruptedException {
-        return runPowerShell("""
-                if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $argument -Raw))) { exit 1 }
-                $parseErrors = $null
-                $null = [System.Management.Automation.Language.Parser]::ParseFile($argument, [ref]$null, [ref]$parseErrors)
-                if ($parseErrors.Count -gt 0) { exit 1 }
-                """, script.toString()).succeeded();
-    }
-
-    @Override
     public boolean publishManagerUpdate(Path directory, Path staging) throws IOException {
         var binary = directory.resolve(managerBinaryName());
         var current = ProcessHandle.current();
@@ -80,6 +70,7 @@ class WindowsOperations implements OsOperations {
                     if ($manager) { Wait-Process -InputObject $manager -Timeout 60 }
                     foreach ($name in @('manager.exe', 'proxy-agent-manager.ps1')) {
                         $source = Join-Path $stage $name
+                        if (-not [IO.File]::Exists($source)) { continue }
                         $destination = Join-Path $target $name
                         if ([IO.File]::Exists($destination)) {
                             [IO.File]::Replace($source, $destination, [NullString]::Value)
@@ -250,11 +241,6 @@ class WindowsOperations implements OsOperations {
     @Override
     public void makeExecutable(Path path) {
         // Executable permissions on Windows are managed by the file ACL.
-    }
-
-    @Override
-    public int start(Path manager) throws IOException, InterruptedException {
-        return commands.run(manager.getParent(), List.of(powerShell, "-NoProfile", "-File", manager.toString(), "start"));
     }
 
     CommandRunner.Result runPowerShell(String command, String argument)

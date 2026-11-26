@@ -21,7 +21,6 @@ import org.junit.jupiter.api.io.TempDir;
 /** Exercises downloaded binary verification and script validation against a local release. */
 public final class UpdateManagerTest {
     private static final byte[] MANAGER = "verified native manager".getBytes(UTF_8);
-    private static final String SCRIPT = "# new manager script\n";
 
     @TempDir
     Path temporary;
@@ -43,40 +42,47 @@ public final class UpdateManagerTest {
 
     @Test
     public void updatesTheBinaryAndScriptTogetherAfterVerification() throws Exception {
-        assertThat(run(SCRIPT, hash()), is(0));
+        assertThat(run(hash()), is(0));
         assertThat(Files.readAllBytes(manager), is(MANAGER));
-        assertThat(Files.readString(wrapper), is(SCRIPT));
+        assertThat(Files.readAllBytes(wrapper), is(ManagerWrapper.contents(operations.managerScriptName())));
+        var before = Files.getLastModifiedTime(wrapper);
+        assertThat(run(hash()), is(0));
+        assertThat(Files.getLastModifiedTime(wrapper), is(before));
         assertStagingCleaned();
     }
 
     @Test
     public void preservesBothFilesWhenTheChecksumDoesNotMatch() throws Exception {
-        var failure = assertThrows(IOException.class, () -> run(SCRIPT, "0".repeat(64)));
+        var failure = assertThrows(IOException.class, () -> run("0".repeat(64)));
         assertThat(failure.getMessage(), containsString("SHA-256 does not match"));
         assertOriginalFiles();
     }
 
     @Test
-    public void preservesBothFilesWhenTheScriptHasInvalidSyntax() throws Exception {
-        var failure = assertThrows(IOException.class, () -> run("if (", hash()));
-        assertThat(failure.getMessage(), containsString("invalid syntax"));
-        assertOriginalFiles();
+    public void leavesAWrapperFreeInstallationWithoutAScript() throws Exception {
+        Files.delete(wrapper);
+        assertThat(run(hash()), is(0));
+        assertThat(Files.readAllBytes(manager), is(MANAGER));
+        assertThat(Files.exists(wrapper), is(false));
     }
 
-    private int run(String script, String digest) throws Exception {
+    private int run(String digest) throws Exception {
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", request -> {
             try (request) {
-                var body = request.getRequestURI().getPath().equals("/manager") ? MANAGER : script.getBytes(UTF_8);
-                request.sendResponseHeaders(200, body.length);
-                request.getResponseBody().write(body);
+                if (!request.getRequestURI().getPath().equals("/manager")) {
+                    request.sendResponseHeaders(404, -1);
+                    return;
+                }
+                request.sendResponseHeaders(200, MANAGER.length);
+                request.getResponseBody().write(MANAGER);
             }
         });
         server.start();
         try {
             var url = "http://127.0.0.1:" + server.getAddress().getPort();
-            var client = new HttpClient();
-            return new ManagerUpdate(operations, client).run(directory, url + "/manager", digest, url + "/script");
+            var client = new HttpClient(operations.proxySettings());
+            return new ManagerUpdate(operations, client).run(directory, url + "/manager", digest);
         } finally {
             server.stop(0);
         }

@@ -27,7 +27,6 @@ final class Manager {
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .disable(StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION)
             .build();
-    private static final String SCRIPT_ROOT = "https://raw.githubusercontent.com/fivetran/proxy_agent/main/";
     private static final String IMAGE =
             "us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent";
     private static final String LINUX_SUFFIX = "-ubuntu-26.04";
@@ -66,12 +65,11 @@ final class Manager {
         return docker;
     }
 
-    /** Downloads the native release and the corresponding platform script. */
-    int updateManager(Path directory) throws IOException, InterruptedException {
+    /** Downloads and verifies a native manager update. */
+    int updateManager(Path directory) throws IOException {
         return new ManagerUpdate(operations, http).run(directory,
-                SystemEnvironment.get("PROXY_AGENT_MANAGER_BINARY_URL", ""),
-                SystemEnvironment.get("PROXY_AGENT_MANAGER_BINARY_SHA256", ""),
-                SystemEnvironment.get("PROXY_AGENT_SCRIPT_URL", ""));
+                Environment.get("PROXY_AGENT_MANAGER_BINARY_URL", ""),
+                Environment.get("PROXY_AGENT_MANAGER_BINARY_SHA256", ""));
     }
 
     /** Prints the Docker status table for the installed agent. */
@@ -110,7 +108,7 @@ final class Manager {
     int upgrade(Path directory) throws IOException, InterruptedException {
         var agent = agentContainer(directory);
         System.out.println("Checking for latest version...");
-        var registryUrl = SystemEnvironment.get("PROXY_AGENT_REGISTRY_TAGS_URL", "");
+        var registryUrl = Environment.get("PROXY_AGENT_REGISTRY_TAGS_URL", "");
         if (registryUrl.isEmpty()) {
             var registry = agent.repository().split("/", 2);
             if (registry.length != 2) {
@@ -219,7 +217,7 @@ final class Manager {
         if (windows && variant == null) {
             variant = settings.windowsVersion().isEmpty() ? operations.windowsImageVariant() : settings.windowsVersion();
         }
-        return new AgentContainer(agentId, release.group(1), SystemEnvironment.get("PROXY_AGENT_IMAGE", IMAGE),
+        return new AgentContainer(agentId, release.group(1), Environment.get("PROXY_AGENT_IMAGE", IMAGE),
                 windows ? "-windows-" + variant : LINUX_SUFFIX, memory, windows ? ContainerOs.WINDOWS : ContainerOs.LINUX);
     }
 
@@ -396,22 +394,13 @@ final class Manager {
         return version;
     }
 
-    void downloadManagerScript(Path target) throws IOException {
-        var url = SystemEnvironment.get("PROXY_AGENT_SCRIPT_URL", SCRIPT_ROOT + operations.managerScriptName());
-        try {
-            http.download(url, target);
-        } catch (IOException e) {
-            throw new IOException("Failed to download management script", e);
-        }
-    }
-
     List<String> registryTags() throws IOException {
         return registryTags(REGISTRY_URL);
     }
 
     private List<String> registryTags(String url) throws IOException {
         try {
-            var bytes = http.get(SystemEnvironment.get("PROXY_AGENT_REGISTRY_TAGS_URL", url));
+            var bytes = http.get(Environment.get("PROXY_AGENT_REGISTRY_TAGS_URL", url));
             var tags = new ArrayList<String>();
             try (var parser = JSON.createParser(bytes)) {
                 if (parser.nextToken() != JsonToken.START_OBJECT) {
@@ -434,6 +423,8 @@ final class Manager {
                 }
             }
             return tags;
+        } catch (ProxySettings.ConfigurationException e) {
+            throw e;
         } catch (IOException e) {
             throw new IOException("Unable to query image registry for latest version", e);
         }
@@ -459,11 +450,13 @@ final class Manager {
         if (token.indexOf('\r') >= 0 || token.indexOf('\n') >= 0) {
             throw new IOException("Invalid TOKEN");
         }
-        var api = SystemEnvironment.get("FIVETRAN_API_URL", "https://api.fivetran.com").replaceAll("/+$", "");
+        var api = Environment.get("FIVETRAN_API_URL", "https://api.fivetran.com").replaceAll("/+$", "");
         HttpClient.Response response;
         try {
             response = http.post(api + "/proxy-agent/configure",
                     Map.of("Authorization", "Basic " + token, "Accept", "application/json"));
+        } catch (ProxySettings.ConfigurationException e) {
+            throw e;
         } catch (IOException e) {
             throw new IOException("Failed to connect to configure endpoint", e);
         }
@@ -526,12 +519,6 @@ final class Manager {
             }
         }
         return new ConfigFields(agentId, authToken, legacy);
-    }
-
-    void startAgent(Path script) throws IOException, InterruptedException {
-        if (operations.start(script) != 0) {
-            throw new IOException("Installation complete, but agent failed to start.");
-        }
     }
 
     private record ConfigFields(@Nullable String agentId, @Nullable String authToken, boolean legacy) {}
