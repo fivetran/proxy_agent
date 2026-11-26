@@ -8,6 +8,14 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Git Bash would otherwise rewrite Bazel's //package:target arguments.
+  MSYS2_ARG_CONV_EXCL: '//'
+
 # A new push to a pull request cancels its previous run, which otherwise keeps
 # two Windows runners busy for up to 45 minutes. Runs on main are never
 # cancelled so every merged commit gets a full result.
@@ -44,14 +52,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Run PSScriptAnalyzer
-        shell: pwsh
         run: |
-          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
-            Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
-          }
-          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
-          $results | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
-          if ($results) { exit 1 }
+          pwsh -NoProfile -NonInteractive -Command 'if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) { Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop }'
+          pwsh -NoProfile -NonInteractive -Command 'Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1 -EnableExit -ErrorAction Stop'
 
   native-manager:
     name: Native manager (${{ matrix.platform }})
@@ -73,9 +76,6 @@ jobs:
             sha256: 1f534c46337f838880553c47f973a3d769b4058036288afcec930e2abddf06a1
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
-    defaults:
-      run:
-        shell: pwsh
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Build the manager JAR
@@ -84,23 +84,28 @@ jobs:
         env:
           GRAALVM_ARCHIVE: graalvm-community-jdk-25i6-25.0.5.1_${{ matrix.platform }}_bin.${{ matrix.extension }}
           GRAALVM_SHA256: ${{ matrix.sha256 }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
-          $tools = New-Item -ItemType Directory (Join-Path $env:RUNNER_TEMP 'graalvm')
-          $archive = Join-Path $tools.FullName $env:GRAALVM_ARCHIVE
-          Invoke-WebRequest "https://github.com/graalvm/graalvm-ce-builds/releases/download/graal-25.6.5.1/$env:GRAALVM_ARCHIVE" -OutFile $archive
-          if ((Get-FileHash $archive).Hash -ne $env:GRAALVM_SHA256) {
-            throw 'GraalVM archive SHA-256 does not match.'
-          }
-          tar -xf $archive -C $tools.FullName
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $graalvm = Get-ChildItem $tools.FullName -Directory | Select-Object -First 1
-          $compiler = if ($IsWindows) { 'bin/native-image.cmd' } else { 'bin/native-image' }
-          $null = New-Item -ItemType Directory dist
-          $binary = "dist/manager-${{ matrix.platform }}"
-          & (Join-Path $graalvm.FullName $compiler) -Ob -jar bazel-bin/proxy_agent/manager_deploy.jar $binary
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ($IsWindows) { $binary += '.exe' }
-          (Get-FileHash $binary).Hash.ToLowerInvariant() | Set-Content "$binary.sha256" -Encoding ascii
+          tools=$(mktemp -d)
+          trap 'rm -rf "$tools"' EXIT
+          archive="$tools/$GRAALVM_ARCHIVE"
+          curl -fsSL "https://github.com/graalvm/graalvm-ce-builds/releases/download/graal-25.6.5.1/$GRAALVM_ARCHIVE" -o "$archive"
+          printf '%s  %s\n' "$GRAALVM_SHA256" "$archive" | sha256sum --check
+
+          compiler=native-image
+          extension=
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            "$WINDIR/System32/tar.exe" -xf "$(cygpath -w "$archive")" -C "$(cygpath -w "$tools")"
+            compiler=native-image.cmd
+            extension=.exe
+          else
+            tar -xf "$archive" -C "$tools"
+          fi
+          compilers=("$tools"/*/bin/"$compiler")
+          mkdir -p dist
+          binary="dist/manager-$PLATFORM"
+          "${compilers[0]}" -Ob -jar bazel-bin/proxy_agent/manager_deploy.jar "$binary"
+          sha256sum "$binary$extension" | cut -d ' ' -f 1 > "$binary$extension.sha256"
       - name: Check native installer failure handling
         if: matrix.platform == 'linux-x64'
         run: python3 tests/check_native_install.py dist/manager-linux-x64
@@ -171,10 +176,6 @@ jobs:
         shell: [powershell, pwsh]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
-    defaults:
-      run:
-        # Python launches the selected PowerShell executable for each script.
-        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-python@v7.1.0
@@ -183,20 +184,15 @@ jobs:
       - run: python -m pip install -r tests/requirements.txt
       - name: Wait for the Docker daemon
         # The Docker service is not always running when a Windows job starts.
-        shell: powershell
         run: |
-          # The default 'Stop' preference would turn docker's stderr into a
-          # terminating error on the first failed attempt.
-          $ErrorActionPreference = 'Continue'
-          $service = Get-Service docker -ErrorAction SilentlyContinue
-          if ($service -and $service.Status -ne 'Running') { Start-Service docker }
-          foreach ($attempt in 1..30) {
-            docker info *> $null
-            if ($LASTEXITCODE -eq 0) { exit 0 }
-            Start-Sleep -Seconds 2
-          }
+          if ! docker info >/dev/null 2>&1; then
+            sc.exe start docker || true
+          fi
+          for _ in {1..30}; do
+            if docker info >/dev/null 2>&1; then exit 0; fi
+            sleep 2
+          done
           docker info
-          exit 1
       - name: Run integration test
         run: python -m pytest -v -m integration
         env:
