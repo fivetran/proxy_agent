@@ -5,10 +5,18 @@ prerequisites, prepares the installation directory, configures the agent, and
 pins the compatible image version. It installs and invokes the existing
 platform manager for `start`. The legacy manager handles the other commands.
 
-The Java sources live under `src/com/fivetran/proxy_agent`. The Windows
-adapter in `resources` uses the host's PowerShell for integrated proxy
-credentials, CIM queries, and config ACLs. Linux installation uses curl and
-Docker.
+The Java sources live under `src/com/fivetran/proxy_agent`. The installer
+uses shared Java code for installation and delegates host operations to
+`UnixOperations` or `WindowsOperations`. macOS uses `UnixOperations` for
+engineering tests.
+
+On Unix, the native installer uses the JDK HTTP APIs. Set `http_proxy` for
+HTTP, `https_proxy` or `HTTPS_PROXY` for HTTPS, and `all_proxy` or
+`ALL_PROXY` as a fallback. The proxy URL uses `http://` and may include
+credentials. Set `no_proxy` or `NO_PROXY` to a comma-separated list of
+hosts or domain suffixes. On Windows, Java invokes PowerShell to preserve
+system proxy settings and integrated authentication, query CIM, and set
+config ACLs.
 
 ## Build
 
