@@ -9,15 +9,14 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import org.junit.Before;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /** Exercises the production command line with controlled host dependencies. */
 public final class ManagerCommandTest {
-    @Rule
-    public final TemporaryFolder temporary = new TemporaryFolder();
+    @TempDir
+    Path temporary;
 
     private final CommandRunner commands = new CommandRunner(Set.of());
     private final TestDocker docker = new TestDocker(commands);
@@ -25,9 +24,9 @@ public final class ManagerCommandTest {
     private Path config;
     private Path version;
 
-    @Before
+    @BeforeEach
     public void createInstallation() throws Exception {
-        directory = temporary.newFolder("proxy agent").toPath();
+        directory = Files.createDirectory(temporary.resolve("proxy agent"));
         config = Files.createDirectories(directory.resolve("config")).resolve("config.json");
         Files.writeString(config, "{\"agent_id\":\"abc123\"}");
         version = directory.resolve("version");
