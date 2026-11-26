@@ -1,8 +1,10 @@
 package com.fivetran.proxy_agent;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -55,6 +57,26 @@ public final class ManagerCommandTest {
         assertThat(docker.calls, is(List.of(List.of("logs", "-f", "proxy-agent-abc123"))));
     }
 
+    @Test
+    public void stopRemovesAnExistingContainer() throws Exception {
+        docker.running = true;
+        assertThat(invoke("stop"), is(0));
+        assertThat(docker.operations(), is(List.of("inspect", "stop", "rm")));
+        assertThat(docker.running, is(false));
+        var log = Files.readString(directory.resolve("logs/proxy-agent-manager.log"));
+        assertThat(log, containsString("Stopping proxy-agent-abc123"));
+        assertThat(log, containsString("Stopped proxy-agent-abc123"));
+    }
+
+    @Test
+    public void stopSucceedsWhenTheContainerIsAlreadyAbsent() throws Exception {
+        assertThat(invoke("stop"), is(0));
+        assertThat(docker.operations(), is(List.of("inspect")));
+        var log = Files.readString(directory.resolve("logs/proxy-agent-manager.log"));
+        assertThat(log, containsString("Stopping proxy-agent-abc123"));
+        assertThat(log, not(containsString("Stopped proxy-agent-abc123")));
+    }
+
     private int invoke(String... command) {
         var arguments = new ArrayList<>(List.of("--agent-dir", directory.toString()));
         arguments.addAll(List.of(command));
@@ -66,6 +88,7 @@ public final class ManagerCommandTest {
     private static final class TestDocker extends Docker {
         private final List<List<String>> calls = new ArrayList<>();
         private int status;
+        private boolean running;
 
         private TestDocker(CommandRunner commands) {
             super(commands);
@@ -77,9 +100,22 @@ public final class ManagerCommandTest {
             return status;
         }
 
+        private List<String> operations() {
+            return calls.stream().map(call -> call.get(0)).toList();
+        }
+
         @Override
         CommandRunner.Result capture(String... arguments) {
-            throw new AssertionError("Unexpected Docker probe " + List.of(arguments));
+            calls.add(List.of(arguments));
+            return switch (arguments[0]) {
+                case "inspect" -> new CommandRunner.Result(running ? 0 : 1, "");
+                case "stop" -> new CommandRunner.Result(0, "");
+                case "rm" -> {
+                    running = false;
+                    yield new CommandRunner.Result(0, "");
+                }
+                default -> throw new AssertionError("Unexpected Docker probe " + List.of(arguments));
+            };
         }
     }
 }
