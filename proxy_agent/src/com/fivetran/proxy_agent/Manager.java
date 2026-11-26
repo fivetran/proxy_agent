@@ -6,6 +6,10 @@ import com.fasterxml.jackson.core.StreamReadFeature;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +24,8 @@ final class Manager {
     private static final String SCRIPT_ROOT = "https://raw.githubusercontent.com/fivetran/proxy_agent/main/";
     private static final String REGISTRY_URL =
             "https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list";
+    private static final DateTimeFormatter LOG_TIMESTAMP =
+            DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss").withZone(ZoneOffset.UTC);
 
     private final OsOperations operations;
     private final Docker docker;
@@ -55,6 +61,39 @@ final class Manager {
     /** Streams Docker logs until the caller or Docker ends the session. */
     int logs(Path directory) throws IOException, InterruptedException {
         return docker.run(directory, "logs", "-f", containerName(directory));
+    }
+
+    /** Stops and removes the agent container if it exists. */
+    int stop(Path directory) throws IOException, InterruptedException {
+        var container = containerName(directory);
+        log(directory, "Stopping " + container + "...");
+        return stopContainer(directory, container);
+    }
+
+    private int stopContainer(Path directory, String container) throws IOException, InterruptedException {
+        if (!docker.capture("inspect", container).succeeded()) {
+            return 0;
+        }
+        var stop = docker.capture("stop", container);
+        if (!stop.succeeded()) {
+            System.err.println("ERROR: Failed to stop " + container + ".");
+            return stop.status();
+        }
+        var remove = docker.capture("rm", container);
+        if (!remove.succeeded()) {
+            System.err.println("ERROR: Failed to remove " + container + ".");
+            return remove.status();
+        }
+        log(directory, "Stopped " + container + ".");
+        return 0;
+    }
+
+    private static void log(Path directory, String message) throws IOException {
+        System.out.println(message);
+        var logs = Files.createDirectories(directory.resolve("logs"));
+        Files.writeString(logs.resolve("proxy-agent-manager.log"),
+                LOG_TIMESTAMP.format(Instant.now()) + " UTC - " + message + System.lineSeparator(),
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
     }
 
     private static String[] statusArguments(String container) {
