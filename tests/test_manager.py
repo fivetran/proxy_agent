@@ -96,11 +96,12 @@ class TestUpdateManager:
         assert not list(sandbox.agent.glob('.proxy-agent-manager.*'))
         url = f'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.{EXT}'
         if WINDOWS:
-            assert sandbox.calls('request') == [[url, '', '30']]
-            (request,) = sandbox.calls('Invoke-WebRequest')
+            assert sandbox.calls('request')[0] == [url, '', '30']
+            assert sandbox.calls('request')[-1][0].endswith('manager-windows-x64.exe.sha256')
+            request = sandbox.calls('Invoke-WebRequest')[0]
             assert '-UseBasicParsing' in request
         else:
-            (request,) = sandbox.calls('curl')
+            request = sandbox.calls('curl')[0]
             assert url in request
             assert request[request.index('--max-time') + 1] == '30'
             assert sandbox.manager.stat().st_mode & 0o100

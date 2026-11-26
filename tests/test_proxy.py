@@ -8,6 +8,7 @@ the source-consistency check runs everywhere.
 """
 
 import base64
+import hashlib
 import json
 import re
 import socket
@@ -48,7 +49,7 @@ def web_endpoints():
     """
     endpoints = SimpleNamespace(
         requests={'origin': [], 'proxy': []}, expected_auth=None, registry_body=None, script_body=None,
-        configure_status=200,
+        configure_status=200, manager_binary=None,
     )
     script_path = f'/proxy-agent-manager.{EXT}'
     configure_path = '/proxy-agent/configure'
@@ -63,7 +64,10 @@ def web_endpoints():
             """Serve fixtures while recording proxy and origin authentication headers."""
 
             def do_GET(self):
-                self.serve_response(responses)
+                fixtures = responses
+                if endpoints.manager_binary is not None:
+                    fixtures = {**responses, '/native-manager': ('application/octet-stream', endpoints.manager_binary)}
+                self.serve_response(fixtures)
 
             def do_POST(self):
                 self.serve_response({configure_path: ('application/json', json.dumps(endpoints.config).encode())},
@@ -181,6 +185,32 @@ class TestProxyContract:
 
         assert result.returncode == 0, result.stdout
         assert native_web_sandbox.manager.read_bytes() == source
+
+    @pytest.mark.parametrize('valid_digest', [True, False], ids=['verified', 'checksum-mismatch'])
+    def test_legacy_update_bootstraps_a_missing_native_manager(self, native_web_sandbox, web_endpoints, valid_digest):
+        sandbox = native_web_sandbox
+        payload = b'fixture manager executable'
+        web_endpoints.manager_binary = payload
+        sandbox.env.update(
+            NO_PROXY='*',
+            PROXY_AGENT_MANAGER_BINARY_URL=web_endpoints.origin_url + '/native-manager',
+            PROXY_AGENT_MANAGER_BINARY_SHA256=hashlib.sha256(payload).hexdigest() if valid_digest else '0' * 64,
+        )
+        original_config = sandbox.config.read_bytes()
+        original_version = sandbox.version.read_bytes()
+
+        result = sandbox.run('update-manager')
+
+        assert result.returncode == int(not valid_digest), result.stdout
+        binary = sandbox.agent / ('manager.exe' if WINDOWS else 'manager')
+        if valid_digest:
+            assert binary.read_bytes() == payload
+        else:
+            assert not binary.exists()
+        assert sandbox.config.read_bytes() == original_config
+        assert sandbox.version.read_bytes() == original_version
+        assert not sandbox.calls('docker')
+        assert not list(sandbox.agent.glob('.native-manager.*'))
 
     @pytest.mark.parametrize('credentials', [None, ('us@er', 'p:ss')], ids=['anonymous', 'basic-auth'])
     @pytest.mark.parametrize('no_proxy', ['', 'host', '*'], ids=['proxied', 'bypass-host', 'bypass-all'])
