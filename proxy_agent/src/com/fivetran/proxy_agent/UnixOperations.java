@@ -4,70 +4,29 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /** Host operations shared by Linux and macOS. */
-final class UnixOperations implements OsOperations {
-    private final CommandRunner commands;
+final class UnixOperations implements Operations {
+    private static final Pattern QUOTED_TAG = Pattern.compile("\"([0-9]+\\.[0-9]+\\.[0-9]+-[a-z0-9.-]+)\"");
+
+    private static final Pattern LINUX_MEMORY = Pattern.compile("(?m)^MemTotal:\\s+([0-9]+)");
+    private static final int BYTES_PER_MB = 1024 * 1024;
+
+    private final InstallHost host = new InstallHost();
+    private final InstallerHttp http = new InstallerHttp();
     private final boolean isMac = System.getProperty("os.name").startsWith("Mac");
 
-    UnixOperations(CommandRunner commands) {
-        this.commands = commands;
-    }
-
     @Override
-    public void configureProxy() {
-        var all = SystemEnvironment.get("all_proxy", SystemEnvironment.get("ALL_PROXY", ""));
-        ProxySettings.configure(SystemEnvironment.get("http_proxy", all),
-                SystemEnvironment.get("https_proxy", SystemEnvironment.get("HTTPS_PROXY", all)),
-                SystemEnvironment.get("no_proxy", SystemEnvironment.get("NO_PROXY", "")));
-    }
-
-    @Override
-    public Path defaultInstallDirectory() {
-        return Path.of(SystemEnvironment.get("HOME", System.getProperty("user.home")), "fivetran-proxy-agent");
-    }
-
-    @Override
-    public String managerScriptName() {
-        return "proxy-agent-manager.sh";
-    }
-
-    @Override
-    public String managerBinaryName() {
-        return "manager";
-    }
-
-    @Override
-    public long reservedMemoryMb() {
-        return 1024;
-    }
-
-    @Override
-    public Settings settings(int memoryMb, String windowsVersion) {
-        return new Settings("settings.sh", "MEMORY_ALLOCATION_MB=" + memoryMb + "\n");
-    }
-
-    @Override
-    public void checkWindowsVersionOverride(String version) {
-        if (!version.isEmpty()) {
-            throw new IllegalArgumentException("Invalid Windows version: " + version);
-        }
-    }
-
-    @Override
-    public String containerOs(List<String> errors) {
-        return "linux";
-    }
-
-    @Override
-    public boolean hasCommand(String name) throws IOException, InterruptedException {
-        return commands.capture("which", name).succeeded();
+    public boolean isWindows() {
+        return false;
     }
 
     @Override
     public void checkUser() throws IOException, InterruptedException {
-        var userId = commands.capture("id", "-u");
+        var userId = host.capture("id", "-u");
         if (!userId.succeeded()) {
             throw new IOException("Unable to determine the current user.");
         }
@@ -78,15 +37,15 @@ final class UnixOperations implements OsOperations {
 
     @Override
     public void checkAutoStart(List<String> warnings) throws IOException, InterruptedException {
-        if (isMac || !commands.capture("docker", "info", "--format", "{{.SecurityOptions}}").output().contains("rootless")) {
+        if (isMac || !host.docker("info", "--format", "{{.SecurityOptions}}").output().contains("rootless")) {
             return;
         }
-        if (!hasCommand("loginctl")) {
+        if (!host.hasCommand("loginctl", false)) {
             warnings.add("Rootless Docker detected but loginctl is not available. Ensure the agent starts on boot.");
             return;
         }
-        var user = SystemEnvironment.get("USER", System.getProperty("user.name"));
-        if (!commands.capture("loginctl", "show-user", user, "-p", "Linger", "--value").output().strip().equals("yes")) {
+        var user = InstallHost.env("USER", System.getProperty("user.name"));
+        if (!host.capture("loginctl", "show-user", user, "-p", "Linger", "--value").output().strip().equals("yes")) {
             warnings.add("Rootless Docker detected but user linger is not enabled. Run 'sudo loginctl enable-linger "
                     + user + "' to ensure the agent starts automatically on system boot.");
         }
@@ -108,8 +67,58 @@ final class UnixOperations implements OsOperations {
     }
 
     @Override
+    public long totalMemoryMb() throws IOException, InterruptedException {
+        if (isMac) {
+            var result = host.capture("sysctl", "-n", "hw.memsize");
+            return result.succeeded() ? InstallHost.parseSize(result.output().strip(), 0) / BYTES_PER_MB : 0;
+        }
+        var memInfo = Path.of("/proc/meminfo");
+        if (Files.isReadable(memInfo)) {
+            var matcher = LINUX_MEMORY.matcher(Files.readString(memInfo));
+            if (matcher.find()) {
+                return InstallHost.parseSize(matcher.group(1), 0) / 1024;
+            }
+        }
+        return 0;
+    }
+
+    @Override
     public String windowsImageVariant() {
         throw new UnsupportedOperationException("Windows containers require a Windows host");
+    }
+
+    @Override
+    public String legacyCredential(Path path, String config) throws IOException {
+        return readConfigString(config, "agent_id") + ":" + readConfigString(config, "auth_token");
+    }
+
+    // Match the credential format accepted by the legacy Unix installer.
+    private static String readConfigString(String config, String key) throws IOException {
+        var matcher = Pattern.compile("\"" + key + "\"\\s*:\\s*\"([^\"]+)\"").matcher(config);
+        if (!matcher.find()) {
+            throw new IOException("Could not extract credentials from WebSocket config");
+        }
+        return matcher.group(1);
+    }
+
+    @Override
+    public void download(String url, Path target) throws IOException, InterruptedException {
+        http.download(url, target);
+    }
+
+    @Override
+    public List<String> getTags(String url) throws IOException, InterruptedException {
+        var tags = new ArrayList<String>();
+        var matcher = QUOTED_TAG.matcher(http.registryTags(url));
+        while (matcher.find()) {
+            tags.add(matcher.group(1));
+        }
+        return tags;
+    }
+
+    @Override
+    public byte[] configure(String url, String token) throws IOException, InterruptedException {
+        return http.configure(url, token);
     }
 
     @Override
@@ -124,7 +133,7 @@ final class UnixOperations implements OsOperations {
     }
 
     @Override
-    public int start(Path manager) throws IOException, InterruptedException {
-        return commands.run(manager.getParent(), List.of(manager.toString(), "start"));
+    public void start(Path manager) throws IOException, InterruptedException {
+        host.start(manager, List.of(manager.toString(), "start"));
     }
 }
