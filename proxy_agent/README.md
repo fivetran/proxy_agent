@@ -13,6 +13,7 @@ The native executable also implements these manager commands.
 - `start`
 - `restart`
 - `upgrade`
+- `doctor` (pass diagnostic options after `--` when invoking the binary directly)
 It validates configuration fetched from Fivetran and stages replacements before
 changing the files in an existing installation.
 

@@ -49,6 +49,11 @@
       "methods": [{"name": "<init>", "parameterTypes": []}]
     },
     {
+      "type": "com.fivetran.proxy_agent.DoctorCommand",
+      "methods": [{"name": "<init>", "parameterTypes": []}],
+      "fields": [{"name": "arguments"}]
+    },
+    {
       "type": "sun.net.www.protocol.http.Handler",
       "methods": [{"name": "<init>", "parameterTypes": []}]
     },

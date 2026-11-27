@@ -16,7 +16,9 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.jspecify.annotations.Nullable;
 
 /** Proxy agent operations shared by manager commands. */
@@ -43,6 +45,8 @@ final class Manager {
             "https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list";
     private static final DateTimeFormatter LOG_TIMESTAMP =
             DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss").withZone(ZoneOffset.UTC);
+    private static final DateTimeFormatter REPORT_TIMESTAMP =
+            DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH-mm-ss").withZone(ZoneOffset.UTC);
 
     private final OsOperations operations;
     private final Docker docker;
@@ -148,6 +152,37 @@ final class Manager {
         }
         log(directory, "Rollback to " + current + " failed.");
         return 1;
+    }
+
+    /** Runs the pinned image in a throwaway diagnostics container and preserves its output. */
+    int doctor(Path directory, List<String> options) throws IOException, InterruptedException {
+        var agent = agentContainer(directory);
+        var arguments = new ArrayList<>(List.of("run", "--rm", "--workdir", agent.logDirectory()));
+        arguments.addAll(agent.runArguments(directory));
+        arguments.addAll(List.of(agent.imageTag(agent.version()), agent.configPath(), "--doctor"));
+        arguments.addAll(options);
+
+        var logs = directory.resolve("logs");
+        var earlierReports = doctorReports(logs);
+        var timestamp = REPORT_TIMESTAMP.format(Instant.now());
+        var report = Files.createTempFile(logs, "proxy-agent-manager-doctor-" + timestamp + "-", ".log");
+        var status = docker.runAndRecord(directory, report, arguments);
+        if (earlierReports.containsAll(doctorReports(logs))) {
+            System.out.println("The doctor's output was saved to " + report);
+        } else {
+            Files.delete(report);
+            System.out.println(agent.logDirectory() + " in the container is " + logs + " on this host.");
+        }
+        return status;
+    }
+
+    private static Set<Path> doctorReports(Path directory) throws IOException {
+        try (var entries = Files.list(directory)) {
+            return entries.filter(path -> {
+                var name = path.getFileName().toString();
+                return name.startsWith("doctor-") && name.endsWith(".log");
+            }).collect(Collectors.toSet());
+        }
     }
 
     private AgentContainer agentContainer(Path directory) throws IOException, InterruptedException {
