@@ -66,12 +66,11 @@ final class Manager {
         return docker;
     }
 
-    /** Downloads the native release and the corresponding platform script. */
-    int updateManager(Path directory) throws IOException, InterruptedException {
+    /** Downloads the native release. */
+    int updateManager(Path directory) throws IOException {
         return new ManagerUpdate(operations, http).run(directory,
                 SystemEnvironment.get("PROXY_AGENT_MANAGER_BINARY_URL", ""),
-                SystemEnvironment.get("PROXY_AGENT_MANAGER_BINARY_SHA256", ""),
-                SystemEnvironment.get("PROXY_AGENT_SCRIPT_URL", ""));
+                SystemEnvironment.get("PROXY_AGENT_MANAGER_BINARY_SHA256", ""));
     }
 
     /** Prints the Docker status table for the installed agent. */

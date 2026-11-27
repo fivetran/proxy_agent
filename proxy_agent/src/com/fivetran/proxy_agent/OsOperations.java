@@ -29,13 +29,10 @@ interface OsOperations {
     String managerReleaseAsset() throws IOException;
 
     /** Checks the platform script's syntax without running it. */
-    boolean validManagerScript(Path script) throws IOException, InterruptedException;
-
     /** Publishes the staged update and reports whether a helper owns the staging directory. */
     default boolean publishManagerUpdate(Path directory, Path staging) throws IOException {
-        for (var file : List.of(managerBinaryName(), managerScriptName())) {
-            Files.move(staging.resolve(file), directory.resolve(file), ATOMIC_MOVE, REPLACE_EXISTING);
-        }
+        var file = managerBinaryName();
+        Files.move(staging.resolve(file), directory.resolve(file), ATOMIC_MOVE, REPLACE_EXISTING);
         return false;
     }
 

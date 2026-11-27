@@ -6,8 +6,8 @@ import java.util.concurrent.Callable;
 import org.jspecify.annotations.Nullable;
 import picocli.CommandLine;
 
-/** Updates the native manager and platform script without restarting Docker. */
-@CommandLine.Command(name = "update-manager", description = "Update the native manager and platform script.",
+/** Updates the native manager without restarting Docker. */
+@CommandLine.Command(name = "update-manager", description = "Update the native manager.",
         exitCodeOnInvalidInput = 1)
 final class UpdateManagerCommand implements Callable<Integer> {
     @CommandLine.ParentCommand
@@ -23,9 +23,6 @@ final class UpdateManagerCommand implements Callable<Integer> {
             return app.manager().updateManager(app.agentDirectory());
         } catch (IOException | IllegalArgumentException e) {
             System.err.println("ERROR: " + e.getMessage());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            System.err.println("ERROR: Update interrupted.");
         }
         return 1;
     }

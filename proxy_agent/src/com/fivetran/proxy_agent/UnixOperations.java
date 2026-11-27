@@ -53,11 +53,6 @@ class UnixOperations implements OsOperations {
     }
 
     @Override
-    public boolean validManagerScript(Path script) throws IOException, InterruptedException {
-        return commands.capture("bash", "-n", script.toString()).succeeded();
-    }
-
-    @Override
     public long reservedMemoryMb() {
         return 1024;
     }

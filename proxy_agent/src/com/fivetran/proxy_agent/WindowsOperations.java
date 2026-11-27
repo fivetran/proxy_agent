@@ -52,16 +52,6 @@ class WindowsOperations implements OsOperations {
     }
 
     @Override
-    public boolean validManagerScript(Path script) throws IOException, InterruptedException {
-        return runPowerShell("""
-                if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $argument -Raw))) { exit 1 }
-                $parseErrors = $null
-                $null = [System.Management.Automation.Language.Parser]::ParseFile($argument, [ref]$null, [ref]$parseErrors)
-                if ($parseErrors.Count -gt 0) { exit 1 }
-                """, script.toString()).succeeded();
-    }
-
-    @Override
     public boolean publishManagerUpdate(Path directory, Path staging) throws IOException {
         var binary = directory.resolve(managerBinaryName());
         var current = ProcessHandle.current();
@@ -78,14 +68,12 @@ class WindowsOperations implements OsOperations {
                 try {
                     $manager = Get-Process -Id $env:PROXY_AGENT_UPDATE_PID -ErrorAction SilentlyContinue
                     if ($manager) { Wait-Process -InputObject $manager -Timeout 60 }
-                    foreach ($name in @('manager.exe', 'proxy-agent-manager.ps1')) {
-                        $source = Join-Path $stage $name
-                        $destination = Join-Path $target $name
-                        if ([IO.File]::Exists($destination)) {
-                            [IO.File]::Replace($source, $destination, [NullString]::Value)
-                        } else {
-                            [IO.File]::Move($source, $destination)
-                        }
+                    $source = Join-Path $stage 'manager.exe'
+                    $destination = Join-Path $target 'manager.exe'
+                    if ([IO.File]::Exists($destination)) {
+                        [IO.File]::Replace($source, $destination, [NullString]::Value)
+                    } else {
+                        [IO.File]::Move($source, $destination)
                     }
                     Write-Output 'Native manager updated.'
                 } catch {
