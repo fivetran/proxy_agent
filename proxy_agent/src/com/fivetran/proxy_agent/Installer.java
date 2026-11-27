@@ -4,7 +4,9 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 
+import com.sun.management.OperatingSystemMXBean;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -210,7 +212,7 @@ final class Installer {
         return true;
     }
 
-    private void checkResources(int memoryMb, List<String> warnings) throws IOException, InterruptedException {
+    private void checkResources(int memoryMb, List<String> warnings) throws IOException {
         var cpus = operations.cpuCount();
         if (cpus > 0 && cpus < MIN_CPU_COUNT) {
             warnings.add("CPU count (" + cpus + ") is below the recommended minimum of " + MIN_CPU_COUNT);
@@ -219,7 +221,10 @@ final class Installer {
             warnings.add("Configured container memory (" + memoryMb + "MB) is below the recommended minimum of "
                     + DEFAULT_MEMORY_MB + "MB");
         }
-        var totalMb = operations.totalMemoryMb();
+        var system = ManagementFactory.getOperatingSystemMXBean();
+        var totalMb = system instanceof OperatingSystemMXBean memory
+                ? Math.max(0, memory.getTotalMemorySize()) / (1024 * 1024)
+                : 0;
         var reservedMb = operations.reservedMemoryMb();
         if (totalMb == 0) {
             warnings.add("Unable to determine available memory");

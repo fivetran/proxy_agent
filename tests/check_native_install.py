@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 from threading import Thread
 
 
-def check_reinstall(manager, config, tags_status=200, missing_binary=False):
+def check_reinstall(manager, config, tags_status=200, missing_binary=False, check_memory=False):
     class Endpoints(BaseHTTPRequestHandler):
         def do_POST(self):
             assert self.path == "/proxy-agent/configure"
@@ -58,7 +58,7 @@ def check_reinstall(manager, config, tags_status=200, missing_binary=False):
             PATH=f"{root}{os.pathsep}{os.environ['PATH']}",
             RUNTIME="docker",
             TOKEN="fixture-token",
-            MEMORY_ALLOCATION_MB="5120",
+            MEMORY_ALLOCATION_MB="2147483647" if check_memory else "5120",
             FIVETRAN_API_URL=base,
             PROXY_AGENT_SCRIPT_URL=f"{base}/manager",
             PROXY_AGENT_REGISTRY_TAGS_URL=f"{base}/tags",
@@ -80,6 +80,8 @@ def check_reinstall(manager, config, tags_status=200, missing_binary=False):
 
         assert result.returncode == 1, (result.stdout, result.stderr)
         assert env["TOKEN"] not in result.stdout + result.stderr
+        if check_memory:
+            assert "leaves less than" in result.stdout and "(total RAM:" in result.stdout, result.stdout
         for name, contents in existing.items():
             assert (install_dir / name).read_bytes() == contents, name
         assert not (install_dir / "started").exists()
@@ -97,7 +99,7 @@ if __name__ == "__main__":
         assert "nonempty string agent_id" in invalid_id, invalid_id
 
     config = b'{"agent_id":"new"}'
-    registry_failure = check_reinstall(manager, config, tags_status=503)
+    registry_failure = check_reinstall(manager, config, tags_status=503, check_memory=True)
     assert "Unable to query image registry" in registry_failure, registry_failure
     copy_failure = check_reinstall(manager, config, missing_binary=True)
     assert "missing-manager" in copy_failure, copy_failure
