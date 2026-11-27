@@ -5,13 +5,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.List;
-import java.util.regex.Pattern;
 
 /** Host operations shared by Linux and macOS. */
 class UnixOperations implements OsOperations {
-    private static final Pattern LINUX_MEMORY = Pattern.compile("(?m)^MemTotal:\\s+([0-9]+)");
-    private static final int BYTES_PER_MB = 1024 * 1024;
-
     private final CommandRunner commands;
     private final Docker docker;
     private final boolean isMac = System.getProperty("os.name").startsWith("Mac");
@@ -142,30 +138,6 @@ class UnixOperations implements OsOperations {
             }
         }
         return count;
-    }
-
-    @Override
-    public long totalMemoryMb() throws IOException, InterruptedException {
-        if (isMac) {
-            var result = commands.capture("sysctl", "-n", "hw.memsize");
-            return result.succeeded() ? parseMemory(result.output().strip()) / BYTES_PER_MB : 0;
-        }
-        var memInfo = Path.of("/proc/meminfo");
-        if (Files.isReadable(memInfo)) {
-            var matcher = LINUX_MEMORY.matcher(Files.readString(memInfo));
-            if (matcher.find()) {
-                return parseMemory(matcher.group(1)) / 1024;
-            }
-        }
-        return 0;
-    }
-
-    private static long parseMemory(String value) {
-        try {
-            return Long.parseLong(value);
-        } catch (NumberFormatException e) {
-            return 0;
-        }
     }
 
     @Override
