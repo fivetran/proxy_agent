@@ -21,6 +21,8 @@ discovery, including Internet Options and PAC.
 
 Plain `http://` proxy URLs work with HTTP and HTTPS destinations.
 `socks://`, `socks4://`, and `socks5://` use the JDK SOCKS settings.
+SOCKS routes in the same manager process share one protocol version.
+Use the same credentials if both routes use the same SOCKS host and port.
 HTTP and SOCKS5 proxy URLs can contain credentials. A Windows HTTP proxy
 without explicit credentials can use the signed-in identity through the
 JDK. An HTTP proxy URL with explicit credentials uses Java's Basic or
