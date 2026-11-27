@@ -20,14 +20,20 @@ public final class Application implements Callable<Integer> {
     private Application() {
         var commands = new CommandRunner(Set.of("TOKEN"));
         var operations = OsOperations.forCurrentHost(commands);
+        operations.configureProxy();
         this.manager = new Manager(operations, commands, new HttpClient());
     }
 
     /** Runs the requested management command and returns its exit status to the caller. */
     public static void main(String[] args) {
-        var commandLine = new CommandLine(new Application());
-        commandLine.setExpandAtFiles(false);
-        System.exit(commandLine.execute(args));
+        try {
+            var commandLine = new CommandLine(new Application());
+            commandLine.setExpandAtFiles(false);
+            System.exit(commandLine.execute(args));
+        } catch (ProxySettings.ConfigurationException e) {
+            System.err.println("ERROR: " + e.getMessage());
+            System.exit(1);
+        }
     }
 
     @Override
