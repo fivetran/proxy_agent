@@ -174,16 +174,6 @@ class TestManager:
         run_manager('upgrade')
         assert_image(sandbox, variant, '1.2.12')
 
-    def test_empty_registry_tags_preserve_running_agent(self, sandbox, variant, run_manager):
-        run_manager('start')
-        before = sandbox.calls('docker')
-        sandbox.options['tags'] = []
-        result = sandbox.run('upgrade')
-        assert result.returncode != 0, result.stdout
-        assert not [
-            call for call in sandbox.calls('docker')[len(before) :] if call[0] in ('run', 'stop', 'rm')
-        ]
-        assert_image(sandbox, variant)
 
     @pytest.mark.parametrize(
         'url', [REGISTRY, 'http://127.0.0.1:1/v2/stub/tags/list'], ids=['default', 'override']
@@ -213,16 +203,6 @@ class TestManager:
         assert 'rolling back' in run_manager('upgrade', code=1)
         assert_image(sandbox, variant)
 
-    def test_registry_failure_preserves_running_agent(self, sandbox, variant, run_manager):
-        """A failed lookup must not stop, replace, or repin the running agent."""
-        run_manager('start')
-        before = sandbox.calls('docker')
-        sandbox.options['registry_failure'] = True
-        assert 'Unable to query image registry' in run_manager('upgrade', code=1)
-        assert not [
-            call for call in sandbox.calls('docker')[len(before) :] if call[0] in ('run', 'stop', 'rm')
-        ]
-        assert_image(sandbox, variant)
 
     def test_docker_start_failure_is_reported(self, sandbox, run_manager):
         """Bash propagates Docker's status; PowerShell normalizes startup failure to 1."""

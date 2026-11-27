@@ -567,11 +567,6 @@ function Invoke-NativeManager {
 }
 
 switch ($Command) {
-    'stop' {
-        . $loadAgent
-        Write-Log "Stopping $CONTAINER_NAME..."
-        Stop-ProxyAgent
-    }
     'start' {
         . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
