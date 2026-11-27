@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,7 +21,7 @@ env:
 # two Windows runners busy for up to 45 minutes. Runs on main are never
 # cancelled so every merged commit gets a full result.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -93,13 +94,9 @@ jobs:
           binary="dist/manager-$MANAGER_PLATFORM"
           "$compiler" -Ob -jar bazel-bin/proxy_agent/manager_deploy.jar "$binary"
           sha256sum "$binary$extension" | cut -d ' ' -f 1 > "$binary$extension.sha256"
-      - name: Check native CLI usage
-        env:
-          MANAGER_PLATFORM: ${{ matrix.platform }}
-        run: |
-          manager="./dist/manager-$MANAGER_PLATFORM"
-          if [[ "$RUNNER_OS" == Windows ]]; then manager+=.exe; fi
-          "$manager" --help
+      - name: Check native installer failure handling
+        if: matrix.platform == 'linux-x64'
+        run: python3 tests/check_native_install.py dist/manager-linux-x64
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: manager-${{ matrix.platform }}
@@ -188,3 +185,29 @@ jobs:
         run: python -m pytest -v -m integration
         env:
           PROXY_AGENT_TEST_SHELL: ${{ matrix.shell }}
+
+  release-manager:
+    name: Publish native manager
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: [dependency-audit, shellcheck, psscriptanalyzer, native-manager, unit, integration-linux, integration-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-native-manager
+      queue: max
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          pattern: manager-*
+          path: dist
+          merge-multiple: true
+      - name: Publish the tested commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/publish_manager.sh

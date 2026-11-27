@@ -32,6 +32,9 @@ For more information see the [Proxy Agent documentation](https://fivetran.com/do
 
 ## Installation
 
+See the [native manager build guide](proxy_agent/README.md) to build and try the
+Java installer directly.
+
 ### Linux
 
 Run the following as a non-root user:

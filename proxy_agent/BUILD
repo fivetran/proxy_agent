@@ -6,6 +6,7 @@ java_library(
     resource_strip_prefix = "proxy_agent/resources",
     resources = glob(["resources/**"]),
     deps = [
+        "@jackson_core//jar",
         "@jspecify//jar",
         "@picocli//jar",
     ],
