@@ -136,7 +136,7 @@ final class Manager {
         if (windows && variant == null) {
             variant = settings.windowsVersion().isEmpty() ? operations.windowsImageVariant() : settings.windowsVersion();
         }
-        return new AgentContainer(agentId, release.group(1), Environment.get("PROXY_AGENT_IMAGE", IMAGE),
+        return new AgentContainer(agentId, release.group(1), SystemEnvironment.get("PROXY_AGENT_IMAGE", IMAGE),
                 windows ? "-windows-" + variant : LINUX_SUFFIX, memory, windows ? ContainerOs.WINDOWS : ContainerOs.LINUX);
     }
 

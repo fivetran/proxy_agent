@@ -75,7 +75,7 @@ class UnixOperations implements OsOperations {
     public ContainerSettings containerSettings(Path directory) throws IOException, InterruptedException {
         var path = directory.resolve("settings.sh");
         if (!Files.isRegularFile(path)) {
-            return new ContainerSettings(Environment.get("MEMORY_ALLOCATION_MB", "5120"), "");
+            return new ContainerSettings(SystemEnvironment.get("MEMORY_ALLOCATION_MB", "5120"), "");
         }
         var result = commands.capture("bash", "-e", "-c",
                 "source \"$1\" >/dev/null; printf '%s\\n' \"${MEMORY_ALLOCATION_MB:-5120}\"", "manager", path.toString());
