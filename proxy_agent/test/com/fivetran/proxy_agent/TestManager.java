@@ -9,10 +9,9 @@ import java.util.Set;
 public final class TestManager {
     public static void main(String[] args) {
         var commands = new CommandRunner(Set.of("TOKEN"));
-        var docker = new Docker(commands);
-        var operations = OsOperations.forCurrentHost(commands, docker);
+        var operations = OsOperations.forCurrentHost(commands);
         if (operations instanceof WindowsOperations) {
-            operations = new WindowsOperations(commands, docker) {
+            operations = new WindowsOperations(commands) {
                 @Override
                 CommandRunner.Result runPowerShell(String command, String argument)
                         throws IOException, InterruptedException {
@@ -27,7 +26,8 @@ public final class TestManager {
                 }
             };
         }
-        var manager = new Manager(operations, docker, new HttpClient(operations.proxySettings()));
+        operations.configureProxy();
+        var manager = new Manager(operations, commands, new HttpClient());
         System.exit(new Application(manager, TestManager::diskSpace).execute(args));
     }
 

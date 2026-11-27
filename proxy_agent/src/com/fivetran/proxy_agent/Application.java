@@ -26,9 +26,15 @@ public final class Application implements Callable<Integer> {
     /** Runs the requested management command and returns its exit status to the caller. */
     public static void main(String[] args) {
         var commands = new CommandRunner(Set.of("TOKEN"));
-        var docker = new Docker(commands);
-        var operations = OsOperations.forCurrentHost(commands, docker);
-        var manager = new Manager(operations, docker, new HttpClient(operations.proxySettings()));
+        var operations = OsOperations.forCurrentHost(commands);
+        try {
+            operations.configureProxy();
+        } catch (ProxySettings.ConfigurationException e) {
+            System.err.println("ERROR: " + e.getMessage());
+            System.exit(1);
+            return;
+        }
+        var manager = new Manager(operations, commands, new HttpClient());
         System.exit(new Application(manager, Installer.DiskSpace::fileStore).execute(args));
     }
 
