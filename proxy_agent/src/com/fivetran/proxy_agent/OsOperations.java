@@ -46,8 +46,6 @@ interface OsOperations {
 
     int cpuCount() throws IOException;
 
-    long totalMemoryMb() throws IOException, InterruptedException;
-
     String windowsImageVariant() throws IOException, InterruptedException;
 
     Path createProtectedConfig(Path directory) throws IOException, InterruptedException;
