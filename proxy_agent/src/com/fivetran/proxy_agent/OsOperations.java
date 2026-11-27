@@ -8,12 +8,12 @@ import org.jspecify.annotations.Nullable;
 
 /** Host operations used by the installer. */
 interface OsOperations {
-    static OsOperations forCurrentHost(CommandRunner commands, Docker docker) {
+    static OsOperations forCurrentHost(CommandRunner commands) {
         var os = System.getProperty("os.name").toLowerCase(Locale.ROOT);
-        return os.startsWith("windows") ? new WindowsOperations(commands, docker) : new UnixOperations(commands, docker);
+        return os.startsWith("windows") ? new WindowsOperations(commands) : new UnixOperations(commands);
     }
 
-    ProxySettings proxySettings();
+    void configureProxy();
 
     Path defaultInstallDirectory();
 
@@ -36,10 +36,6 @@ interface OsOperations {
     }
 
     default void warnMissingDiskTarget(@Nullable Path target, List<String> warnings) {}
-
-    default String diskLocation(Path target) {
-        return " ";
-    }
 
     /** Checks whether the named executable can be found on this host. */
     boolean hasCommand(String name) throws IOException, InterruptedException;

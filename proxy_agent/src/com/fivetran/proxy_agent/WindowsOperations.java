@@ -12,22 +12,22 @@ import org.jspecify.annotations.Nullable;
 /** Windows host operations using PowerShell for Windows system APIs. */
 final class WindowsOperations implements OsOperations {
     private final CommandRunner commands;
-    private final Docker docker;
-    private final String powerShell = Environment.get("PROXY_AGENT_INSTALLER_POWERSHELL", "powershell.exe");
+    private final String powerShell = SystemEnvironment.get("PROXY_AGENT_INSTALLER_POWERSHELL", "powershell.exe");
 
-    WindowsOperations(CommandRunner commands, Docker docker) {
+    WindowsOperations(CommandRunner commands) {
         this.commands = commands;
-        this.docker = docker;
     }
 
     @Override
-    public ProxySettings proxySettings() {
-        return ProxySettings.forWindows();
+    public void configureProxy() {
+        System.getProperties().putIfAbsent("java.net.useSystemProxies", "true");
+        var proxy = SystemEnvironment.get("HTTPS_PROXY", SystemEnvironment.get("HTTP_PROXY", ""));
+        ProxySettings.configure(proxy, proxy, SystemEnvironment.get("NO_PROXY", ""));
     }
 
     @Override
     public Path defaultInstallDirectory() {
-        return Path.of(Environment.get("USERPROFILE", System.getProperty("user.home")), "fivetran-proxy-agent");
+        return Path.of(SystemEnvironment.get("USERPROFILE", System.getProperty("user.home")), "fivetran-proxy-agent");
     }
 
     @Override
@@ -59,7 +59,7 @@ final class WindowsOperations implements OsOperations {
 
     @Override
     public String containerOs(List<String> errors) throws IOException, InterruptedException {
-        var result = docker.capture("info", "--format", "{{.OSType}}");
+        var result = commands.capture("docker", "info", "--format", "{{.OSType}}");
         var containerOs = result.output().strip();
         if (!result.succeeded() || !(containerOs.equals("linux") || containerOs.equals("windows"))) {
             errors.add("Unable to determine whether Docker is running Linux or Windows containers");
@@ -80,11 +80,6 @@ final class WindowsOperations implements OsOperations {
     @Override
     public void warnMissingDiskTarget(@Nullable Path target, List<String> warnings) {
         warnings.add("Unable to determine available disk space: directory " + target + " does not exist");
-    }
-
-    @Override
-    public String diskLocation(Path target) {
-        return " on drive " + target.getRoot().toString().substring(0, 2) + " ";
     }
 
     @Override
