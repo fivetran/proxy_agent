@@ -66,7 +66,7 @@ public final class UpdateManagerTest {
         server.start();
         try {
             var url = "http://127.0.0.1:" + server.getAddress().getPort();
-            var client = new HttpClient(operations.proxySettings());
+            var client = new HttpClient();
             return new ManagerUpdate(operations, client).run(directory, url + "/manager", digest);
         } finally {
             server.stop(0);
