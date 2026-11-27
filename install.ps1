@@ -1,10 +1,4 @@
 ﻿#Requires -Version 5.1
-#
-#  Installer for Fivetran Proxy Agent on Windows using Docker
-#
-#  For more information:
-#     https://github.com/fivetran/proxy_agent
-#
 param(
     [Parameter(Position = 0)]
     [string]$ConfigPath,
@@ -14,50 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ProgressPreference    = 'SilentlyContinue'
-if ($WindowsVersion) { $WindowsVersion = $WindowsVersion.ToLowerInvariant() }
-
-# ── Constants ────────────────────────────────────────────────────────────────
-
-$DEFAULT_INSTALL_DIR                    = Join-Path $env:USERPROFILE 'fivetran-proxy-agent'
-$MIN_DOCKER_VERSION                     = '20.10.17'
-$MIN_RECOMMENDED_CPU_COUNT              = 4
-$DEFAULT_CONTAINER_MEMORY_MB            = 5120  # default memory (5GB) allocated to the proxy agent container
-$MIN_RECOMMENDED_CONTAINER_MEMORY_MB    = 5120  # proxy agent container should get at least 5GB
-$HOST_RESERVED_MEMORY_MB                = 3072  # leave at least this much RAM for the host on Windows
-$MIN_RECOMMENDED_DISK_SPACE_MB          = 2048
-# Docker storage for Windows Server Core based images: about 7 GB unpacked, up to 3 GB while pulling, and up to 2 GB
-# for a new base image on upgrade. Sized from the 1.2.9 images (fivetran/engineering#330090); revisit when the image changes.
-$MIN_RECOMMENDED_WINDOWS_DISK_SPACE_MB  = 12288
-$AGENT_SCRIPT                           = 'proxy-agent-manager.ps1'
-# PROXY_AGENT_SCRIPT_URL and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
-# test suite can install the checked-out management script against a stub registry.
-$AGENT_SCRIPT_URL                       = if ($env:PROXY_AGENT_SCRIPT_URL) { $env:PROXY_AGENT_SCRIPT_URL } else { 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1' }
-$REGISTRY_TAGS_URL                      = if ($env:PROXY_AGENT_REGISTRY_TAGS_URL) { $env:PROXY_AGENT_REGISTRY_TAGS_URL } else { 'https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list' }
-$DEFAULT_FIVETRAN_API_URL               = 'https://api.fivetran.com'
-$SETTINGS_FILE                           = 'settings.ps1'
-
-$script:Warnings = [System.Collections.Generic.List[string]]::new()
-$script:Errors   = [System.Collections.Generic.List[string]]::new()
-
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
-function Show-Usage {
-    Write-Host @'
-Usage:
-  $env:RUNTIME='docker'; .\install.ps1 [<config.json>] [-InstallDir <dir>] [-WindowsVersion <ltsc2019|ltsc2022|ltsc2025>]
-  $env:TOKEN='<token>'; $env:RUNTIME='docker'; .\install.ps1 [-InstallDir <dir>] [-WindowsVersion <ltsc2019|ltsc2022|ltsc2025>]
-
-Options:
-  -InstallDir <dir>       Installation directory (default: %USERPROFILE%\fivetran-proxy-agent)
-  -WindowsVersion <value> Windows LTSC image variant for Windows containers; detected from the host when omitted
-
-Environment:
-  HTTPS_PROXY / HTTP_PROXY  Proxy URL for the installer's web requests (http://[user:pass@]host:port)
-  NO_PROXY                  Comma-separated hosts that bypass the proxy
-'@
-    exit 1
-}
+$ProgressPreference = 'SilentlyContinue'
 
 # Windows PowerShell 5.1 uses WebRequest.DefaultWebProxy; PowerShell 7 uses
 # HttpClient.DefaultProxy. Apply proxy settings to the one used by each version.
@@ -126,436 +77,78 @@ function Set-WebProxyFromEnvironment {
     Write-Host "Using proxy $proxyAddress from the environment"
 }
 
-# ── Validation ───────────────────────────────────────────────────────────────
-
-function Test-DockerVersion {
-    if (-not (Get-Command 'docker' -ErrorAction SilentlyContinue)) {
-        $script:Errors.Add("docker is not installed")
-        return
-    }
-
-    $versionOutput = docker --version 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $script:Errors.Add("Failed to execute 'docker --version'. Docker may not be functioning properly")
-        return
-    }
-
-    if ($versionOutput -match 'Docker version (\d+\.\d+\.\d+)') {
-        $version = $Matches[1]
-        if ([version]$version -lt [version]$MIN_DOCKER_VERSION) {
-            $script:Errors.Add("Docker version $version does not meet the minimum requirement of $MIN_DOCKER_VERSION")
-        }
-    } else {
-        $script:Warnings.Add("Unable to determine Docker version")
-    }
-
-    try { docker info 2>&1 | Out-Null } catch {}
-    if ($LASTEXITCODE -ne 0) {
-        $script:Errors.Add("Docker is installed but the Docker daemon is not accessible. Ensure that Docker Desktop is running and that your user has permission to access it.")
-    }
-}
-
-function Get-ContainerOsType {
-    $osTypeOutput = docker info --format '{{.OSType}}' 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        $script:Errors.Add("Unable to determine whether Docker is running Linux or Windows containers")
-        return $null
-    }
-
-    $osType = ([string]$osTypeOutput).Trim()
-    if ($osType -notin @('linux', 'windows')) {
-        $script:Errors.Add("Docker reported an unsupported container operating system: '$osType'")
-        return $null
-    }
-
-    return $osType
-}
-
-function Read-MemoryMB {
-    $mb = $env:MEMORY_ALLOCATION_MB
-    if (-not $mb) {
-        if (-not [Console]::IsInputRedirected) {
-            $response = Read-Host "How much memory (in MB) should the proxy agent container use? [$DEFAULT_CONTAINER_MEMORY_MB]"
-            $mb = if ($response) { $response } else { $DEFAULT_CONTAINER_MEMORY_MB }
-        } else {
-            $mb = $DEFAULT_CONTAINER_MEMORY_MB
-        }
-    }
-    if ($mb -notmatch '^\d+$' -or [int]$mb -lt 1) {
-        Write-Host "ERROR: Invalid memory amount: $mb (must be a positive integer, in MB)" -ForegroundColor Red
-        exit 1
-    }
-    return [int]$mb
-}
-
-function Test-Resources {
-    param([int]$MemoryMB)
-
-    $cpuCount = [Environment]::ProcessorCount
-    if ($cpuCount -gt 0 -and $cpuCount -lt $MIN_RECOMMENDED_CPU_COUNT) {
-        $script:Warnings.Add("CPU count ($cpuCount) is below the recommended minimum of $MIN_RECOMMENDED_CPU_COUNT")
-    }
-
-    if ($MemoryMB -lt $MIN_RECOMMENDED_CONTAINER_MEMORY_MB) {
-        $script:Warnings.Add("Configured container memory (${MemoryMB}MB) is below the recommended minimum of ${MIN_RECOMMENDED_CONTAINER_MEMORY_MB}MB")
-    }
-
-    try {
-        $cs         = Get-CimInstance Win32_ComputerSystem
-        $totalRamMB = [math]::Round($cs.TotalPhysicalMemory / 1MB)
-        $maxRecommendedMB = $totalRamMB - $HOST_RESERVED_MEMORY_MB
-        if ($MemoryMB -gt $maxRecommendedMB) {
-            $script:Warnings.Add("Configured container memory (${MemoryMB}MB) leaves less than ${HOST_RESERVED_MEMORY_MB}MB for the host (total RAM: ${totalRamMB}MB)")
-        }
-    } catch {
-        $script:Warnings.Add("Unable to determine available memory")
-    }
-}
-
-function Test-DiskSpace {
-    param([string]$Path, [int]$MinimumMB)
-    # Measure the path itself when it exists (for example, Docker's data root, which can be a drive root such as D:\).
-    # Fall back to the parent directory for an install directory that hasn't been created yet.
-    $targetDir = if (Test-Path -LiteralPath $Path) { $Path } else { Split-Path -LiteralPath $Path }
-    if (-not $targetDir -or -not (Test-Path -LiteralPath $targetDir)) {
-        $script:Warnings.Add("Unable to determine available disk space: directory $targetDir does not exist")
-        return
-    }
-
-    try {
-        $qualifier   = Split-Path -Qualifier $targetDir
-        $drive       = Get-PSDrive ($qualifier.TrimEnd(':'))
-        $freeSpaceMB = [math]::Round($drive.Free / 1MB)
-        if ($freeSpaceMB -lt $MinimumMB) {
-            $script:Warnings.Add("Available disk space on drive $qualifier (${freeSpaceMB}MB) is below the recommended minimum of ${MinimumMB}MB")
-        }
-    } catch {
-        $script:Warnings.Add("Unable to determine available disk space for $targetDir")
-    }
-}
-
-function Get-DockerRootDir {
-    $rootDirOutput = docker info --format '{{.DockerRootDir}}' 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        return $null
-    }
-
-    $rootDir = ([string]$rootDirOutput).Trim()
-    if (-not $rootDir) {
-        return $null
-    }
-
-    return $rootDir
-}
-
-function Show-WarningsAndErrors {
-    if ($script:Warnings.Count -gt 0) {
-        Write-Host "`nWARNINGS:"
-        foreach ($w in $script:Warnings) { Write-Host "  - $w" }
-    }
-    if ($script:Errors.Count -gt 0) {
-        Write-Host "`nERRORS:"
-        foreach ($e in $script:Errors) { Write-Host "  - $e" }
-        Write-Host ""
-        Write-Host "ERROR: Please resolve the above errors before proceeding." -ForegroundColor Red
-        exit 1
-    }
-    Write-Host ""
-}
-
-# ── Version resolution ───────────────────────────────────────────────────────
-
-function Get-WindowsLtscVersion {
-    param([string]$Override)
-
-    if ($Override) {
-        return $Override
-    }
-
-    try {
-        $operatingSystem = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
-    } catch {
-        Write-Host "ERROR: Unable to detect the Windows Server version: $_" -ForegroundColor Red
-        exit 1
-    }
-
-    if ($operatingSystem.ProductType -notin @(2, 3)) {
-        Write-Host "ERROR: Windows Server is required for Windows containers; detected '$($operatingSystem.Caption)'." -ForegroundColor Red
-        exit 1
-    }
-
-    switch ([int]$operatingSystem.BuildNumber) {
-        17763 { return 'ltsc2019' }
-        20348 { return 'ltsc2022' }
-        26100 { return 'ltsc2025' }
-    }
-
-    Write-Host "ERROR: Unsupported Windows Server build '$($operatingSystem.BuildNumber)' ('$($operatingSystem.Caption)'). Use -WindowsVersion to select an image only when the host is known to support it." -ForegroundColor Red
-    exit 1
-}
-
-function Get-LatestVersion {
-    param([Parameter(Mandatory)][string]$WindowsVersion)
-
-    try {
-        $tagsJson = Invoke-RestMethod -Uri $REGISTRY_TAGS_URL -Method Get -TimeoutSec 30
-    } catch {
-        Write-Host "ERROR: Unable to query image registry for latest version: $_" -ForegroundColor Red
-        exit 1
-    }
-
-    $tagPattern = '^\d+\.\d+\.\d+-windows-' + [regex]::Escape($WindowsVersion) + '$'
-    $releasePattern = '-windows-' + [regex]::Escape($WindowsVersion) + '$'
-    $versions = @($tagsJson.tags | Where-Object { $_ -match $tagPattern })
-    if (-not $versions) {
-        Write-Host "ERROR: No published Windows image tags found for $WindowsVersion" -ForegroundColor Red
-        exit 1
-    }
-
-    return ($versions | ForEach-Object { $_ -replace $releasePattern, '' } | Sort-Object { [version]$_ } | Select-Object -Last 1)
-}
-
-function Get-LatestLinuxVersion {
-    try {
-        $tagsJson = Invoke-RestMethod -Uri $REGISTRY_TAGS_URL -Method Get -TimeoutSec 30
-    } catch {
-        Write-Host "ERROR: Unable to query image registry for latest Linux version: $_" -ForegroundColor Red
-        exit 1
-    }
-
-    $tagPattern = '^\d+\.\d+\.\d+-ubuntu-26\.04$'
-    $releasePattern = '-ubuntu-26\.04$'
-    $versions = @($tagsJson.tags | Where-Object { $_ -match $tagPattern })
-    if (-not $versions) {
-        Write-Host "ERROR: No published Ubuntu 26.04 image tags found" -ForegroundColor Red
-        exit 1
-    }
-
-    return ($versions | ForEach-Object { $_ -replace $releasePattern, '' } | Sort-Object { [version]$_ } | Select-Object -Last 1)
-}
-
-# ── Entry point ──────────────────────────────────────────────────────────────
-
-if ($env:RUNTIME -ne 'docker') {
-    Write-Host "ERROR: RUNTIME must be set to 'docker' (got: '$($env:RUNTIME)')." -ForegroundColor Red
-    exit 1
-}
-
-Set-WebProxyFromEnvironment -ProbeUri ([Uri]$REGISTRY_TAGS_URL)
-
-$currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-if ($currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Warning "Running as Administrator is not recommended. Consider running as a regular user."
-}
-
-if (-not $InstallDir) { $InstallDir = $DEFAULT_INSTALL_DIR }
-
-if (-not $ConfigPath -and -not $env:TOKEN) { Show-Usage }
-
-# Read config file once; also validates existence and readability
-$configFileContent = $null
-if ($ConfigPath) {
-    try {
-        $configFileContent = Get-Content -LiteralPath $ConfigPath -Raw
-    } catch {
-        Write-Host "ERROR: Config file not found or not readable: $ConfigPath" -ForegroundColor Red
-        exit 1
-    }
-}
-
+$binary = $env:PROXY_AGENT_MANAGER_BIN
+$scratch = $null
+$checksum = $null
+$previousBinary = $env:PROXY_AGENT_INSTALLER_BINARY
+$previousPowerShell = $env:PROXY_AGENT_INSTALLER_POWERSHELL
+$previousScriptUrl = $env:PROXY_AGENT_SCRIPT_URL
 try {
-    # Detect WebSocket agent config and migrate to TOKEN flow.
-    # Store derived credential in a local variable; $env:TOKEN is set only just before the
-    # configure API call so that pre-flight docker commands do not inherit it.
-    $derivedToken = $null
-    if ($configFileContent -and -not $env:TOKEN) {
-        if ($configFileContent -match '"proxy_server_uri"') {
-            try {
-                $parsed = $configFileContent | ConvertFrom-Json
-            } catch {
-                Write-Host "ERROR: Could not parse config file as JSON: $ConfigPath" -ForegroundColor Red
-                exit 1
-            }
-            $agentId   = $parsed.agent_id
-            $authToken = $parsed.auth_token
-            if (-not $agentId -or -not $authToken) {
-                Write-Host "ERROR: Could not extract credentials from WebSocket config" -ForegroundColor Red
-                exit 1
-            }
-            $derivedToken = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${agentId}:${authToken}"))
-            $ConfigPath   = ''
-            Write-Host "Detected WebSocket agent configuration. Fetching updated config from Fivetran..."
+    if (-not $binary) {
+        $url = $env:PROXY_AGENT_MANAGER_BINARY_URL
+        $expectedHash = $env:PROXY_AGENT_MANAGER_BINARY_SHA256
+        if (($url -or $expectedHash) -and (-not $url -or $expectedHash -notmatch '^[0-9a-f]{64}$')) {
+            throw 'Native manager download requires a URL and its SHA-256 digest.'
         }
-    }
-
-    Write-Host "Installing Fivetran Proxy Agent...`n"
-
-    $memoryMB = Read-MemoryMB
-
-    # Pre-flight checks
-    Write-Host -NoNewline "Checking prerequisites... "
-    Test-DockerVersion
-    $containerOsType = $null
-    if ($script:Errors.Count -eq 0) {
-        $containerOsType = Get-ContainerOsType
-    }
-    if ($WindowsVersion -and $containerOsType -ne 'windows') {
-        $script:Errors.Add("-WindowsVersion can only be used when Docker is running Windows containers")
-    }
-    Test-Resources $memoryMB
-    if ($containerOsType -eq 'windows') {
-        # Images are stored in Docker's data root, which may be on a different drive than the install directory.
-        $dockerRootDir = Get-DockerRootDir
-        if ($dockerRootDir) {
-            Test-DiskSpace $dockerRootDir $MIN_RECOMMENDED_WINDOWS_DISK_SPACE_MB
-        } else {
-            $script:Warnings.Add("Unable to determine Docker's data root; checking disk space for $InstallDir instead")
-            Test-DiskSpace $InstallDir $MIN_RECOMMENDED_WINDOWS_DISK_SPACE_MB
+        if (-not $url) {
+            $latest = [Uri]'https://api.github.com/repos/fivetran/proxy_agent/releases/latest'
+            Set-WebProxyFromEnvironment -ProbeUri $latest
+            $releaseInfo = Invoke-RestMethod -Uri $latest -UseBasicParsing -TimeoutSec 30
+            if ($releaseInfo.tag_name -cnotmatch '^manager-v[0-9][0-9A-Za-z._-]*$') {
+                throw 'Invalid native manager release tag.'
+            }
+            $release = "https://github.com/fivetran/proxy_agent/releases/download/$($releaseInfo.tag_name)"
+            $url = "$release/manager-windows-x64.exe"
+            if (-not $env:PROXY_AGENT_SCRIPT_URL) { $env:PROXY_AGENT_SCRIPT_URL = "$release/proxy-agent-manager.ps1" }
         }
-    } else {
-        Test-DiskSpace $InstallDir $MIN_RECOMMENDED_DISK_SPACE_MB
-    }
 
-    if ($script:Warnings.Count -eq 0 -and $script:Errors.Count -eq 0) {
-        Write-Host "OK`n"
-    } else {
-        Write-Host ""
-        Show-WarningsAndErrors
-    }
-
-    $windowsImageVariant = $null
-    if ($containerOsType -eq 'windows') {
-        $windowsImageVariant = Get-WindowsLtscVersion -Override $WindowsVersion
-    }
-
-    # Directory setup
-    if (Test-Path -LiteralPath $InstallDir -PathType Container) {
-        Write-Host "$InstallDir already exists, will re-use it."
-    } else {
-        $null = New-Item -ItemType Directory -Force -Path $InstallDir
-    }
-
-    $testFile = Join-Path $InstallDir ".write-test-$PID"
-    try {
-        $null = New-Item -ItemType File -Path $testFile -Force
-        Remove-Item -LiteralPath $testFile -Force
-    } catch {
-        Write-Host "ERROR: Insufficient permissions to write to $InstallDir" -ForegroundColor Red
-        exit 1
-    }
-
-    $null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'config')
-    $null = New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'logs')
-
-    # Persist settings for proxy-agent-manager.ps1 to read: the container memory
-    # and, when given, the Windows image variant override.
-    $settings = @("`$MEMORY_ALLOCATION_MB = $memoryMB")
-    if ($WindowsVersion) {
-        $settings += "`$WINDOWS_VERSION = '$WindowsVersion'"
-    }
-    Set-Content -LiteralPath (Join-Path $InstallDir $SETTINGS_FILE) -Value $settings -Encoding ascii
-
-    # Download management script from public repo (temp file → move for atomicity)
-    Write-Host "Downloading management script..."
-    $agentScript = Join-Path $InstallDir $AGENT_SCRIPT
-    $tmpScript   = Join-Path $InstallDir "$AGENT_SCRIPT.$PID.tmp"
-    try {
-        Invoke-WebRequest -Uri $AGENT_SCRIPT_URL -OutFile $tmpScript -UseBasicParsing -TimeoutSec 30
-    } catch {
-        Remove-Item -LiteralPath $tmpScript -Force -ErrorAction SilentlyContinue
-        Write-Host "ERROR: Failed to download management script from ${AGENT_SCRIPT_URL}: $_" -ForegroundColor Red
-        exit 1
-    }
-    Move-Item -LiteralPath $tmpScript -Destination $agentScript -Force
-    Unblock-File -LiteralPath $agentScript
-
-    # Bootstrap or copy config
-    $configDest  = Join-Path $InstallDir 'config\config.json'
-    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-
-    # Create empty file first, then restrict ACL, then write credentials.
-    # The file is empty (no credentials) during the brief window between creation and ACL restriction.
-    try {
-        $null = New-Item -ItemType File -Path $configDest -Force
-    } catch [System.UnauthorizedAccessException] {
-        Write-Host "ERROR: Cannot create $configDest - if reinstalling, run as the original installing user or delete the existing file manually." -ForegroundColor Red
-        exit 1
-    }
-    $configAcl = [System.Security.AccessControl.FileSecurity]::new()
-    $configAcl.SetAccessRuleProtection($true, $false)
-    $configAcl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
-        $currentUser, 'Read,Write', 'Allow')))
-    $configAcl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
-        'NT AUTHORITY\SYSTEM', 'Read', 'Allow')))
-    $configAcl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
-        (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')), 'Read', 'Allow')))
-    # Set-Acl rather than [System.IO.File]::SetAccessControl, which PowerShell 7 does not have.
-    Set-Acl -LiteralPath $configDest -AclObject $configAcl
-
-    if ($ConfigPath) {
-        [System.IO.File]::WriteAllText($configDest, $configFileContent, [System.Text.UTF8Encoding]::new($false))
-        Write-Host "Config copied to $configDest"
-    } else {
-        $apiUrl = if ($env:FIVETRAN_API_URL) { $env:FIVETRAN_API_URL } else { $DEFAULT_FIVETRAN_API_URL }
-        Write-Host "Fetching agent config from $apiUrl..."
-        if ($derivedToken) { $env:TOKEN = $derivedToken }
+        $scratch = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())
+        $null = [IO.Directory]::CreateDirectory($scratch)
+        $binary = Join-Path $scratch 'manager.exe'
         try {
-            $response = Invoke-WebRequest -Uri "$apiUrl/proxy-agent/configure" `
-                -Method POST `
-                -Headers @{ Authorization = "Basic $($env:TOKEN)"; Accept = 'application/json' } `
-                -TimeoutSec 30 `
-                -UseBasicParsing
-        } catch {
-            $statusCode = $_.Exception.Response.StatusCode.value__
-            if ($statusCode -eq 401) {
-                Write-Host "ERROR: Authentication failed (HTTP 401). Ensure your TOKEN is valid." -ForegroundColor Red
-            } elseif ($statusCode) {
-                Write-Host "ERROR: Configure endpoint returned HTTP $statusCode" -ForegroundColor Red
-            } else {
-                Write-Host "ERROR: Failed to connect to configure endpoint: $_" -ForegroundColor Red
+            $uri = [Uri]$url
+            Set-WebProxyFromEnvironment -ProbeUri $uri
+            if (-not $expectedHash) {
+                $checksum = Join-Path $scratch 'manager.sha256'
+                Invoke-WebRequest -Uri "$url.sha256" -OutFile $checksum -UseBasicParsing -TimeoutSec 30
+                $expectedHash = [IO.File]::ReadAllText($checksum).Trim()
             }
-            exit 1
-        }
-        if ($response.StatusCode -ne 200) {
-            Write-Host "ERROR: Configure endpoint returned HTTP $($response.StatusCode)" -ForegroundColor Red
-            exit 1
-        }
-        try {
-            $null = $response.Content | ConvertFrom-Json
+            Invoke-WebRequest -Uri $uri -OutFile $binary -UseBasicParsing -TimeoutSec 120
         } catch {
-            Write-Host "ERROR: Configure endpoint returned an invalid JSON response" -ForegroundColor Red
-            exit 1
+            throw 'Failed to download the native manager or its SHA-256 digest.'
         }
-        [System.IO.File]::WriteAllText($configDest, $response.Content, [System.Text.UTF8Encoding]::new($false))
+        if ($expectedHash -notmatch '^[0-9a-f]{64}$' -or (Get-FileHash -LiteralPath $binary).Hash -ne $expectedHash) {
+            throw 'Native manager SHA-256 does not match.'
+        }
+        Unblock-File -LiteralPath $binary
     }
 
-    Write-Host "Resolving latest proxy agent version..."
-    if ($containerOsType -eq 'windows') {
-        Write-Host "Using Windows image variant $windowsImageVariant"
-        $version = Get-LatestVersion -WindowsVersion $windowsImageVariant
-    } else {
-        Write-Host "Using Linux container image"
-        $version = Get-LatestLinuxVersion
+    if (-not [IO.File]::Exists($binary)) {
+        $binary = (Get-Command -Name $binary -CommandType Application -ErrorAction Stop).Path
     }
-    Set-Content -LiteralPath (Join-Path $InstallDir 'version') -Value $version -Encoding ascii
-    Write-Host "Using version $version"
-
-    # Clear credential from environment before spawning child process
-    Remove-Item Env:\TOKEN -ErrorAction SilentlyContinue
-
-    # Start agent
-    & $agentScript start
-    if (-not $?) {
-        Write-Host "Installation complete, but agent failed to start."
-        Write-Host "To try to start the agent again, run: & '$agentScript' start"
-        exit 1
-    }
-
-    Write-Host "`nInstallation complete."
-    Write-Host "Install directory: $InstallDir"
-    # Otherwise the script would exit with whatever $LASTEXITCODE a tolerated
-    # failure left, such as an unknown Docker data root.
-    exit 0
+    $binary = (Resolve-Path -LiteralPath $binary).ProviderPath
+    $env:PROXY_AGENT_INSTALLER_BINARY = $binary
+    $program = if ($PSVersionTable.PSVersion.Major -ge 7) { 'pwsh.exe' } else { 'powershell.exe' }
+    $env:PROXY_AGENT_INSTALLER_POWERSHELL = Join-Path $PSHOME $program
+    $nativeArguments = @('install')
+    if ($ConfigPath) { $nativeArguments += $ConfigPath }
+    if ($InstallDir) { $nativeArguments += @('--install-dir', $InstallDir) }
+    if ($WindowsVersion) { $nativeArguments += @('--windows-version', $WindowsVersion) }
+    & $binary @nativeArguments
+    exit $LASTEXITCODE
+} catch {
+    Write-Host "ERROR: $_" -ForegroundColor Red
+    exit 1
 } finally {
+    $env:PROXY_AGENT_INSTALLER_BINARY = $previousBinary
+    $env:PROXY_AGENT_INSTALLER_POWERSHELL = $previousPowerShell
+    $env:PROXY_AGENT_SCRIPT_URL = $previousScriptUrl
     Remove-Item Env:\TOKEN -ErrorAction SilentlyContinue
+    if ($scratch) {
+        Remove-Item -LiteralPath $binary -Force -ErrorAction SilentlyContinue
+        if ($checksum) {
+            Remove-Item -LiteralPath $checksum -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue
+    }
 }

@@ -8,6 +8,8 @@ import subprocess
 import sys
 import tempfile
 
+from support.native_installer import installer_endpoints, installer_environment
+
 REPO = Path(__file__).resolve().parents[2]
 WINDOWS = sys.platform == 'win32'
 SHELL = os.environ.get('PROXY_AGENT_TEST_SHELL', 'powershell' if WINDOWS else 'bash')
@@ -94,10 +96,24 @@ class Sandbox:
     def run(self, *arguments, install=False, parameters=None):
         (self.root / 'options.json').write_text(json.dumps(self.options))
         script = REPO / f'install.{EXT}' if install else self.manager
+        if not install:
+            return self._invoke(script, arguments, parameters, self.env)
+        (self.root / 'free-mb').write_text(str(self.options['free_mb']))
+        env = installer_environment(REPO, self.root, self.env, windows=WINDOWS)
+        if self.stub_http:
+            with installer_endpoints(self.options, windows=WINDOWS) as endpoints:
+                return self._invoke(script, arguments, parameters, {**env, **endpoints})
+        return self._invoke(script, arguments, parameters, env)
+
+    def _invoke(self, script, arguments, parameters, env):
         if WINDOWS:
             return self.windows_runner(self.windows_request(script, arguments, parameters or {}),
-                                       shell=SHELL, env=self.env)
-        return invoke(script, arguments, parameters=parameters, env=self.env)
+                                       shell=SHELL, env=env)
+        return invoke(script, arguments, parameters=parameters, env=env)
+
+    @property
+    def disk_check_path(self):
+        return Path((self.root / 'disk-path').read_text())
 
     def windows_request(self, script, arguments, parameters):
         """Prepare the native host's arguments and requested Windows observations."""
