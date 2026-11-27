@@ -88,8 +88,13 @@ final class WindowsOperations implements OsOperations {
     }
 
     @Override
-    public void checkUser() {
-        // Windows permits administrators. The host probe reports a warning.
+    public void checkUser() throws IOException, InterruptedException {
+        var result = runPowerShell(
+                "([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()))"
+                        + ".IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)", "");
+        if (result.succeeded() && result.output().strip().equalsIgnoreCase("true")) {
+            System.out.println("WARNING: Running as Administrator is not recommended. Consider running as a regular user.");
+        }
     }
 
     @Override
@@ -100,29 +105,6 @@ final class WindowsOperations implements OsOperations {
     @Override
     public int cpuCount() {
         return Runtime.getRuntime().availableProcessors();
-    }
-
-    @Override
-    public long totalMemoryMb() throws IOException, InterruptedException {
-        var result = runPowerShell("""
-                $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-                $principal = [Security.Principal.WindowsPrincipal]::new($identity)
-                [Console]::WriteLine($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
-                try {
-                    [Console]::WriteLine([math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB))
-                } catch {
-                    # The installer reports unavailable host memory while continuing the preflight checks.
-                }
-                """, "");
-        var lines = result.output().strip().split("\\R");
-        if (lines[0].equalsIgnoreCase("true")) {
-            System.out.println("WARNING: Running as Administrator is not recommended. Consider running as a regular user.");
-        }
-        try {
-            return lines.length > 1 ? Long.parseLong(lines[1]) : 0;
-        } catch (NumberFormatException e) {
-            return 0;
-        }
     }
 
     @Override
