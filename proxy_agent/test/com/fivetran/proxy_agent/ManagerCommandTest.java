@@ -59,7 +59,7 @@ public final class ManagerCommandTest {
         var arguments = new ArrayList<>(List.of("--agent-dir", directory.toString()));
         arguments.addAll(List.of(command));
         var operations = new UnixOperations(commands, docker);
-        var manager = new Manager(operations, docker, new HttpClient(operations.proxySettings()));
+        var manager = new Manager(operations, docker, new HttpClient());
         return new Application(manager, path -> 0).execute(arguments.toArray(String[]::new));
     }
 

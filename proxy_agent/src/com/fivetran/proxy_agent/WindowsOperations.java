@@ -12,10 +12,12 @@ import org.jspecify.annotations.Nullable;
 /** Windows host operations using PowerShell for Windows system APIs. */
 class WindowsOperations implements OsOperations {
     private final CommandRunner commands;
+    private final Docker docker;
     private final String powerShell = SystemEnvironment.get("PROXY_AGENT_INSTALLER_POWERSHELL", "powershell.exe");
 
-    WindowsOperations(CommandRunner commands) {
+    WindowsOperations(CommandRunner commands, Docker docker) {
         this.commands = commands;
+        this.docker = docker;
     }
 
     @Override
@@ -121,7 +123,7 @@ class WindowsOperations implements OsOperations {
 
     @Override
     public String containerOs(List<String> errors) throws IOException, InterruptedException {
-        var result = commands.capture("docker", "info", "--format", "{{.OSType}}");
+        var result = docker.capture("info", "--format", "{{.OSType}}");
         var containerOs = result.output().strip();
         if (!result.succeeded() || !(containerOs.equals("linux") || containerOs.equals("windows"))) {
             errors.add("Unable to determine whether Docker is running Linux or Windows containers");

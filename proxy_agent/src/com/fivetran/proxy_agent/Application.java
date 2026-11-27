@@ -31,7 +31,8 @@ public final class Application implements Callable<Integer> {
     /** Runs the requested management command and returns its exit status to the caller. */
     public static void main(String[] args) {
         var commands = new CommandRunner(Set.of("TOKEN"));
-        var operations = OsOperations.forCurrentHost(commands);
+        var docker = new Docker(commands);
+        var operations = OsOperations.forCurrentHost(commands, docker);
         try {
             operations.configureProxy();
         } catch (ProxySettings.ConfigurationException e) {
@@ -39,7 +40,7 @@ public final class Application implements Callable<Integer> {
             System.exit(1);
             return;
         }
-        var manager = new Manager(operations, commands, new HttpClient());
+        var manager = new Manager(operations, docker, new HttpClient());
         System.exit(new Application(manager, Installer.DiskSpace::fileStore).execute(args));
     }
 
