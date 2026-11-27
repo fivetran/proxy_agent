@@ -420,19 +420,6 @@ function Start-ProxyAgent {
     }
 }
 
-function Start-CurrentProxyAgent {
-    $containerOsType = Get-ContainerOsType
-    $windowsVersion = Resolve-WindowsVersion -ContainerOsType $containerOsType
-    $imageTag = Get-ImageTag -Version $CURRENT_VERSION -ContainerOsType $containerOsType -WindowsVersion $windowsVersion
-    Set-PinnedVersion $CURRENT_VERSION
-
-    if (-not (Start-ProxyAgent -ImageTag $imageTag -ContainerOsType $containerOsType)) {
-        return $false
-    }
-
-    return $true
-}
-
 function Invoke-Upgrade {
     Write-Host "Checking for latest version..."
     $containerOsType = Get-ContainerOsType
@@ -567,19 +554,6 @@ function Invoke-NativeManager {
 }
 
 switch ($Command) {
-    'start' {
-        . $loadAgent
-        $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
-        Assert-MemoryAllocation
-        if (-not (Start-CurrentProxyAgent)) { exit 1 }
-    }
-    'restart' {
-        . $loadAgent
-        $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
-        Assert-MemoryAllocation
-        Write-Log "Restarting $CONTAINER_NAME..."
-        if (-not (Start-CurrentProxyAgent)) { exit 1 }
-    }
     'upgrade' {
         . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION

@@ -8,7 +8,7 @@ import org.jspecify.annotations.Nullable;
 import picocli.CommandLine;
 
 /** Command-line entry point for the host-side proxy agent manager. */
-@CommandLine.Command(name = "manager", subcommands = {InstallCommand.class, UpdateManagerCommand.class, StatusCommand.class, LogsCommand.class, StopCommand.class},
+@CommandLine.Command(name = "manager", subcommands = {InstallCommand.class, UpdateManagerCommand.class, StatusCommand.class, LogsCommand.class, StopCommand.class, StartCommand.class, RestartCommand.class},
         exitCodeOnInvalidInput = 1)
 public final class Application implements Callable<Integer> {
     @CommandLine.Option(names = {"-h", "--help"}, usageHelp = true, description = "Show usage.")

@@ -7,7 +7,7 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.util.List;
 
 /** Host operations shared by Linux and macOS. */
-final class UnixOperations implements OsOperations {
+class UnixOperations implements OsOperations {
     private final CommandRunner commands;
     private final Docker docker;
     private final boolean isMac = System.getProperty("os.name").startsWith("Mac");
@@ -65,6 +65,20 @@ final class UnixOperations implements OsOperations {
     @Override
     public Settings settings(int memoryMb, String windowsVersion) {
         return new Settings("settings.sh", "MEMORY_ALLOCATION_MB=" + memoryMb + "\n");
+    }
+
+    @Override
+    public ContainerSettings containerSettings(Path directory) throws IOException, InterruptedException {
+        var path = directory.resolve("settings.sh");
+        if (!Files.isRegularFile(path)) {
+            return new ContainerSettings(SystemEnvironment.get("MEMORY_ALLOCATION_MB", "5120"), "");
+        }
+        var result = commands.capture("bash", "-e", "-c",
+                "source \"$1\" >/dev/null; printf '%s\\n' \"${MEMORY_ALLOCATION_MB:-5120}\"", "manager", path.toString());
+        if (!result.succeeded()) {
+            throw new IOException("Could not read settings from " + path);
+        }
+        return new ContainerSettings(result.output().strip(), "");
     }
 
     @Override
