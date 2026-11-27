@@ -38,6 +38,14 @@ final class Manager {
         return commands;
     }
 
+    /** Downloads the native release and the corresponding platform script. */
+    int updateManager(Path directory) throws IOException, InterruptedException {
+        return new ManagerUpdate(operations, http).run(directory,
+                SystemEnvironment.get("PROXY_AGENT_MANAGER_BINARY_URL", ""),
+                SystemEnvironment.get("PROXY_AGENT_MANAGER_BINARY_SHA256", ""),
+                SystemEnvironment.get("PROXY_AGENT_SCRIPT_URL", ""));
+    }
+
     void downloadManagerScript(Path target) throws IOException {
         var url = SystemEnvironment.get("PROXY_AGENT_SCRIPT_URL", SCRIPT_ROOT + operations.managerScriptName());
         try {

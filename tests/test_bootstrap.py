@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import shutil
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -96,3 +97,54 @@ def test_bootstrap_checks_download_and_forwards_arguments(tmp_path, manager_exec
             assert Path(binary) == manager_executable.resolve()
         else:
             assert Path(binary).parent.parent.resolve() == scratch.resolve()
+
+
+@pytest.mark.parametrize('mode', ['existing', 'download', 'bad-checksum'])
+def test_wrapper_bootstraps_and_forwards(tmp_path, manager_executable, mode):
+    wrapper = tmp_path / f'proxy-agent-manager.{EXT}'
+    shutil.copyfile(REPO / wrapper.name, wrapper)
+    binary = tmp_path / ('manager.exe' if WINDOWS else 'manager')
+    if mode == 'existing':
+        shutil.copy2(manager_executable, binary)
+    payload = manager_executable.read_bytes()
+    result_path = tmp_path / 'result'
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args):
+            pass
+
+    with ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+        env = {key: value for key, value in os.environ.items() if not key.upper().endswith('_PROXY')}
+        env.update(
+            BOOTSTRAP_TEST_RESULT=str(result_path),
+            PROXY_AGENT_INSTALLER_BINARY=str(binary),
+            PROXY_AGENT_MANAGER_BINARY_URL=f'http://127.0.0.1:{server.server_port}/manager',
+            PROXY_AGENT_MANAGER_BINARY_SHA256=(
+                '0' * 64 if mode == 'bad-checksum' else hashlib.sha256(payload).hexdigest()
+            ),
+        )
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            result = invoke(wrapper, ['install', 'config with spaces.json'], env=env)
+        finally:
+            server.shutdown()
+            thread.join()
+
+    assert requests == ([] if mode == 'existing' else ['/manager'])
+    if mode == 'bad-checksum':
+        assert result.returncode == 1, result.stdout
+        assert not binary.exists()
+        assert not result_path.exists()
+    else:
+        assert result.returncode == 7, result.stdout
+        assert binary.read_bytes() == payload
+        assert result_path.read_text().splitlines() == ['install', 'config with spaces.json', str(binary)]

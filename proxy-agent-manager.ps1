@@ -9,40 +9,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$BASE_DIR           = $PSScriptRoot
-# PROXY_AGENT_IMAGE and PROXY_AGENT_REGISTRY_TAGS_URL are overridable so the
-# test suite can run against a stub image and registry.
+$BASE_DIR = $PSScriptRoot
+
 $IMAGE              = if ($env:PROXY_AGENT_IMAGE) { $env:PROXY_AGENT_IMAGE } else { 'us-docker.pkg.dev/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent' }
 $CONFIG_FILE        = Join-Path $BASE_DIR 'config\config.json'
 $VERSION_FILE       = Join-Path $BASE_DIR 'version'
 $LOGFILE            = Join-Path $BASE_DIR 'logs\proxy-agent-manager.log'
 $CONTAINER_LOG_DIR  = '/app/logs'
 $SETTINGS_FILE = Join-Path $BASE_DIR 'settings.ps1'
-# Appended to the plain agent version to form the Linux image tag.
 $LINUX_IMAGE_TAG_SUFFIX = '-ubuntu-26.04'
 
-# ── Startup validation ───────────────────────────────────────────────────────
-
-$validCommands = @('start', 'stop', 'restart', 'upgrade', 'update-manager', 'status', 'logs', 'doctor')
-if (-not $Command -or $Command -notin $validCommands) {
-    Write-Host "Usage: $($MyInvocation.MyCommand.Name) {start|stop|restart|upgrade|update-manager|status|logs|doctor [options]}"
-    exit 1
-}
-
-# ── Functions ────────────────────────────────────────────────────────────────
-
-function Write-Log {
-    param([string]$Message)
-    Write-Host $Message
-    $null = New-Item -ItemType Directory -Force -Path (Split-Path $LOGFILE)
-    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
-    Add-Content -Path $LOGFILE -Value "$timestamp UTC - $Message" -Encoding ascii
-}
-
-# Windows PowerShell 5.1 uses WebRequest.DefaultWebProxy; PowerShell 7 uses
-# HttpClient.DefaultProxy. Apply proxy settings to the one used by each version.
-# Without environment variables, keep the system proxy and its credentials.
-# Docker has separate proxy settings; see the README.
 function Set-WebProxyFromEnvironment {
     param([Parameter(Mandatory)][Uri]$ProbeUri)
 
@@ -60,7 +36,7 @@ function Set-WebProxyFromEnvironment {
             $effectiveProxy = $systemProxy.GetProxy($ProbeUri)
             # Direct connections come back as the probe URI on .NET Framework and as null on .NET Core.
             if ($effectiveProxy -and $effectiveProxy -ne $ProbeUri) {
-                Write-Log "Using system proxy $($effectiveProxy.Scheme)://$($effectiveProxy.Authority)"
+                Write-Host "Using system proxy $($effectiveProxy.Scheme)://$($effectiveProxy.Authority)"
             }
         }
         return
@@ -103,11 +79,11 @@ function Set-WebProxyFromEnvironment {
     if ($PSVersionTable.PSVersion.Major -ge 7) {
         [System.Net.Http.HttpClient]::DefaultProxy = $webProxy
     }
-    Write-Log "Using proxy $proxyAddress from the environment"
+    Write-Host "Using proxy $proxyAddress from the environment"
 }
 
-# Bootstrap just the manager for existing installations, without starting Docker.
 function Install-NativeManager {
+    param([switch]$RequireUpdater)
     $url = $env:PROXY_AGENT_MANAGER_BINARY_URL
     $expected = $env:PROXY_AGENT_MANAGER_BINARY_SHA256
     $candidate = Join-Path $BASE_DIR ('.native-manager.' + [guid]::NewGuid() + '.exe')
@@ -119,6 +95,9 @@ function Install-NativeManager {
             }
         } else {
             $url = 'https://github.com/fivetran/proxy_agent/releases/latest/download/manager-windows-x64.exe'
+        }
+        Set-WebProxyFromEnvironment -ProbeUri ([Uri]$url)
+        if (-not $expected) {
             Invoke-WebRequest -Uri "$url.sha256" -OutFile $checksum -UseBasicParsing -TimeoutSec 30
             $expected = [IO.File]::ReadAllText($checksum).Trim()
         }
@@ -128,49 +107,32 @@ function Install-NativeManager {
             throw 'Native manager SHA-256 does not match.'
         }
         Unblock-File -LiteralPath $candidate
-        [IO.File]::Move($candidate, (Join-Path $BASE_DIR 'manager.exe'))
+        if ($RequireUpdater) {
+            & $candidate update-manager --help *> $null
+            if ($LASTEXITCODE -ne 0) { throw 'The release does not support update-manager.' }
+        }
+        $destination = Join-Path $BASE_DIR 'manager.exe'
+        if ([IO.File]::Exists($destination)) {
+            [IO.File]::Replace($candidate, $destination, [NullString]::Value)
+        } else {
+            [IO.File]::Move($candidate, $destination)
+        }
         Write-Host 'Native manager installed.'
         return $true
     } catch {
-        Write-Warning 'Could not install a verified native manager. The management script remains available.'
+        Write-Warning 'Could not install a verified native manager.'
         return $false
     } finally {
         Remove-Item -LiteralPath $candidate, $checksum -Force -ErrorAction SilentlyContinue
     }
 }
 
-# Validate the download before atomically replacing the installed script.
-function Update-Manager {
-    $scriptUrl = if ($env:PROXY_AGENT_SCRIPT_URL) { $env:PROXY_AGENT_SCRIPT_URL } else { 'https://raw.githubusercontent.com/fivetran/proxy_agent/main/proxy-agent-manager.ps1' }
-    $tmpScript = Join-Path $BASE_DIR ('.proxy-agent-manager.' + [guid]::NewGuid() + '.ps1')
-    try {
-        Set-WebProxyFromEnvironment -ProbeUri ([Uri]$scriptUrl)
-        Write-Host "Downloading management script..."
-        Invoke-WebRequest -Uri $scriptUrl -OutFile $tmpScript -UseBasicParsing -TimeoutSec 30
-        if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $tmpScript -Raw))) {
-            throw 'Downloaded management script is empty.'
-        }
-        $parseErrors = $null
-        $null = [System.Management.Automation.Language.Parser]::ParseFile($tmpScript, [ref]$null, [ref]$parseErrors)
-        if ($parseErrors.Count -gt 0) {
-            throw 'Downloaded management script has invalid syntax.'
-        }
-        Unblock-File -LiteralPath $tmpScript
-        # $null binds to an empty string here; Replace requires a null backup path.
-        [System.IO.File]::Replace($tmpScript, $PSCommandPath, [NullString]::Value)
-        Write-Host "Management script updated. The agent has not been restarted."
-        $nativeOverride = $env:PROXY_AGENT_MANAGER_BINARY_URL -or $env:PROXY_AGENT_MANAGER_BINARY_SHA256
-        if (-not (Test-Path -LiteralPath (Join-Path $BASE_DIR 'manager.exe') -PathType Leaf) -and
-                (-not $env:PROXY_AGENT_SCRIPT_URL -or $nativeOverride)) {
-            $installed = Install-NativeManager
-            if (-not $installed -and $nativeOverride) { exit 1 }
-        }
-    } catch {
-        Write-Host "ERROR: Failed to update management script: $_" -ForegroundColor Red
-        exit 1
-    } finally {
-        Remove-Item -LiteralPath $tmpScript -Force -ErrorAction SilentlyContinue
-    }
+function Write-Log {
+    param([string]$Message)
+    Write-Host $Message
+    $null = New-Item -ItemType Directory -Force -Path (Split-Path $LOGFILE)
+    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+    Add-Content -Path $LOGFILE -Value "$timestamp UTC - $Message" -Encoding ascii
 }
 
 function Get-ContainerOsType {
@@ -207,8 +169,6 @@ function Get-WindowsLtscVersion {
     throw "Unsupported Windows Server build '$($operatingSystem.BuildNumber)' ('$($operatingSystem.Caption)')."
 }
 
-# Returns the plain agent version for a version file entry. Accepts a plain
-# version (1.2.9) or a legacy image tag (1.2.9-ubuntu-26.04, 1.2.9-windows-ltsc2022).
 function Get-ReleaseVersion {
     param([Parameter(Mandatory)][string]$Tag)
 
@@ -219,10 +179,6 @@ function Get-ReleaseVersion {
     throw "Invalid proxy agent version '$Tag' in $VERSION_FILE. Expected <major>.<minor>.<patch>."
 }
 
-# Returns the LTSC variant to use for Windows containers, or $null for Linux
-# containers. A variant pinned by a legacy Windows image tag in the version file
-# wins and is saved to settings.ps1, then the $WINDOWS_VERSION setting, then the
-# variant detected from the host.
 function Resolve-WindowsVersion {
     param([Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType)
 
@@ -320,8 +276,6 @@ function Compare-SemVer {
     return ([version]$A).CompareTo([version]$B)
 }
 
-# Only the commands that start a container check the setting, so stop, status
-# and logs still work with an invalid one.
 function Assert-MemoryAllocation {
     if ("$MEMORY_ALLOCATION_MB" -notmatch '^\d+$' -or [int64]"$MEMORY_ALLOCATION_MB" -lt 1) {
         Write-Host "ERROR: Invalid `$MEMORY_ALLOCATION_MB in ${SETTINGS_FILE}: $MEMORY_ALLOCATION_MB (must be a positive integer, in MB)" -ForegroundColor Red
@@ -329,22 +283,18 @@ function Assert-MemoryAllocation {
     }
 }
 
-# Returns the config path inside the container.
 function Get-ContainerConfigPath {
     param([Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType)
     if ($ContainerOsType -eq 'windows') { return 'C:/config/config.json' }
     return '/config/config.json'
 }
 
-# Returns the log folder inside the container.
 function Get-ContainerLogDir {
     param([Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType)
     if ($ContainerOsType -eq 'windows') { return 'C:/app/logs' }
     return $CONTAINER_LOG_DIR
 }
 
-# Returns the docker run arguments shared by the agent and doctor containers,
-# so the doctor checks the agent's config, memory limit and log folder.
 function Get-AgentRunArgs {
     param([Parameter(Mandatory)][ValidateSet('linux', 'windows')][string]$ContainerOsType)
 
@@ -510,12 +460,6 @@ function Invoke-Upgrade {
     }
 }
 
-# Runs the doctor in a throwaway container beside the agent's, passing
-# $DoctorArgs to --doctor (e.g. --region us-east-1), and exits with its exit
-# code. Newer doctors save their log and an archive to the mounted log folder,
-# so they outlive the container. Otherwise, as with older doctors (e.g.
-# 1.2.10), which only print their report, or when the doctor fails before
-# saving its log, its output is saved there instead.
 function Invoke-Doctor {
     param([string[]]$DoctorArgs)
 
@@ -563,86 +507,107 @@ function Invoke-Doctor {
     exit $status
 }
 
-# ── Commands ─────────────────────────────────────────────────────────────────
+$loadAgent = {
+    # settings.ps1 may set $MEMORY_ALLOCATION_MB and, for Windows containers,
+    # $WINDOWS_VERSION (an LTSC variant that overrides host detection).
+    if (Test-Path -LiteralPath $SETTINGS_FILE) {
+        . $SETTINGS_FILE
+    }
+    # Unset or empty only, so 0 is rejected like any other invalid setting.
+    if ("$MEMORY_ALLOCATION_MB" -eq '') { $MEMORY_ALLOCATION_MB = 5120 }
+    if (-not $WINDOWS_VERSION) { $WINDOWS_VERSION = $null }
 
-# Updating the manager does not require agent configuration or Docker.
-if ($Command -eq 'update-manager') {
-    Update-Manager
-    exit 0
+    if (-not (Test-Path $CONFIG_FILE)) {
+        Write-Host "ERROR: Config file not found: $CONFIG_FILE" -ForegroundColor Red
+        exit 1
+    }
+
+    try {
+        $configJson = Get-Content $CONFIG_FILE -Raw | ConvertFrom-Json
+    } catch {
+        Write-Host "ERROR: Failed to parse config file: $_" -ForegroundColor Red
+        exit 1
+    }
+
+    $AGENT_ID = $configJson.agent_id
+    if (-not $AGENT_ID -or $AGENT_ID -eq 'null') {
+        Write-Host "ERROR: 'agent_id' missing in $CONFIG_FILE" -ForegroundColor Red
+        exit 1
+    }
+
+    $script:CONTAINER_NAME = "proxy-agent-$AGENT_ID"
+
+    if (-not (Test-Path $VERSION_FILE)) {
+        Write-Host "ERROR: $VERSION_FILE not found." -ForegroundColor Red
+        exit 1
+    }
+
+    $PINNED_VERSION = Get-Content $VERSION_FILE -Raw
+    if ([string]::IsNullOrWhiteSpace($PINNED_VERSION)) {
+        Write-Host "ERROR: $VERSION_FILE is empty." -ForegroundColor Red
+        exit 1
+    }
+    $PINNED_VERSION = $PINNED_VERSION.Trim()
 }
 
-# settings.ps1 may set $MEMORY_ALLOCATION_MB and, for Windows containers,
-# $WINDOWS_VERSION (an LTSC variant that overrides host detection).
-if (Test-Path -LiteralPath $SETTINGS_FILE) {
-    . $SETTINGS_FILE
+function Invoke-NativeManager {
+    $manager = Join-Path $BASE_DIR 'manager.exe'
+    if (-not (Test-Path -LiteralPath $manager -PathType Leaf) -and -not (Install-NativeManager)) {
+        exit 1
+    }
+    # An early native installer may predate the update-manager command.
+    if ($args.Count -and $args[0] -eq 'update-manager') {
+        & $manager update-manager --help *> $null
+        if ($LASTEXITCODE -ne 0 -and -not (Install-NativeManager -RequireUpdater)) {
+            exit 1
+        }
+    }
+    & $manager @args
+    exit $LASTEXITCODE
 }
-# Unset or empty only, so 0 is rejected like any other invalid setting.
-if ("$MEMORY_ALLOCATION_MB" -eq '') { $MEMORY_ALLOCATION_MB = 5120 }
-if (-not $WINDOWS_VERSION) { $WINDOWS_VERSION = $null }
-
-if (-not (Test-Path $CONFIG_FILE)) {
-    Write-Host "ERROR: Config file not found: $CONFIG_FILE" -ForegroundColor Red
-    exit 1
-}
-
-try {
-    $configJson = Get-Content $CONFIG_FILE -Raw | ConvertFrom-Json
-} catch {
-    Write-Host "ERROR: Failed to parse config file: $_" -ForegroundColor Red
-    exit 1
-}
-
-$AGENT_ID = $configJson.agent_id
-if (-not $AGENT_ID -or $AGENT_ID -eq 'null') {
-    Write-Host "ERROR: 'agent_id' missing in $CONFIG_FILE" -ForegroundColor Red
-    exit 1
-}
-
-$CONTAINER_NAME = "proxy-agent-$AGENT_ID"
-
-if (-not (Test-Path $VERSION_FILE)) {
-    Write-Host "ERROR: $VERSION_FILE not found." -ForegroundColor Red
-    exit 1
-}
-
-$PINNED_VERSION = Get-Content $VERSION_FILE -Raw
-if ([string]::IsNullOrWhiteSpace($PINNED_VERSION)) {
-    Write-Host "ERROR: $VERSION_FILE is empty." -ForegroundColor Red
-    exit 1
-}
-$PINNED_VERSION = $PINNED_VERSION.Trim()
 
 switch ($Command) {
+    'status' {
+        . $loadAgent
+        docker ps -a --filter "name=$CONTAINER_NAME" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+    }
+    'logs' {
+        . $loadAgent
+        docker logs -f $CONTAINER_NAME
+    }
+    'stop' {
+        . $loadAgent
+        Write-Log "Stopping $CONTAINER_NAME..."
+        Stop-ProxyAgent
+    }
     'start' {
+        . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
         Assert-MemoryAllocation
         if (-not (Start-CurrentProxyAgent)) { exit 1 }
     }
-    'stop' {
-        Write-Log "Stopping $CONTAINER_NAME..."
-        Stop-ProxyAgent
-    }
     'restart' {
+        . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
         Assert-MemoryAllocation
         Write-Log "Restarting $CONTAINER_NAME..."
         if (-not (Start-CurrentProxyAgent)) { exit 1 }
     }
     'upgrade' {
+        . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
         Assert-MemoryAllocation
         Set-WebProxyFromEnvironment -ProbeUri ([Uri]"https://$($IMAGE.Split('/')[0])/")
         Invoke-Upgrade
     }
-    'status' {
-        docker ps -a --filter "name=$CONTAINER_NAME" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
-    }
-    'logs' {
-        docker logs -f $CONTAINER_NAME
-    }
     'doctor' {
+        . $loadAgent
         $CURRENT_VERSION = Get-ReleaseVersion -Tag $PINNED_VERSION
         Assert-MemoryAllocation
         Invoke-Doctor -DoctorArgs $DoctorArgs
+    }
+    default {
+        if ($Command) { Invoke-NativeManager ($Command.ToLowerInvariant()) @DoctorArgs }
+        Invoke-NativeManager
     }
 }

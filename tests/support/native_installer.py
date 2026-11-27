@@ -83,10 +83,8 @@ def installer_environment(repo, root, env, *, windows):
     }
 
 
-@contextmanager
-def installer_endpoints(options, *, windows):
-    """Serve the installer's fixture responses over HTTP for Java's web client."""
-    script = (
+def installer_start_script(*, windows):
+    return (
         '$OutputEncoding = [Text.UTF8Encoding]::new($false)\n'
         'ConvertTo-Json -InputObject @($args) -Compress | '
         '& $env:AGENT_TEST_PYTHON $env:AGENT_TEST_STUB manager-json\n'
@@ -94,6 +92,12 @@ def installer_endpoints(options, *, windows):
         if windows else
         '#!/usr/bin/env bash\nexec "$AGENT_TEST_PYTHON" "$AGENT_TEST_STUB" manager "$@"\n'
     )
+
+
+@contextmanager
+def installer_endpoints(options, *, windows):
+    """Serve the installer's fixture responses over HTTP for Java's web client."""
+    script = installer_start_script(windows=windows)
 
     class Endpoints(BaseHTTPRequestHandler):
         def do_GET(self):
