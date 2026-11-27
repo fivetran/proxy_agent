@@ -178,7 +178,7 @@ public final class ManagerCommandTest {
         private boolean registryAvailable = true;
 
         private TestHttpClient() {
-            super(ProxySettings.forUnix());
+            super();
         }
 
         @Override

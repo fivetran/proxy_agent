@@ -65,9 +65,9 @@ final class Manager {
     /** Downloads the native release and the corresponding platform script. */
     int updateManager(Path directory) throws IOException, InterruptedException {
         return new ManagerUpdate(operations, http).run(directory,
-                Environment.get("PROXY_AGENT_MANAGER_BINARY_URL", ""),
-                Environment.get("PROXY_AGENT_MANAGER_BINARY_SHA256", ""),
-                Environment.get("PROXY_AGENT_SCRIPT_URL", ""));
+                SystemEnvironment.get("PROXY_AGENT_MANAGER_BINARY_URL", ""),
+                SystemEnvironment.get("PROXY_AGENT_MANAGER_BINARY_SHA256", ""),
+                SystemEnvironment.get("PROXY_AGENT_SCRIPT_URL", ""));
     }
 
     /** Prints the Docker status table for the installed agent. */
@@ -106,7 +106,7 @@ final class Manager {
     int upgrade(Path directory) throws IOException, InterruptedException {
         var agent = agentContainer(directory);
         System.out.println("Checking for latest version...");
-        var registryUrl = Environment.get("PROXY_AGENT_REGISTRY_TAGS_URL", "");
+        var registryUrl = SystemEnvironment.get("PROXY_AGENT_REGISTRY_TAGS_URL", "");
         if (registryUrl.isEmpty()) {
             var registry = agent.repository().split("/", 2);
             if (registry.length != 2) {
@@ -184,7 +184,7 @@ final class Manager {
         if (windows && variant == null) {
             variant = settings.windowsVersion().isEmpty() ? operations.windowsImageVariant() : settings.windowsVersion();
         }
-        return new AgentContainer(agentId, release.group(1), Environment.get("PROXY_AGENT_IMAGE", IMAGE),
+        return new AgentContainer(agentId, release.group(1), SystemEnvironment.get("PROXY_AGENT_IMAGE", IMAGE),
                 windows ? "-windows-" + variant : LINUX_SUFFIX, memory, windows ? ContainerOs.WINDOWS : ContainerOs.LINUX);
     }
 
@@ -362,11 +362,9 @@ final class Manager {
     }
 
     void downloadManagerScript(Path target) throws IOException {
-        var url = Environment.get("PROXY_AGENT_SCRIPT_URL", SCRIPT_ROOT + operations.managerScriptName());
+        var url = SystemEnvironment.get("PROXY_AGENT_SCRIPT_URL", SCRIPT_ROOT + operations.managerScriptName());
         try {
             http.download(url, target);
-        } catch (ProxySettings.ConfigurationException e) {
-            throw e;
         } catch (IOException e) {
             throw new IOException("Failed to download management script", e);
         }
@@ -378,7 +376,7 @@ final class Manager {
 
     private List<String> registryTags(String url) throws IOException {
         try {
-            var bytes = http.get(Environment.get("PROXY_AGENT_REGISTRY_TAGS_URL", url));
+            var bytes = http.get(SystemEnvironment.get("PROXY_AGENT_REGISTRY_TAGS_URL", url));
             var tags = new ArrayList<String>();
             try (var parser = JSON.createParser(bytes)) {
                 if (parser.nextToken() != JsonToken.START_OBJECT) {
@@ -401,8 +399,6 @@ final class Manager {
                 }
             }
             return tags;
-        } catch (ProxySettings.ConfigurationException e) {
-            throw e;
         } catch (IOException e) {
             throw new IOException("Unable to query image registry for latest version", e);
         }
@@ -428,13 +424,11 @@ final class Manager {
         if (token.indexOf('\r') >= 0 || token.indexOf('\n') >= 0) {
             throw new IOException("Invalid TOKEN");
         }
-        var api = Environment.get("FIVETRAN_API_URL", "https://api.fivetran.com").replaceAll("/+$", "");
+        var api = SystemEnvironment.get("FIVETRAN_API_URL", "https://api.fivetran.com").replaceAll("/+$", "");
         HttpClient.Response response;
         try {
             response = http.post(api + "/proxy-agent/configure",
                     Map.of("Authorization", "Basic " + token, "Accept", "application/json"));
-        } catch (ProxySettings.ConfigurationException e) {
-            throw e;
         } catch (IOException e) {
             throw new IOException("Failed to connect to configure endpoint", e);
         }
