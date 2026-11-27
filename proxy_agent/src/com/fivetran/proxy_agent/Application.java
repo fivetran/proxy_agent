@@ -8,7 +8,7 @@ import org.jspecify.annotations.Nullable;
 import picocli.CommandLine;
 
 /** Command-line entry point for the host-side proxy agent manager. */
-@CommandLine.Command(name = "manager", subcommands = {InstallCommand.class, UpdateManagerCommand.class},
+@CommandLine.Command(name = "manager", subcommands = {InstallCommand.class, UpdateManagerCommand.class, StatusCommand.class, LogsCommand.class},
         exitCodeOnInvalidInput = 1)
 public final class Application implements Callable<Integer> {
     @CommandLine.Option(names = {"-h", "--help"}, usageHelp = true, description = "Show usage.")
@@ -31,7 +31,8 @@ public final class Application implements Callable<Integer> {
     /** Runs the requested management command and returns its exit status to the caller. */
     public static void main(String[] args) {
         var commands = new CommandRunner(Set.of("TOKEN"));
-        var operations = OsOperations.forCurrentHost(commands);
+        var docker = new Docker(commands);
+        var operations = OsOperations.forCurrentHost(commands, docker);
         try {
             operations.configureProxy();
         } catch (ProxySettings.ConfigurationException e) {
@@ -39,7 +40,7 @@ public final class Application implements Callable<Integer> {
             System.exit(1);
             return;
         }
-        var manager = new Manager(operations, commands, new HttpClient());
+        var manager = new Manager(operations, docker, new HttpClient());
         System.exit(new Application(manager, Installer.DiskSpace::fileStore).execute(args));
     }
 

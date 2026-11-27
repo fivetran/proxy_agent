@@ -136,7 +136,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r tests/requirements.txt
-      - run: bazelisk test //proxy_agent:update_manager_tests
+      - run: bazelisk test //proxy_agent:tests //proxy_agent:update_manager_tests --test_output=errors
       - run: python -m pytest -v -m "not integration"
 
   integration-linux:

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.StreamReadFeature;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -21,12 +22,12 @@ final class Manager {
             "https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list";
 
     private final OsOperations operations;
-    private final CommandRunner commands;
+    private final Docker docker;
     private final HttpClient http;
 
-    Manager(OsOperations operations, CommandRunner commands, HttpClient http) {
+    Manager(OsOperations operations, Docker docker, HttpClient http) {
         this.operations = operations;
-        this.commands = commands;
+        this.docker = docker;
         this.http = http;
     }
 
@@ -34,8 +35,8 @@ final class Manager {
         return operations;
     }
 
-    CommandRunner commands() {
-        return commands;
+    Docker docker() {
+        return docker;
     }
 
     /** Downloads the native release and the corresponding platform script. */
@@ -44,6 +45,51 @@ final class Manager {
                 SystemEnvironment.get("PROXY_AGENT_MANAGER_BINARY_URL", ""),
                 SystemEnvironment.get("PROXY_AGENT_MANAGER_BINARY_SHA256", ""),
                 SystemEnvironment.get("PROXY_AGENT_SCRIPT_URL", ""));
+    }
+
+    /** Prints the Docker status table for the installed agent. */
+    int status(Path directory) throws IOException, InterruptedException {
+        return docker.run(directory, statusArguments(containerName(directory)));
+    }
+
+    /** Streams Docker logs until the caller or Docker ends the session. */
+    int logs(Path directory) throws IOException, InterruptedException {
+        return docker.run(directory, "logs", "-f", containerName(directory));
+    }
+
+    private static String[] statusArguments(String container) {
+        return new String[] {"ps", "-a", "--filter", "name=" + container,
+                "--format", "table {{.Names}}\\t{{.Image}}\\t{{.Status}}"};
+    }
+
+    private static String containerName(Path directory) throws IOException {
+        var config = directory.resolve("config/config.json");
+        if (!Files.isRegularFile(config)) {
+            throw new IOException("Config file not found: " + config);
+        }
+        String agentId;
+        try {
+            agentId = readConfigFields(Files.readAllBytes(config)).agentId();
+        } catch (IOException e) {
+            throw new IOException("Failed to parse config file: " + config, e);
+        }
+        if (agentId == null || agentId.isBlank() || agentId.equals("null")) {
+            throw new IOException("'agent_id' missing in " + config);
+        }
+        pinnedVersion(directory);
+        return "proxy-agent-" + agentId;
+    }
+
+    private static String pinnedVersion(Path directory) throws IOException {
+        var versionFile = directory.resolve("version");
+        if (!Files.isRegularFile(versionFile)) {
+            throw new IOException(versionFile + " not found.");
+        }
+        var version = Files.readString(versionFile).replace("\uFEFF", "").strip();
+        if (version.isEmpty()) {
+            throw new IOException(versionFile + " is empty.");
+        }
+        return version;
     }
 
     void downloadManagerScript(Path target) throws IOException {

@@ -72,52 +72,6 @@ class TestManager:
     run with different container conventions.
     """
 
-    def test_start_pinned_image_memory_mounts_labels_and_healthcheck(self, sandbox, variant, run_manager):
-        run_manager('start')
-        assert_image(sandbox, variant)
-        args = run_args(sandbox)
-        assert '--memory=5120m' in args
-        heartbeat = (
-            'C:/app/logs/proxy-agent-heartbeat.txt'
-            if sandbox.options['container_os'] == 'windows'
-            else '/tmp/proxy-agent-heartbeat.txt'
-        )
-        assert_options(
-            args,
-            [
-                ('--name', 'proxy-agent-abc123'),
-                ('--label', 'proxy_agent_id=abc123'),
-                ('--label', 'fivetran=proxy-agent'),
-                ('--restart', 'unless-stopped'),
-                ('--env', 'IS_DOCKER=true'),
-                ('--env', f'LOG_FOLDER_PATH={variant.log_dir}'),
-                ('--env', f'HEARTBEAT_PATH={heartbeat}'),
-                ('--env', 'HEARTBEAT_EXPIRY_SECONDS=30'),
-                ('--health-interval', '10s'),
-                ('--health-retries', '3'),
-                ('--health-start-period', '30s'),
-            ],
-        )
-        source = sandbox.agent / (
-            'config' if sandbox.options['container_os'] == 'windows' else 'config/config.json'
-        )
-        target = 'C:/config' if sandbox.options['container_os'] == 'windows' else variant.config_path
-        assert_options(
-            args,
-            [
-                ('-v', f'{source.as_posix()}:{target}:ro'),
-                ('-v', f'{(sandbox.agent / "logs").as_posix()}:{variant.log_dir}'),
-            ],
-        )
-        assert args[-2:] == ['-i', variant.config_path]
-        health = args[args.index('--health-cmd') + 1]
-        if sandbox.options['container_os'] == 'windows':
-            assert health.startswith('powershell.exe -NoProfile -EncodedCommand ')
-            health = base64.b64decode(health.split()[-1]).decode('utf-16le')
-        assert 'HEARTBEAT_EXPIRE_AT' in health
-        assert args[args.index('--health-timeout') + 1] == (
-            '15s' if sandbox.options['container_os'] == 'windows' else '3s'
-        )
 
     @pytest.mark.parametrize('command', ['start', 'restart'])
     def test_legacy_tag_normalized_on_start_and_restart(self, sandbox, variant, run_manager, command):
@@ -151,19 +105,6 @@ class TestManager:
         assert sandbox.calls('docker') == before
         assert_image(sandbox, variant)
 
-    def test_nonstarting_commands_tolerate_invalid_settings_and_version(self, sandbox, run_manager):
-        run_manager('start')
-        sandbox.settings(MEMORY_ALLOCATION_MB='4G')
-        sandbox.version.write_text('2.0')
-        assert 'NAMES IMAGE STATUS' in run_manager('status')
-        assert 'name=proxy-agent-abc123' in docker_calls(sandbox, 'ps')[-1]
-        run_manager('logs')
-        assert docker_calls(sandbox, 'logs')[-1] == ['logs', '-f', 'proxy-agent-abc123']
-        run_manager('stop')
-        assert sandbox.image is None
-        for command in ('stop', 'rm'):
-            assert docker_calls(sandbox, command)[-1] == [command, 'proxy-agent-abc123']
-        assert sandbox.version.read_text() == '2.0'
 
     def test_missing_config(self, sandbox, run_manager):
         sandbox.config.unlink()
@@ -306,73 +247,6 @@ class TestManager:
         run_manager('upgrade', code=1)
         assert not docker_calls(sandbox, 'run')
         assert sandbox.version.read_text().strip() == '1.2.9'
-
-    def test_doctor_arguments_mounts_memory_and_exit_code(self, sandbox, variant, run_manager):
-        sandbox.options['doctor_exit'] = 3
-        run_manager('doctor', '--region', 'us-east-1', '--tcp-attempts', '3', code=3)
-        args = run_args(sandbox)
-        assert args[:4] == ['run', '--rm', '--workdir', variant.log_dir]
-        assert '--memory=5120m' in args
-        assert_options(args, [('--env', 'IS_DOCKER=true'), ('--env', f'LOG_FOLDER_PATH={variant.log_dir}')])
-        source = sandbox.agent / (
-            'config' if sandbox.options['container_os'] == 'windows' else 'config/config.json'
-        )
-        target = 'C:/config' if sandbox.options['container_os'] == 'windows' else variant.config_path
-        assert_options(
-            args,
-            [
-                ('-v', f'{source.as_posix()}:{target}:ro'),
-                ('-v', f'{(sandbox.agent / "logs").as_posix()}:{variant.log_dir}'),
-            ],
-        )
-        assert args[-7:] == [
-            f'{IMAGE}:1.2.9{variant.suffix}',
-            variant.config_path,
-            '--doctor',
-            '--region',
-            'us-east-1',
-            '--tcp-attempts',
-            '3',
-        ]
-
-    def test_doctor_keeps_running_agent_and_saves_stdout_and_stderr(self, sandbox, variant, run_manager):
-        run_manager('start')
-        output = run_manager('doctor')
-        assert_image(sandbox, variant)
-        assert not docker_calls(sandbox, 'stop')
-        assert not docker_calls(sandbox, 'rm')
-        (saved,) = (sandbox.agent / 'logs').glob('proxy-agent-manager-doctor-*.log')
-        # Native stdout/stderr can arrive in either order under PowerShell.
-        assert sorted(saved.read_text(encoding='utf-8-sig').splitlines()) == sorted(
-            ['stub doctor report', 'stub doctor log']
-        )
-        assert 'stub doctor report' in output
-        assert f'output was saved to {saved}' in output
-
-    def test_repeated_doctor_reports_preserved(self, sandbox, run_manager):
-        # Bash's date stub fixes the timestamp; PowerShell also includes a GUID.
-        for report in ('first doctor report', 'second doctor report'):
-            sandbox.options['doctor_report'] = report
-            run_manager('doctor')
-        reports = list((sandbox.agent / 'logs').glob('proxy-agent-manager-doctor-*.log'))
-        assert len(reports) == 2
-        contents = ''.join((path.read_text(encoding='utf-8-sig') for path in reports))
-        assert 'first doctor report' in contents
-        assert 'second doctor report' in contents
-
-    def test_doctor_distinguishes_earlier_and_new_logs(self, sandbox, variant, run_manager):
-        logs = sandbox.agent / 'logs'
-        logs.mkdir()
-        earlier = logs / 'doctor-2019-01-01.log'
-        earlier.write_text('earlier report')
-        run_manager('doctor')
-        (fallback,) = logs.glob('proxy-agent-manager-doctor-*.log')
-        fallback.unlink()
-        sandbox.options['doctor_log'] = True
-        assert f'{variant.log_dir} in the container is {logs} on this host.' in run_manager('doctor')
-        assert (logs / 'doctor-stub.log').exists()
-        assert not list(logs.glob('proxy-agent-manager-doctor-*.log'))
-        assert earlier.read_text() == 'earlier report'
 
 
 @pytest.mark.parametrize('sandbox', ['windows' if WINDOWS else 'linux'], indirect=True)

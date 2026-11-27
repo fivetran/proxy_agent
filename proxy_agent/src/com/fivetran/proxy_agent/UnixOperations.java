@@ -9,10 +9,12 @@ import java.util.List;
 /** Host operations shared by Linux and macOS. */
 final class UnixOperations implements OsOperations {
     private final CommandRunner commands;
+    private final Docker docker;
     private final boolean isMac = System.getProperty("os.name").startsWith("Mac");
 
-    UnixOperations(CommandRunner commands) {
+    UnixOperations(CommandRunner commands, Docker docker) {
         this.commands = commands;
+        this.docker = docker;
     }
 
     @Override
@@ -95,7 +97,7 @@ final class UnixOperations implements OsOperations {
 
     @Override
     public void checkAutoStart(List<String> warnings) throws IOException, InterruptedException {
-        if (isMac || !commands.capture("docker", "info", "--format", "{{.SecurityOptions}}").output().contains("rootless")) {
+        if (isMac || !docker.capture("info", "--format", "{{.SecurityOptions}}").output().contains("rootless")) {
             return;
         }
         if (!hasCommand("loginctl")) {

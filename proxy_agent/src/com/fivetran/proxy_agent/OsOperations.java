@@ -12,9 +12,9 @@ import org.jspecify.annotations.Nullable;
 
 /** Host operations used by the installer. */
 interface OsOperations {
-    static OsOperations forCurrentHost(CommandRunner commands) {
+    static OsOperations forCurrentHost(CommandRunner commands, Docker docker) {
         var os = System.getProperty("os.name").toLowerCase(Locale.ROOT);
-        return os.startsWith("windows") ? new WindowsOperations(commands) : new UnixOperations(commands);
+        return os.startsWith("windows") ? new WindowsOperations(commands, docker) : new UnixOperations(commands, docker);
     }
 
     void configureProxy();
