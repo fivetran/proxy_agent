@@ -27,7 +27,7 @@ public final class UpdateManagerTest {
     Path temporary;
 
     private final CommandRunner commands = new CommandRunner(Set.of());
-    private final OsOperations operations = OsOperations.forCurrentHost(commands, new Docker(commands));
+    private final OsOperations operations = OsOperations.forCurrentHost(commands);
     private Path directory;
     private Path manager;
     private Path wrapper;
@@ -75,7 +75,7 @@ public final class UpdateManagerTest {
         server.start();
         try {
             var url = "http://127.0.0.1:" + server.getAddress().getPort();
-            var client = new HttpClient(operations.proxySettings());
+            var client = new HttpClient();
             return new ManagerUpdate(operations, client).run(directory, url + "/manager", digest, url + "/script");
         } finally {
             server.stop(0);
