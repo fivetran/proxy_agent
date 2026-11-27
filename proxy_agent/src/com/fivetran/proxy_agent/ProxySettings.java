@@ -63,7 +63,8 @@ final class ProxySettings {
             System.setProperty(SOCKS_PORT, Integer.toString(socks.port()));
             System.setProperty(SOCKS_VERSION, socks.scheme().equals("socks4") ? "4" : "5");
             // The JDK has one SOCKS endpoint for both protocols. Preserve distinct routes if needed.
-            if (!Objects.equals(httpProxy, httpsProxy)) {
+            if (httpProxy == null || httpsProxy == null
+                    || (httpSocks && httpsSocks && !httpProxy.equals(httpsProxy))) {
                 configureSocksRoutes(httpProxy, httpsProxy);
             }
         }
@@ -187,7 +188,7 @@ final class ProxySettings {
     private record ProxyAddress(String scheme, String host, int port, @Nullable String userInfo) {}
 
     /** A sanitized proxy setting error that can be displayed by the manager. */
-    static final class ConfigurationException extends IllegalArgumentException {
+    static final class ConfigurationException extends RuntimeException {
         private ConfigurationException(String message) {
             super(message);
         }
