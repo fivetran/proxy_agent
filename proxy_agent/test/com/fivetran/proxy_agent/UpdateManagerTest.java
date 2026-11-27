@@ -27,7 +27,7 @@ public final class UpdateManagerTest {
     Path temporary;
 
     private final CommandRunner commands = new CommandRunner(Set.of());
-    private final OsOperations operations = OsOperations.forCurrentHost(commands);
+    private final OsOperations operations = OsOperations.forCurrentHost(commands, new Docker(commands));
     private Path directory;
     private Path manager;
     private Path wrapper;

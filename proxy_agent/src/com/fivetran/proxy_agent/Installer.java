@@ -35,13 +35,13 @@ final class Installer {
 
     private final Manager manager;
     private final OsOperations operations;
-    private final CommandRunner commands;
+    private final Docker docker;
     private final DiskSpace diskSpace;
 
     Installer(Manager manager, DiskSpace diskSpace) {
         this.manager = manager;
         this.operations = manager.operations();
-        this.commands = manager.commands();
+        this.docker = manager.docker();
         this.diskSpace = diskSpace;
     }
 
@@ -194,7 +194,7 @@ final class Installer {
             errors.add("docker is not installed");
             return false;
         }
-        var result = commands.capture("docker", "--version");
+        var result = docker.capture("--version");
         if (!result.succeeded()) {
             errors.add("Failed to execute 'docker --version'. Docker may not be functioning properly");
             return false;
@@ -206,7 +206,7 @@ final class Installer {
             errors.add("Docker version " + matcher.group(1) + " does not meet the minimum requirement of "
                     + MIN_DOCKER_VERSION);
         }
-        if (!commands.capture("docker", "info").succeeded()) {
+        if (!docker.capture("info").succeeded()) {
             errors.add("Docker is installed but the Docker daemon is not accessible. Ensure Docker is running and your"
                     + " user has permission to access the Docker daemon.");
             return false;
@@ -239,7 +239,7 @@ final class Installer {
     private void checkDisk(Path directory, String containerOs, List<String> warnings)
             throws IOException, InterruptedException {
         if (containerOs.equals("windows")) {
-            var root = commands.capture("docker", "info", "--format", "{{.DockerRootDir}}");
+            var root = docker.capture("info", "--format", "{{.DockerRootDir}}");
             var dataRoot = root.output().strip();
             if (root.succeeded() && !dataRoot.isEmpty()) {
                 directory = Path.of(dataRoot);

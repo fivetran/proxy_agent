@@ -22,12 +22,12 @@ final class Manager {
             "https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list";
 
     private final OsOperations operations;
-    private final CommandRunner commands;
+    private final Docker docker;
     private final HttpClient http;
 
-    Manager(OsOperations operations, CommandRunner commands, HttpClient http) {
+    Manager(OsOperations operations, Docker docker, HttpClient http) {
         this.operations = operations;
-        this.commands = commands;
+        this.docker = docker;
         this.http = http;
     }
 
@@ -35,8 +35,8 @@ final class Manager {
         return operations;
     }
 
-    CommandRunner commands() {
-        return commands;
+    Docker docker() {
+        return docker;
     }
 
     /** Downloads the native release and the corresponding platform script. */
