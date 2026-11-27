@@ -21,12 +21,12 @@ final class Manager {
             "https://us-docker.pkg.dev/v2/prod-eng-fivetran-public-repos/public-docker-us/proxy-agent/tags/list";
 
     private final OsOperations operations;
-    private final Docker docker;
+    private final CommandRunner commands;
     private final HttpClient http;
 
-    Manager(OsOperations operations, Docker docker, HttpClient http) {
+    Manager(OsOperations operations, CommandRunner commands, HttpClient http) {
         this.operations = operations;
-        this.docker = docker;
+        this.commands = commands;
         this.http = http;
     }
 
@@ -34,16 +34,14 @@ final class Manager {
         return operations;
     }
 
-    Docker docker() {
-        return docker;
+    CommandRunner commands() {
+        return commands;
     }
 
     void downloadManagerScript(Path target) throws IOException {
-        var url = Environment.get("PROXY_AGENT_SCRIPT_URL", SCRIPT_ROOT + operations.managerScriptName());
+        var url = SystemEnvironment.get("PROXY_AGENT_SCRIPT_URL", SCRIPT_ROOT + operations.managerScriptName());
         try {
             http.download(url, target);
-        } catch (ProxySettings.ConfigurationException e) {
-            throw e;
         } catch (IOException e) {
             throw new IOException("Failed to download management script", e);
         }
@@ -51,7 +49,7 @@ final class Manager {
 
     List<String> registryTags() throws IOException {
         try {
-            var bytes = http.get(Environment.get("PROXY_AGENT_REGISTRY_TAGS_URL", REGISTRY_URL));
+            var bytes = http.get(SystemEnvironment.get("PROXY_AGENT_REGISTRY_TAGS_URL", REGISTRY_URL));
             var tags = new ArrayList<String>();
             try (var parser = JSON.createParser(bytes)) {
                 if (parser.nextToken() != JsonToken.START_OBJECT) {
@@ -74,8 +72,6 @@ final class Manager {
                 }
             }
             return tags;
-        } catch (ProxySettings.ConfigurationException e) {
-            throw e;
         } catch (IOException e) {
             throw new IOException("Unable to query image registry for latest version", e);
         }
@@ -85,13 +81,11 @@ final class Manager {
         if (token.indexOf('\r') >= 0 || token.indexOf('\n') >= 0) {
             throw new IOException("Invalid TOKEN");
         }
-        var api = Environment.get("FIVETRAN_API_URL", "https://api.fivetran.com").replaceAll("/+$", "");
+        var api = SystemEnvironment.get("FIVETRAN_API_URL", "https://api.fivetran.com").replaceAll("/+$", "");
         HttpClient.Response response;
         try {
             response = http.post(api + "/proxy-agent/configure",
                     Map.of("Authorization", "Basic " + token, "Accept", "application/json"));
-        } catch (ProxySettings.ConfigurationException e) {
-            throw e;
         } catch (IOException e) {
             throw new IOException("Failed to connect to configure endpoint", e);
         }

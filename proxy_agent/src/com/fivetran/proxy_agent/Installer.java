@@ -33,18 +33,18 @@ final class Installer {
 
     private final Manager manager;
     private final OsOperations operations;
-    private final Docker docker;
+    private final CommandRunner commands;
 
     Installer(Manager manager) {
         this.manager = manager;
         this.operations = manager.operations();
-        this.docker = manager.docker();
+        this.commands = manager.commands();
     }
 
     void install(@Nullable Path configPath, @Nullable Path installDir, String windowsVersionOverride)
             throws IOException, InterruptedException {
         operations.checkUser();
-        if (!Environment.get("RUNTIME", "").equals("docker")) {
+        if (!SystemEnvironment.get("RUNTIME", "").equals("docker")) {
             throw new IOException("RUNTIME must be set to 'docker'.");
         }
         var options = configurePaths(configPath, installDir, windowsVersionOverride);
@@ -111,7 +111,7 @@ final class Installer {
     }
 
     private static Config readConfig(@Nullable Path path) throws IOException {
-        var token = Environment.get("TOKEN", "");
+        var token = SystemEnvironment.get("TOKEN", "");
         if (path == null) {
             if (token.isEmpty()) {
                 throw new IOException("Provide a config.json file or set TOKEN.");
@@ -133,7 +133,7 @@ final class Installer {
     }
 
     private static int readMemoryMb() {
-        var memory = Environment.get("MEMORY_ALLOCATION_MB", "");
+        var memory = SystemEnvironment.get("MEMORY_ALLOCATION_MB", "");
         var console = System.console();
         if (memory.isEmpty() && console != null) {
             var response = console.readLine(
@@ -190,7 +190,7 @@ final class Installer {
             errors.add("docker is not installed");
             return false;
         }
-        var result = docker.capture("--version");
+        var result = commands.capture("docker", "--version");
         if (!result.succeeded()) {
             errors.add("Failed to execute 'docker --version'. Docker may not be functioning properly");
             return false;
@@ -202,7 +202,7 @@ final class Installer {
             errors.add("Docker version " + matcher.group(1) + " does not meet the minimum requirement of "
                     + MIN_DOCKER_VERSION);
         }
-        if (!docker.capture("info").succeeded()) {
+        if (!commands.capture("docker", "info").succeeded()) {
             errors.add("Docker is installed but the Docker daemon is not accessible. Ensure Docker is running and your"
                     + " user has permission to access the Docker daemon.");
             return false;
@@ -232,7 +232,7 @@ final class Installer {
     private void checkDisk(Path directory, String containerOs, List<String> warnings)
             throws IOException, InterruptedException {
         if (containerOs.equals("windows")) {
-            var root = docker.capture("info", "--format", "{{.DockerRootDir}}");
+            var root = commands.capture("docker", "info", "--format", "{{.DockerRootDir}}");
             var dataRoot = root.output().strip();
             if (root.succeeded() && !dataRoot.isEmpty()) {
                 directory = Path.of(dataRoot);
@@ -254,8 +254,7 @@ final class Installer {
             return;
         }
         if (freeMb < minimumMb) {
-            var location = operations.diskLocation(target);
-            warnings.add("Available disk space" + location + "(" + freeMb + "MB) is below the recommended minimum of "
+            warnings.add("Available disk space for " + target + " (" + freeMb + "MB) is below the recommended minimum of "
                     + minimumMb + "MB");
         }
     }
@@ -337,7 +336,7 @@ final class Installer {
     }
 
     private void stageNativeBinary(Path directory, StagedFiles files) throws IOException {
-        var executable = Environment.get("PROXY_AGENT_INSTALLER_BINARY", "");
+        var executable = SystemEnvironment.get("PROXY_AGENT_INSTALLER_BINARY", "");
         if (executable.isEmpty() && "runtime".equals(System.getProperty("org.graalvm.nativeimage.imagecode"))) {
             executable = ProcessHandle.current().info().command().orElse("");
         }

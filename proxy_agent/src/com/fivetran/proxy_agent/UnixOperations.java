@@ -13,22 +13,23 @@ final class UnixOperations implements OsOperations {
     private static final int BYTES_PER_MB = 1024 * 1024;
 
     private final CommandRunner commands;
-    private final Docker docker;
     private final boolean isMac = System.getProperty("os.name").startsWith("Mac");
 
-    UnixOperations(CommandRunner commands, Docker docker) {
+    UnixOperations(CommandRunner commands) {
         this.commands = commands;
-        this.docker = docker;
     }
 
     @Override
-    public ProxySettings proxySettings() {
-        return ProxySettings.forUnix();
+    public void configureProxy() {
+        var all = SystemEnvironment.get("all_proxy", SystemEnvironment.get("ALL_PROXY", ""));
+        ProxySettings.configure(SystemEnvironment.get("http_proxy", all),
+                SystemEnvironment.get("https_proxy", SystemEnvironment.get("HTTPS_PROXY", all)),
+                SystemEnvironment.get("no_proxy", SystemEnvironment.get("NO_PROXY", "")));
     }
 
     @Override
     public Path defaultInstallDirectory() {
-        return Path.of(Environment.get("HOME", System.getProperty("user.home")), "fivetran-proxy-agent");
+        return Path.of(SystemEnvironment.get("HOME", System.getProperty("user.home")), "fivetran-proxy-agent");
     }
 
     @Override
@@ -81,14 +82,14 @@ final class UnixOperations implements OsOperations {
 
     @Override
     public void checkAutoStart(List<String> warnings) throws IOException, InterruptedException {
-        if (isMac || !docker.capture("info", "--format", "{{.SecurityOptions}}").output().contains("rootless")) {
+        if (isMac || !commands.capture("docker", "info", "--format", "{{.SecurityOptions}}").output().contains("rootless")) {
             return;
         }
         if (!hasCommand("loginctl")) {
             warnings.add("Rootless Docker detected but loginctl is not available. Ensure the agent starts on boot.");
             return;
         }
-        var user = Environment.get("USER", System.getProperty("user.name"));
+        var user = SystemEnvironment.get("USER", System.getProperty("user.name"));
         if (!commands.capture("loginctl", "show-user", user, "-p", "Linger", "--value").output().strip().equals("yes")) {
             warnings.add("Rootless Docker detected but user linger is not enabled. Run 'sudo loginctl enable-linger "
                     + user + "' to ensure the agent starts automatically on system boot.");

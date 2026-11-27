@@ -19,9 +19,8 @@ public final class Application implements Callable<Integer> {
 
     private Application() {
         var commands = new CommandRunner(Set.of("TOKEN"));
-        var docker = new Docker(commands);
-        var operations = OsOperations.forCurrentHost(commands, docker);
-        this.manager = new Manager(operations, docker, new HttpClient(operations.proxySettings()));
+        var operations = OsOperations.forCurrentHost(commands);
+        this.manager = new Manager(operations, commands, new HttpClient());
     }
 
     /** Runs the requested management command and returns its exit status to the caller. */

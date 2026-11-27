@@ -13,10 +13,8 @@ import org.jspecify.annotations.Nullable;
 final class HttpClient {
     private static final int TIMEOUT_MILLIS = 30_000;
     private static final int MAX_REDIRECTS = 10;
-    private final ProxySettings proxy;
 
-    HttpClient(ProxySettings proxy) {
-        this.proxy = proxy;
+    HttpClient() {
         // A dropped response does not tell us whether the server processed the POST.
         System.setProperty("sun.net.http.retryPost", "false");
     }
@@ -84,7 +82,7 @@ final class HttpClient {
     record Response(int status, byte[] body) {}
 
     private HttpURLConnection open(URI uri) throws IOException {
-        var connection = proxy.open(uri);
+        var connection = (HttpURLConnection) uri.toURL().openConnection();
         connection.setConnectTimeout(TIMEOUT_MILLIS);
         connection.setReadTimeout(TIMEOUT_MILLIS);
         connection.setInstanceFollowRedirects(false);
